@@ -29,6 +29,10 @@ def path_key(path):
     """Match Windows filesystem identity without changing displayed path spelling."""
     return path.casefold() if os.name=='nt' else path
 
+def read_form(text):
+    """The text a later read() returns: Python decodes files with universal newlines."""
+    return text.replace('\r\n','\n').replace('\r','\n')
+
 class ProjectFiles:
     def __init__(self,store):
         self.store=store
@@ -112,15 +116,22 @@ class ProjectFiles:
         return {'path':relative,'content':content,'hash':hashlib.sha256(content.encode()).hexdigest()}
 
     def snapshot(self,tenant_id,project_id):
+        """Hash every readable file; include content while it fits the context budget.
+
+        A file with no baseline hash cannot be modified at all, because apply() cannot tell
+        an external edit from a file it was never shown, so the baseline covers everything
+        read() accepts rather than only what fits in context. Files read() rejects (binary,
+        undecodable, over its size limit) stay out: the model cannot edit what it cannot see.
+        """
         context=[];hashes={};size=0
         for f in self.tree(tenant_id,project_id):
-            if not f['text'] or f['size']>50000:continue
             try:
                 item=self.read(tenant_id,project_id,f['path'])
             except ValueError:
                 continue
-            if size+len(item['content'])>90000:continue
-            hashes[f['path']]=item['hash'];size+=len(item['content'])
+            hashes[f['path']]=item['hash']
+            if len(item['content'])>50000 or size+len(item['content'])>90000:continue
+            size+=len(item['content'])
             context.append(f'FILE {f["path"]}\n{item["content"]}')
         return context,hashes
 
@@ -140,7 +151,7 @@ class ProjectFiles:
             if before is not None and (expected is None or hashlib.sha256(before.encode()).hexdigest()!=expected):
                 raise ValueError(f'{relative} changed outside this run, or was not read into context. The file was not overwritten.')
             after=artifact['content']
-            if before==after:continue
+            if before==read_form(after):continue  # Identical text, even if the file on disk uses CRLF.
             change={'id':uid(),'stage_id':stage['id'],'iteration':run['iteration'],'path':relative,'before':before,'after':after,'status':'proposed','kind':'added' if before is None else 'modified','diff':'\n'.join(difflib.unified_diff((before or '').splitlines(),after.splitlines(),fromfile='a/'+relative,tofile='b/'+relative,lineterm=''))}
             prepared.append((target,change))
         for target,change in prepared:
@@ -158,14 +169,18 @@ class ProjectFiles:
                 change['status']='applied'
                 for old in list(run['file_hashes']):
                     if path_key(old)==path_key(change['path']):del run['file_hashes'][old]
-                run['file_hashes'][change['path']]=hashlib.sha256(change['after'].encode()).hexdigest()
+                # The bytes written keep the model's own line endings; the baseline has to match
+                # what the next read returns, or a CRLF file fails as changed outside the run.
+                run['file_hashes'][change['path']]=hashlib.sha256(read_form(change['after']).encode()).hexdigest()
             self.store.put(tenant_id,'runs',run)
             self.store.event(tenant_id,run['id'],'file.changed',f'{"Wrote" if change["status"]=="applied" else "Proposed"} {change["path"]}',iteration=run['iteration'],path=change['path'],kind=change['kind'])
 
     def command_argv(self,root,command):
         if re.search(r'[;&|><`\r\n]',command) or '$(' in command:
             raise ValueError('Use one supported project check without shell operators.')
-        args=shlex.split(command,posix=True)
+        # POSIX splitting reads a backslash as an escape and would silently delete the
+        # separators in a Windows path, so protect them before splitting.
+        args=shlex.split(command.replace('\\','\\\\') if os.name=='nt' else command,posix=True)
         if not args:raise ValueError('Enter a command.')
         # Validate the caller's own arguments before building argv, so the runner's
         # trusted absolute paths (the project venv, npm's entrypoint) need no exception.

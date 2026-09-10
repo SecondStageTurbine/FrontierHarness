@@ -78,3 +78,24 @@ def test_unowned_tenant_rejected_even_with_valid_session(tmp_path):
         assert c.get('/api/tenants').json()==[]
         assert c.get(f'/api/t/{t}/models').status_code==403
         assert c.put(f'/api/tenants/{t}',json={'name':'Take over'}).status_code==403
+
+def test_session_slides_on_use_so_an_open_app_never_expires(tmp_path):
+    import sqlite3,time
+    from backend.app import SESSION_LIFETIME
+    with TestClient(create_app(str(tmp_path),ScriptedBroker())) as c:
+        setup(c)
+        db=sqlite3.connect(tmp_path/'harness.db')
+        db.execute('UPDATE sessions SET expires=?',(time.time()+60,));db.commit()
+        assert c.get('/api/tenants').status_code==200
+        remaining=db.execute('SELECT expires FROM sessions').fetchone()[0]-time.time()
+        db.close()
+        assert remaining>SESSION_LIFETIME/2
+
+def test_desktop_managed_login_names_the_recovery(tmp_path):
+    import sqlite3
+    with TestClient(create_app(str(tmp_path),ScriptedBroker())) as c:
+        setup(c)
+        db=sqlite3.connect(tmp_path/'harness.db')
+        db.execute("INSERT INTO users VALUES('desktop-owner','Local user','desktop-managed')");db.commit();db.close()
+        r=c.post('/api/auth/login',json={'username':'Local user','password':'any-password-at-all'})
+        assert r.status_code==401 and 'signs in automatically' in r.json()['detail']

@@ -31,7 +31,11 @@ class ReviewReport(StrictModel):
 class ArtifactFile(StrictModel):
     # Source text must survive validation byte-for-byte, including indentation.
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=False)
-    name: str = Field(min_length=1, max_length=200, pattern=r'^[\w. /-]+$')
+    # Real frameworks use brackets, parentheses, '+' and '@' in file names ('[id].tsx',
+    # '(group)/layout.tsx', '+page.svelte'), so this excludes what is unsafe or invalid in a
+    # path rather than listing what is allowed. ProjectFiles.resolve() remains the boundary
+    # that rejects traversal, drive letters, absolute paths and links.
+    name: str = Field(min_length=1, max_length=200, pattern=r'^[^\x00-\x1f:\\*?"<>|]+$')
     content: str = Field(max_length=200000)
 
 class BuildArtifact(StrictModel):

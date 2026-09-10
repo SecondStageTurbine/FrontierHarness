@@ -22,6 +22,8 @@ from .store import Store, TenantIsolationViolationException, uid, now, public_mo
 from .engine import Engine, TERMINAL
 from .broker import ProviderError
 
+SESSION_LIFETIME = 86400*7  # Seconds of inactivity before a stored session expires.
+
 def password_hash(password, salt=None):
     salt = salt or secrets.token_hex(16)
     return salt + ':' + hashlib.scrypt(password.encode(), salt=salt.encode(), n=16384, r=8, p=1).hex()
@@ -99,10 +101,14 @@ def create_app(directory=None, broker=None):
         token = request.cookies.get('harness_session', '')
         digest = hashlib.sha256(token.encode()).hexdigest()
         with store.db() as db:
-            row = db.execute('SELECT users.id,users.username FROM sessions JOIN users ON users.id=sessions.user_id WHERE token=? AND expires>?', (digest,time.time())).fetchone()
+            row = db.execute('SELECT users.id,users.username,sessions.expires FROM sessions JOIN users ON users.id=sessions.user_id WHERE token=? AND expires>?', (digest,time.time())).fetchone()
+            if row and row['expires'] - time.time() < SESSION_LIFETIME/2:
+                # Slide the window on use. The desktop session holds no password to sign back
+                # in with, so an app in continuous use must never expire out from under it.
+                db.execute('UPDATE sessions SET expires=? WHERE token=?', (time.time()+SESSION_LIFETIME,digest))
         if not row:
             raise HTTPException(401, 'Sign in to continue.')
-        return dict(row)
+        return {'id':row['id'],'username':row['username']}
 
     def scoped(request, tenant_id):
         return store.tenant(tenant_id, user(request)['id'])
@@ -111,8 +117,11 @@ def create_app(directory=None, broker=None):
         token = secrets.token_urlsafe(48)
         with store.db() as db:
             db.execute('DELETE FROM sessions WHERE expires<?',(time.time(),))
-            db.execute('INSERT INTO sessions VALUES(?,?,?)',(hashlib.sha256(token.encode()).hexdigest(),user_id,time.time()+86400*7))
-        response.set_cookie('harness_session',token,httponly=True,samesite='strict',secure=os.environ.get('HARNESS_SECURE_COOKIE')=='1',max_age=86400*7)
+            db.execute('INSERT INTO sessions VALUES(?,?,?)',(hashlib.sha256(token.encode()).hexdigest(),user_id,time.time()+SESSION_LIFETIME))
+        # The stored expiry is the real control and slides on use, so the cookie outlives it
+        # deliberately: a browser dropping the cookie on its own would strand the desktop
+        # session, which cannot sign in again.
+        response.set_cookie('harness_session',token,httponly=True,samesite='strict',secure=os.environ.get('HARNESS_SECURE_COOKIE')=='1',max_age=86400*400)
 
     @app.get('/api/health')
     def health():
@@ -147,6 +156,10 @@ def create_app(directory=None, broker=None):
                 db.execute('INSERT INTO users VALUES(?,?,?)',(current['id'],payload.username,password_hash(payload.password)))
             else:
                 row = db.execute('SELECT * FROM users WHERE username=?',(payload.username,)).fetchone()
+                if row and ':' not in row['password']:
+                    # A desktop-managed account stores no password hash and signs in through
+                    # the app's launch ticket, so name the one action that recovers it.
+                    raise HTTPException(401,'This workspace signs in automatically from the Frontier desktop app. Quit Frontier, then start it again.')
                 valid = password_hash(payload.password, row['password'].split(':')[0] if row else 'missing')
                 if not row or not hmac.compare_digest(valid,row['password']):
                     raise HTTPException(401,'The username or password is incorrect.')

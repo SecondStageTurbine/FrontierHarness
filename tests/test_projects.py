@@ -197,3 +197,40 @@ def test_desktop_specialists_and_prompts_are_applied_and_tenant_checked(tmp_path
         foreign=c.post(f'/api/t/{b}/prompts',json={'name':'Private','role':'review','content':'Private prompt'}).json()
         payload['prompt_ids']['review']=foreign['id']
         assert c.post(route,json=payload).status_code==403
+
+def test_files_outside_the_context_budget_stay_editable(tmp_path):
+    store=setup_store(tmp_path/'state');files=ProjectFiles(store)
+    root=tmp_path/'project';root.mkdir()
+    (root/'app.rb').write_text('puts 1\n',encoding='utf-8')      # extension absent from TEXT_EXTENSIONS
+    (root/'notes.md').write_text('x'*60000,encoding='utf-8')     # larger than the per-file context cap
+    project=files.create('tenant-a','Polyglot',str(root))
+    context,hashes=files.snapshot('tenant-a',project['id'])
+    assert {'app.rb','notes.md'}<=set(hashes)
+    assert any('app.rb' in c for c in context) and not any('notes.md' in c for c in context)
+    run={'id':'budget','workflow':{'project_id':project['id'],'execution_mode':'edit'},'file_hashes':hashes,'changes':[],'iteration':1}
+    files.apply('tenant-a',run,{'id':'builder'},[{'name':'app.rb','content':'puts 2\n'},{'name':'notes.md','content':'shorter\n'}])
+    assert (root/'app.rb').read_text()=='puts 2\n' and (root/'notes.md').read_text()=='shorter\n'
+
+def test_crlf_content_survives_a_second_iteration(tmp_path):
+    store=setup_store(tmp_path/'state');files=ProjectFiles(store)
+    root=tmp_path/'project';root.mkdir()
+    project=files.create('tenant-a','Line endings',str(root))
+    run={'id':'crlf','workflow':{'project_id':project['id'],'execution_mode':'edit'},'file_hashes':{},'changes':[],'iteration':1}
+    produced=[{'name':'a.py','content':'x = 1\r\ny = 2\r\n'}]
+    files.apply('tenant-a',run,{'id':'builder'},produced)
+    assert (root/'a.py').read_bytes()==b'x = 1\r\ny = 2\r\n'  # the model's own line endings are kept
+    run['iteration']=2
+    files.apply('tenant-a',run,{'id':'builder'},produced)     # unchanged text is neither a conflict nor a rewrite
+    assert len(run['changes'])==1
+
+@pytest.mark.skipif(os.name!='nt',reason='Windows path separators')
+def test_windows_path_separators_survive_command_parsing(tmp_path):
+    files=ProjectFiles(setup_store(tmp_path/'state'))
+    assert files.command_argv(tmp_path,'python -m pytest tests\\unit\\test_a.py')[-1]=='tests\\unit\\test_a.py'
+
+def test_framework_file_names_are_accepted(tmp_path):
+    from backend.schemas import ArtifactFile
+    for name in ['app/[id]/page.tsx','app/(group)/layout.tsx','src/routes/+page.svelte','@types/index.d.ts']:
+        assert ArtifactFile(name=name,content='x').name==name
+    for name in ['C:/outside.txt','null\x00byte','star*name','tab\tname']:
+        with pytest.raises(ValueError):ArtifactFile(name=name,content='x')
