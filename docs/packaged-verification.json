@@ -1,6 +1,6 @@
 {
   "executable": "frontier-backend-x86_64-pc-windows-msvc.exe",
-  "executable_sha256": "aff77ba65dcece66ba38c59199dbb9bcd88d442e70e2c1d75868672ccfa61094",
+  "executable_sha256": "5e3b7bd34df6ec037e4ae5d12250a2ffdb5a25c8272947d00ea97e091df134cb",
   "no_system_python_or_node_on_path": true,
   "checks": [
     {
@@ -22,30 +22,5 @@
   "packaged_assets": true,
   "authentication": true,
   "project_file_access": true,
-  "tenant_isolation": true,
-  "real_provider_workflow": {
-    "status": "complete",
-    "model": "claude-haiku-4-5-20251001",
-    "iteration": 1,
-    "changed_files": [
-      "add.py",
-      "test_add.py",
-      "README.md"
-    ],
-    "commands": [
-      {
-        "command": "python -m unittest discover",
-        "exit_code": 0,
-        "output": "..\r\n----------------------------------------------------------------------\r\nRan 2 tests in 0.000s\r\n\r\nOK\r\n"
-      }
-    ],
-    "review": {
-      "approved": true,
-      "quality_score": 0.95,
-      "detected_vulnerabilities": [],
-      "rejection_reasons": []
-    },
-    "input_tokens": 7306,
-    "output_tokens": 1603
-  }
+  "tenant_isolation": true
 }
