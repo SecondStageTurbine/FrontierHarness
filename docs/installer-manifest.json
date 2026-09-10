@@ -1,7 +1,7 @@
 {
-  "filename": "Frontier_0.1.1_x64-setup.exe",
-  "bytes": 33984506,
-  "sha256": "a2291dc6a36b5538f30458247ab45475e0a031e57e5add766c39977f1ee43900",
+  "filename": "Frontier_0.1.2_x64-setup.exe",
+  "bytes": 33982363,
+  "sha256": "c270e7608868a2829f1d41cb583255aff92d34bf78681e5ad035270c14a808d8",
   "architecture": "Windows x64",
   "signed": false,
   "installed_executables_match_current_build": true,
