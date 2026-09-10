@@ -44,14 +44,20 @@ class ModelResult:
 def resolve_cli(provider):
     name, entry, label = CLI_TOOLS[provider]
     found = shutil.which(name)
-    if found and Path(found).suffix.lower() not in ('.cmd', '.bat', '.ps1'):
-        return [found]
+    if found:
+        suffix = Path(found).suffix.lower()
+        # Windows cannot start a script shim directly, and an extensionless file there is one.
+        shim = suffix in ('.cmd', '.bat', '.ps1') or (os.name == 'nt' and not suffix)
+        if not shim:
+            return [found]
     node = shutil.which('node')
     roots = ([Path(found).parent] if found else []) + ([Path(os.environ['APPDATA'])/'npm'] if os.environ.get('APPDATA') else [])
     for root in roots:
         script = root/entry
-        if node and script.is_file():
-            return [node, str(script)]
+        if script.is_file():
+            if node:
+                return [node, str(script)]
+            raise ProviderError(f'{label} is installed through npm, so Node.js is required to run it, and node was not found on the path.')
     raise ProviderError(f'The {label} command line tool was not found. Install it, sign in to your subscription, then test the connection.')
 
 def strict_schema(schema):

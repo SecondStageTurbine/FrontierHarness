@@ -30,6 +30,22 @@ def test_strict_schema_closes_objects_without_touching_open_maps():
     dependencies = broker.strict_schema({'type': 'object', 'properties': {'m': {'type': 'object', 'additionalProperties': {'type': 'string'}}}})
     assert dependencies['properties']['m']['additionalProperties'] == {'type': 'string'}
 
+def test_resolver_prefers_an_executable_and_explains_a_missing_node(tmp_path, monkeypatch):
+    shim = tmp_path/'codex.cmd'
+    shim.write_text('@echo off', encoding='utf-8')
+    entry = tmp_path/'node_modules/@openai/codex/bin'
+    entry.mkdir(parents=True)
+    (entry/'codex.js').write_text('', encoding='utf-8')
+    monkeypatch.setattr(broker.shutil, 'which', lambda name: str(shim) if name == 'codex' else None)
+    # A shim cannot be started directly, and without Node the reason must say so rather than
+    # claiming the tool is missing when it is sitting right there.
+    with pytest.raises(broker.ProviderError, match='Node.js'):
+        broker.resolve_cli('codex_cli')
+    monkeypatch.setattr(broker.shutil, 'which', lambda name: str(tmp_path/'node.exe') if name == 'node' else str(shim))
+    assert broker.resolve_cli('codex_cli') == [str(tmp_path/'node.exe'), str(entry/'codex.js')]
+    monkeypatch.setattr(broker.shutil, 'which', lambda name: str(tmp_path/'claude.exe') if name == 'claude' else None)
+    assert broker.resolve_cli('claude_cli') == [str(tmp_path/'claude.exe')]
+
 @pytest.mark.asyncio
 async def test_claude_cli_is_denied_ambient_keys_and_reports_usage(tmp_path, monkeypatch):
     store = setup_store(tmp_path)
