@@ -144,7 +144,19 @@ async def test_cancel_and_single_active_tenant_run(tmp_path):
     with pytest.raises(ValueError):engine.start('tenant-a','workflow-tenant-a')
     result=await engine.cancel('tenant-a',run['id'])
     assert result['status']=='cancelled' and len(broker.calls)==1
-    assert result['cost_complete'] is False
+    # The interrupted call is billed at the bound the budget already reserved, so the
+    # workspace is never left holding an unreconcilable charge. Token counts stay partial.
+    assert result['cost_complete'] is True and result['cost']>0 and result['usage_complete'] is False
+
+@pytest.mark.asyncio
+async def test_stopped_run_does_not_block_the_monthly_budget(tmp_path):
+    store=setup_store(tmp_path);engine=Engine(store,ScriptedBroker(delay=10))
+    t=store.tenant_internal('tenant-a');t['monthly_budget']=5.0
+    with store.db() as db:db.execute('UPDATE tenants SET data=? WHERE id=?',(json.dumps(t),'tenant-a'))
+    stopped=engine.start('tenant-a','workflow-tenant-a');await asyncio.sleep(0.01)
+    await engine.cancel('tenant-a',stopped['id'])
+    engine.broker=ScriptedBroker()
+    assert (await finish(engine))['status']=='complete'
 
 @pytest.mark.asyncio
 async def test_persistent_runs_survive_store_reopen(tmp_path):
@@ -179,6 +191,10 @@ async def test_bounded_transient_fallback(tmp_path):
                 raise ProviderError('Temporary outage',True)
             return await super().invoke(tenant_id,model_id,system,prompt,stage,schema)
     w=store.get('tenant-a','workflows','workflow-tenant-a');w['stages'][1]['fallback_model_id']='openai/building';store.put('tenant-a','workflows',w)
+    t=store.tenant_internal('tenant-a');t['max_cost_per_run']=1.0
+    with store.db() as db:db.execute('UPDATE tenants SET data=? WHERE id=?',(json.dumps(t),'tenant-a'))
     run=await finish(Engine(store,FallbackBroker()))
     assert run['status']=='complete' and run['stages'][1]['model_id']=='openai/building'
-    assert not run['cost_complete']
+    # With a budget set, the abandoned attempt is charged at its bound instead of making
+    # the cost unknown, which would have rejected the fallback's own budget check.
+    assert run['cost_complete'] and run['stages'][1]['cost']>0

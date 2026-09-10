@@ -20,6 +20,11 @@ IGNORED = {'.git','.venv','venv','node_modules','dist','build','target','__pycac
 SENSITIVE = {'.env','.npmrc','.pypirc','credentials','credentials.json','secret.key','harness.db','id_rsa','id_ed25519'}
 TEXT_EXTENSIONS = {'.py','.js','.jsx','.ts','.tsx','.json','.md','.txt','.html','.css','.scss','.yml','.yaml','.toml','.ini','.cfg','.xml','.sql','.rs','.go','.java','.c','.h','.cpp','.sh','.ps1','.csv','.lock','.gitignore'}
 
+# A rooted path at the start of an argument, or straight after an option prefix
+# ('-sC:\Temp', '--rootdir=/etc'). Driveless roots are rooted on Windows too: the
+# OS resolves '/Temp' against the current drive.
+ROOTED_ARG = re.compile(r'^(?:-{1,2}[A-Za-z][\w-]*=?)?(?:[/\\]|[A-Za-z]:)')
+
 def path_key(path):
     """Match Windows filesystem identity without changing displayed path spelling."""
     return path.casefold() if os.name=='nt' else path
@@ -162,6 +167,11 @@ class ProjectFiles:
             raise ValueError('Use one supported project check without shell operators.')
         args=shlex.split(command,posix=True)
         if not args:raise ValueError('Enter a command.')
+        # Validate the caller's own arguments before building argv, so the runner's
+        # trusted absolute paths (the project venv, npm's entrypoint) need no exception.
+        for arg in args[1:]:
+            if '..' in Path(arg).parts or ROOTED_ARG.match(arg):
+                raise ValueError('Command arguments cannot reference paths outside the project.')
         python=Path(root)/('.venv/Scripts/python.exe' if os.name=='nt' else '.venv/bin/python')
         runner=[str(python),'-m'] if python.exists() else [sys.executable,'--project-check' if getattr(sys,'frozen',False) else '-m']
         if args[0] in ('python','python3','py') and len(args)>=3 and args[1]=='-m' and args[2] in ('pytest','unittest','compileall'):
@@ -178,11 +188,6 @@ class ProjectFiles:
             args=[node,str(candidates[0]),*args[1:]]
         else:
             raise ValueError('Supported checks: python -m pytest, python -m unittest, python -m compileall, npm test, npm run build/test/lint/typecheck.')
-        for arg in args[1:]:
-            if '..' in Path(arg).parts or (not arg.startswith('-') and (Path(arg).is_absolute() or re.match(r'^[A-Za-z]:',arg))):
-                # npm's own trusted absolute entrypoint is the sole exception.
-                if arg.endswith('npm-cli.js') and args[0]==shutil.which('node'):continue
-                raise ValueError('Command arguments cannot reference paths outside the project.')
         return args
 
     async def run_command(self,tenant_id,run,command):
@@ -192,6 +197,10 @@ class ProjectFiles:
         self.store.event(tenant_id,run['id'],'command.started','Running: '+command,iteration=run['iteration'])
         proc=None
         try:
+            # Every caller routes through here, so the execute-mode gate lives here and
+            # not in each route; rejection is reported through the command record.
+            if run['workflow'].get('execution_mode')!='execute':
+                raise ValueError('Project checks run only in Build & test mode. Change this project’s execution mode to run commands.')
             argv=self.command_argv(project['root'],command)
             env={k:v for k,v in os.environ.items() if k.upper() in {'PATH','SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','TEMP','TMP','USERPROFILE','HOME','APPDATA','LOCALAPPDATA','LANG'}}
             env.update(PYTHONUTF8='1',PYTHONIOENCODING='utf-8',CI='true',NO_COLOR='1')

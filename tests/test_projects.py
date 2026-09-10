@@ -53,8 +53,22 @@ def test_concurrent_external_edit_is_not_overwritten(tmp_path):
 
 def test_commands_reject_shells_and_path_escape(tmp_path):
     files=ProjectFiles(setup_store(tmp_path/'state'))
-    for cmd in ['powershell -Command anything','python -c "print(1)"','pytest; whoami','npm run build && echo ok','python -m pytest ../other','curl https://example.com','rm -rf .']:
+    escapes=['python -m pytest ../other','python -m pytest /Windows/Temp/evil_test.py',
+             'python -m unittest discover -sC:\\Users\\Public','pytest --rootdir=/etc',
+             'python -m compileall \\\\server\\share','pytest -s/Windows/Temp']
+    for cmd in ['powershell -Command anything','python -c "print(1)"','pytest; whoami','npm run build && echo ok','curl https://example.com','rm -rf .',*escapes]:
         with pytest.raises(ValueError):files.command_argv(tmp_path,cmd)
+    # Relative arguments, option flags and pytest node ids stay usable.
+    assert files.command_argv(tmp_path,'python -m pytest tests/test_a.py::test_fn -q --tb=short')[-3:]==['tests/test_a.py::test_fn','-q','--tb=short']
+
+@pytest.mark.asyncio
+async def test_manual_project_check_requires_execute_mode(tmp_path):
+    store=setup_store(tmp_path/'state');files=ProjectFiles(store)
+    root=tmp_path/'project';root.mkdir()
+    project=files.create('tenant-a','Project',str(root))
+    run={'id':'manual-check','workflow':{'project_id':project['id'],'execution_mode':'edit'},'iteration':1,'commands':[]}
+    record=await files.run_command('tenant-a',run,'python -m compileall .')
+    assert record['status']=='failed' and record['exit_code'] is None and 'Build & test' in record['output']
 
 def test_project_session_api_continues_and_isolates(tmp_path):
     app=create_app(str(tmp_path/'state'),ScriptedBroker())

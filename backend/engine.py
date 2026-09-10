@@ -127,26 +127,29 @@ class Engine:
         for stage in run['stages']:
             if stage['status'] == 'running':
                 stage.update(status='cancelled' if status == 'cancelled' else 'failed', finished_at=now(), error=error)
-                run['cost_complete'] = False
-                run['usage_complete'] = False
+                self.charge_bound(tenant_id, run, stage)
         self.store.put(tenant_id, 'runs', run)
         message = 'Project check complete.' if run['phase'] == 'COMMAND' else 'Workflow complete. Approved by the reviewer.'
         self.store.event(tenant_id, run['id'], f'workflow.{status}', error or message, iteration=run['iteration'])
 
     def budget_check(self, tenant_id, run, config, system, prompt, stage):
+        """Authorize the next call and return the cost bound reserved for it, or None when unpriced."""
         tenant = self.store.tenant_internal(tenant_id)
         if run['iteration'] > min(run['max_workflow_iterations'], tenant['max_workflow_iterations']):
             raise WorkflowIterationLimitExceeded('The workspace iteration limit was reached. No additional model call was made.')
         if len(prompt.encode()) > 600000:
             raise ExecutionLimitError('The accumulated context is too large. Reduce attachments or start a smaller workflow.')
-        limits = tenant.get('max_cost_per_run'), tenant.get('monthly_budget')
-        if not any(limits):
-            return
-        if config.get('input_price') is None or config.get('output_price') is None or not run['cost_complete']:
-            raise ExecutionLimitError('A budget is configured, but usage or model pricing is unknown. Set verified per-million-token prices in Models before running.')
         # UTF-8 bytes provide a deliberately conservative text token bound, with
         # room for message/schema overhead. Prices are administrator-configured estimates.
-        estimate = ((len((system+prompt).encode()) + 12000) * config['input_price'] + stage['max_tokens'] * config['output_price']) / 1e6
+        # The bound is computed whether or not a budget is set, so an interrupted call
+        # can always be settled at it.
+        priced = config.get('input_price') is not None and config.get('output_price') is not None
+        estimate = (((len((system+prompt).encode()) + 12000) * config['input_price'] + stage['max_tokens'] * config['output_price']) / 1e6) if priced else None
+        limits = tenant.get('max_cost_per_run'), tenant.get('monthly_budget')
+        if not any(limits):
+            return estimate
+        if estimate is None or not run['cost_complete']:
+            raise ExecutionLimitError('A budget is configured, but usage or model pricing is unknown. Set verified per-million-token prices in Models before running.')
         month = datetime.now(timezone.utc).strftime('%Y-%m')
         monthly = [r for r in self.store.list(tenant_id, 'runs') if r['created_at'].startswith(month)]
         if limits[1] and any(not r['cost_complete'] for r in monthly):
@@ -155,11 +158,32 @@ class Engine:
             raise ExecutionLimitError('The next model call could exceed the run budget. No call was made.')
         if limits[1] and sum(r['cost'] for r in monthly) + estimate > limits[1]:
             raise ExecutionLimitError('The next model call could exceed the monthly workspace budget. No call was made.')
+        return estimate
+
+    def charge_bound(self, tenant_id, run, entry):
+        """Bill an interrupted call at the bound budget_check already reserved for it.
+
+        Both budgets counted that bound before the call was allowed, so charging it keeps
+        every limit honest. Recording the charge as unknown instead would leave the run
+        unreconcilable, and a monthly budget rejects any month holding an unknown charge,
+        so one stopped run would block the workspace until the next month.
+        """
+        bound, entry['cost_estimate'] = entry.get('cost_estimate'), 0.0  # consumed once
+        if bound is None:
+            run['cost_complete'] = False
+            run['usage_complete'] = False
+            return
+        if not bound:  # budget_check rejected the call, so nothing was sent or billed
+            return
+        run['usage_complete'] = False
+        entry['cost'] = (entry['cost'] or 0) + bound
+        run['cost'] += bound
+        self.store.event(tenant_id, run['id'], 'cost.bounded', f'An interrupted call is billed at its reserved maximum of ${bound:.4f}.', iteration=run['iteration'], stage_id=entry['id'])
 
     async def call_stage(self, tenant_id, run, stage):
         role = stage['role']
         self.transition(tenant_id, run, role.upper())
-        entry = dict(id=uid(), stage_id=stage['id'], role=role, iteration=run['iteration'], model_id=stage['model_id'], status='running', started_at=now(), finished_at=None, output='', artifact=None, input_tokens=None, output_tokens=None, cost=None)
+        entry = dict(id=uid(), stage_id=stage['id'], role=role, iteration=run['iteration'], model_id=stage['model_id'], status='running', started_at=now(), finished_at=None, output='', artifact=None, input_tokens=None, output_tokens=None, cost=None, cost_estimate=0.0)
         run['stages'].append(entry)
         self.store.put(tenant_id, 'runs', run)
         self.store.event(tenant_id, run['id'], 'stage.started', f'{role.capitalize()} started.', iteration=run['iteration'], stage_id=entry['id'], model_id=stage['model_id'])
@@ -180,20 +204,22 @@ class Engine:
         prompt = '\n\n'.join(run['transcript'])
         for attempt, model_id in enumerate([stage['model_id']] + ([stage['fallback_model_id']] if stage.get('fallback_model_id') else [])):
             config = self.store.get(tenant_id, 'models', model_id)
-            self.budget_check(tenant_id, run, config, system, prompt, stage)
+            entry['cost_estimate'] = self.budget_check(tenant_id, run, config, system, prompt, stage)
             entry['model_id'] = model_id
-            self.store.put(tenant_id, 'runs', run)
+            self.store.put(tenant_id, 'runs', run)  # Persist the reserved bound before the call.
             self.store.event(tenant_id, run['id'], 'model.request.started', f'{config["name"]} is working.', model_id=model_id, iteration=run['iteration'])
             try:
                 result = await self.broker.invoke(tenant_id, model_id, system, prompt, stage, contract.model_json_schema() if contract else None)
                 break
             except ProviderError as exc:
-                # Failed requests may have been billed. Preserve uncertainty rather than $0.
-                run['cost_complete'] = False
-                run['usage_complete'] = False
+                # Failed requests may have been billed. Charge the reserved bound rather
+                # than $0, so the fallback attempt still passes its own budget check.
+                self.charge_bound(tenant_id, run, entry)
                 if attempt == 0 and stage.get('fallback_model_id') and exc.retryable:
                     self.store.event(tenant_id, run['id'], 'model.fallback', str(exc) + ' Trying the configured fallback.', iteration=run['iteration'])
                     continue
+                entry.update(status='failed', finished_at=now(), error=str(exc))
+                self.store.put(tenant_id, 'runs', run)
                 raise
         entry.update(output=result.text, input_tokens=result.input_tokens, output_tokens=result.output_tokens, finished_at=now())
         run['input_tokens'] += result.input_tokens or 0
@@ -201,8 +227,9 @@ class Engine:
         if result.input_tokens is None or result.output_tokens is None:
             run['usage_complete'] = False
         if config.get('input_price') is not None and config.get('output_price') is not None and result.input_tokens is not None and result.output_tokens is not None:
-            entry['cost'] = (result.input_tokens*config['input_price'] + result.output_tokens*config['output_price'])/1e6
-            run['cost'] += entry['cost']
+            actual = (result.input_tokens*config['input_price'] + result.output_tokens*config['output_price'])/1e6
+            entry['cost'] = (entry['cost'] or 0) + actual  # Keeps an abandoned attempt's bound in the stage row.
+            run['cost'] += actual
         else:
             run['cost_complete'] = False
         self.store.put(tenant_id, 'runs', run)  # Preserve raw output and usage even if validation fails.
