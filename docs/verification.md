@@ -42,8 +42,6 @@ Testing uncovered and fixed two issues before final delivery: the model could re
 
 Installer checksums and installed-file verification are in [installer-manifest.json](installer-manifest.json). The bundle archive was checked for local databases, environment files, and encryption keys; none are included.
 
-The final same-version installer upgrade was tested with the installed desktop and backend running. It completed in one pass, and installed executable verification matched the current build and live-tested backend checksum. Installer hooks close the frozen backend before replacing its executable.
-
 Visual inspection resumed against the installed release after the interrupted inspection. The native window restored its project and conversation. Checked actual source previews, historical unified and split diffs, full structured plans, reviewer approval, recorded command output, contextual panel resizing and closing, the AI team dialog, and the new-session screen. These views rendered without obvious layout defects at the inspected window size. The app was left on a new session with the prompt composer focused. This was a visual inspection of existing results, not another live model execution.
 
 A final same-version upgrade was tested while the installed desktop and frozen backend were running. The installer closed both processes, completed successfully in one pass, and installed files matching the current build and the live-tested backend checksum. Installer hooks handle backend shutdown before replacement to prevent retaining a locked older executable. The updated installed desktop was then relaunched.
