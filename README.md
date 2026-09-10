@@ -23,6 +23,12 @@ The last command builds the interface and opens a normal **Frontier** window. Ta
 
 On a fresh installation, use **Settings → Models & Providers → Connect model**. Supply the exact model identifier available to your account and its key, or an OpenAI-compatible local endpoint. Test connection checks model discovery; it does not generate text. Credentials are encrypted locally and never returned to the UI. The broker does not silently fall back to environment credentials.
 
+### Using a subscription instead of an API key
+
+Choose **Claude subscription** or **Codex subscription** as the provider to run a model without any API key. Frontier runs the agent command line tool you already have installed, and that tool signs in with your own Claude or ChatGPT subscription. Install the tool, sign in once in a terminal, then connect a model whose identifier is the name the tool accepts, such as `sonnet`. There is no key, endpoint or per-token rate to enter. Test connection confirms the tool runs; a sign-in problem surfaces on the first request.
+
+This is the one place where credentials come from outside the application, so it is worth knowing what holds and what does not. The tool is launched with its own tools disabled and, for Codex, a read-only sandbox, so it cannot reach your project. It only returns an artifact, and the reviewer and the workflow's execution mode still decide what is written. Provider API keys are stripped from its environment, because an inherited `ANTHROPIC_API_KEY` would make the Claude tool bill per token instead of using the subscription. Usage is covered by the subscription, so these models are rated at zero and never consume a workspace budget. Per-stage token and temperature limits have no command line equivalent and are not applied. Codex reports only a combined token total, so its token counts show as partial.
+
 An explicit convenience import is available for an existing Anthropic environment credential: launch with `HARNESS_IMPORT_ENV=1`. On first native launch, if the initial workspace has no models, this copies `ANTHROPIC_API_KEY` into its encrypted model configuration. `HARNESS_DEFAULT_MODEL` can specify the imported model ID. It does not share credentials with other workspaces.
 
 To build the standalone Windows x64 installer:
@@ -57,7 +63,7 @@ The optional **Settings → Execution** area retains advanced saved-workflow edi
 - Supported checks are Python pytest, unittest, compileall, and npm test/build/test/lint/typecheck. Commands run in the project folder without a generated shell command and without provider keys in their environment. Each check has a 120-second timeout and bounded captured output. Dependencies must already be installed; arbitrary shells, dependency installation, interactive terminals, file deletion, and autonomous web browsing are not implemented.
 - File context is bounded: up to 2,000 tree entries, 50 KB per context file, and 90 KB total file context. Unread existing files cannot be overwritten. File preview supports UTF-8 text under 300 KB.
 - One active run per tenant protects budget accounting. Multiple backend workers on the same database are rejected. On interruption, outputs remain saved and calls are not automatically replayed, since an in-flight call may already have been billed.
-- Token usage comes from providers where available. Cost is an estimate from administrator-entered rates, not a billing invoice. Unknown pricing/usage is displayed as unavailable and configured budget enforcement fails closed when it cannot estimate safely.
+- Token usage comes from providers where available. Cost is an estimate from administrator-entered rates, not a billing invoice. Unknown pricing/usage is displayed as unavailable and configured budget enforcement fails closed when it cannot estimate safely. A subscription login is rated at zero, so its cost is known to be nothing even when token counts are not reported.
 
 Native application state lives under `%LOCALAPPDATA%\dev.frontier.harness`. Managed project folders are stored in the adjacent `Frontier Projects` directory, segregated by tenant. Back up the database and `secret.key` together. Deleting workspace records does not recursively delete user project folders.
 

@@ -17,10 +17,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from pypdf import PdfReader
-from .schemas import LoginInput, TenantInput, ModelConfig, WorkflowInput, AgentInput, PromptInput, ContinueInput
+from .schemas import LoginInput, TenantInput, ModelConfig, WorkflowInput, AgentInput, PromptInput, ContinueInput, SUBSCRIPTION_PROVIDERS
 from .store import Store, TenantIsolationViolationException, uid, now, public_model
 from .engine import Engine, TERMINAL
-from .broker import ProviderError
+from .broker import ProviderError, probe_cli
 
 SESSION_LIFETIME = 86400*7  # Seconds of inactivity before a stored session expires.
 
@@ -233,7 +233,10 @@ def create_app(directory=None, broker=None):
         encrypted = store.encrypt(payload.api_key) if payload.api_key else old.get('encrypted_key')
         if payload.provider in ('openai','anthropic') and not encrypted:
             raise ValueError('An API key is required for this provider.')
-        model = dict(**data,id=model_id or uid(),encrypted_key=encrypted,key_hint='••••'+payload.api_key[-4:] if payload.api_key else old.get('key_hint','No key'),status='untested',created_at=old.get('created_at',now()))
+        if payload.provider in SUBSCRIPTION_PROVIDERS:
+            encrypted = None  # Switching to a subscription login discards any stored key.
+        hint = 'Subscription login' if payload.provider in SUBSCRIPTION_PROVIDERS else ('••••'+payload.api_key[-4:] if payload.api_key else old.get('key_hint','No key'))
+        model = dict(**data,id=model_id or uid(),encrypted_key=encrypted,key_hint=hint,status='untested',created_at=old.get('created_at',now()))
         return public_model(store.put(tenant_id,'models',model))
 
     @app.post('/api/t/{tenant_id}/models/{model_id}/test')
@@ -247,7 +250,9 @@ def create_app(directory=None, broker=None):
         start = time.monotonic()
         try:
             async with asyncio.timeout(20):
-                if model['provider'] == 'anthropic':
+                if model['provider'] in SUBSCRIPTION_PROVIDERS:
+                    await probe_cli(model['provider'])
+                elif model['provider'] == 'anthropic':
                     async with AsyncAnthropic(api_key=key,max_retries=0) as client:
                         await client.models.retrieve(model['model_name'])
                 else:
@@ -256,9 +261,11 @@ def create_app(directory=None, broker=None):
                         if model['model_name'] not in [m.id for m in found.data]:
                             raise ValueError('The configured model was not returned by the endpoint.')
             model.update(status='connected',latency_ms=round((time.monotonic()-start)*1000),tested_at=now())
-        except Exception:
+        except Exception as exc:
             model.update(status='error',tested_at=now())
             store.put(tenant_id,'models',model)
+            if isinstance(exc,ProviderError):
+                raise  # A subscription check already explains what to install or sign in to.
             raise ProviderError('Connection check failed. Verify the key, model identifier, and endpoint. The endpoint must support model discovery.') from None
         return public_model(store.put(tenant_id,'models',model))
 

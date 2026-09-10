@@ -226,12 +226,20 @@ class Engine:
         run['output_tokens'] += result.output_tokens or 0
         if result.input_tokens is None or result.output_tokens is None:
             run['usage_complete'] = False
-        if config.get('input_price') is not None and config.get('output_price') is not None and result.input_tokens is not None and result.output_tokens is not None:
-            actual = (result.input_tokens*config['input_price'] + result.output_tokens*config['output_price'])/1e6
+        rates = config.get('input_price'), config.get('output_price')
+        if None in rates:
+            run['cost_complete'] = False
+        elif result.input_tokens is None or result.output_tokens is None:
+            # Unreported tokens only leave the charge unknown when the model is actually rated.
+            # A zero-rated model, such as a subscription login, costs nothing either way.
+            if any(rates):
+                run['cost_complete'] = False
+            else:
+                entry['cost'] = entry['cost'] or 0.0
+        else:
+            actual = (result.input_tokens*rates[0] + result.output_tokens*rates[1])/1e6
             entry['cost'] = (entry['cost'] or 0) + actual  # Keeps an abandoned attempt's bound in the stage row.
             run['cost'] += actual
-        else:
-            run['cost_complete'] = False
         self.store.put(tenant_id, 'runs', run)  # Preserve raw output and usage even if validation fails.
         self.store.event(tenant_id, run['id'], 'model.request.completed', f'{config["name"]} returned its output.', iteration=run['iteration'], model_id=model_id)
         if result.error:

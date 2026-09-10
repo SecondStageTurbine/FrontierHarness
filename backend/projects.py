@@ -14,6 +14,7 @@ import shlex
 import shutil
 import sys
 from pathlib import Path
+from .localprocess import child_env, child_flags, terminate
 from .store import TenantIsolationViolationException, now, uid
 
 IGNORED = {'.git','.venv','venv','node_modules','dist','build','target','__pycache__','.pytest_cache','.next','.idea','.vscode','.ssh','.aws','.azure','.codex','data'}
@@ -217,10 +218,8 @@ class ProjectFiles:
             if run['workflow'].get('execution_mode')!='execute':
                 raise ValueError('Project checks run only in Build & test mode. Change this project’s execution mode to run commands.')
             argv=self.command_argv(project['root'],command)
-            env={k:v for k,v in os.environ.items() if k.upper() in {'PATH','SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','TEMP','TMP','USERPROFILE','HOME','APPDATA','LOCALAPPDATA','LANG'}}
-            env.update(PYTHONUTF8='1',PYTHONIOENCODING='utf-8',CI='true',NO_COLOR='1')
-            kwargs={'creationflags':0x08000000} if os.name=='nt' else {'start_new_session':True}
-            proc=await asyncio.create_subprocess_exec(*argv,cwd=project['root'],env=env,stdin=asyncio.subprocess.DEVNULL,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT,**kwargs)
+            env=child_env(PYTHONUTF8='1',PYTHONIOENCODING='utf-8',CI='true',NO_COLOR='1')
+            proc=await asyncio.create_subprocess_exec(*argv,cwd=project['root'],env=env,stdin=asyncio.subprocess.DEVNULL,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT,**child_flags())
             async with asyncio.timeout(120):
                 while True:
                     data=await proc.stdout.read(4096)
@@ -238,14 +237,7 @@ class ProjectFiles:
         except (ValueError,OSError,TimeoutError) as exc:
             record.update(status='failed',output=record['output']+'\n'+('Command exceeded its 120-second limit.' if isinstance(exc,TimeoutError) else str(exc)))
         finally:
-            if proc and proc.returncode is None:
-                if os.name=='nt':
-                    killer=await asyncio.create_subprocess_exec('taskkill','/PID',str(proc.pid),'/T','/F',stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL,creationflags=0x08000000)
-                    await killer.wait()
-                else:
-                    import signal
-                    os.killpg(proc.pid,signal.SIGKILL)
-                await proc.wait()
+            if proc:await terminate(proc)
             record['finished_at']=now();self.store.put(tenant_id,'runs',run)
         self.store.event(tenant_id,run['id'],'command.completed',f'{command} · {"passed" if record["status"]=="completed" else "failed"}',iteration=run['iteration'],exit_code=record['exit_code'])
         return record

@@ -43,9 +43,11 @@ class BuildArtifact(StrictModel):
     files: list[ArtifactFile] = Field(max_length=50)
     commands: list[str] = Field(default_factory=list, max_length=6)
 
+SUBSCRIPTION_PROVIDERS = ('claude_cli', 'codex_cli')
+
 class ModelConfig(StrictModel):
     name: str = Field(min_length=1, max_length=100)
-    provider: Literal['anthropic', 'openai', 'custom_openai', 'ollama']
+    provider: Literal['anthropic', 'openai', 'custom_openai', 'ollama', 'claude_cli', 'codex_cli']
     model_name: str = Field(min_length=1, max_length=150)
     api_key: str | None = Field(default=None, max_length=1000)
     base_url: str | None = None
@@ -56,6 +58,14 @@ class ModelConfig(StrictModel):
     def endpoint(self):
         if self.provider in ('custom_openai', 'ollama') and not self.base_url:
             raise ValueError('A base URL is required for this provider.')
+        if self.provider in SUBSCRIPTION_PROVIDERS:
+            if self.api_key:
+                raise ValueError('A subscription login signs in through its own command line tool, not an API key.')
+            if self.base_url:
+                raise ValueError('A subscription login has no endpoint to configure.')
+            # The subscription already covers usage, so the per-token rate is zero rather than
+            # unknown. Unknown pricing would refuse every run while a budget is configured.
+            self.input_price = self.output_price = 0.0
         if self.base_url:
             u = urlparse(self.base_url)
             if u.scheme not in ('http', 'https') or not u.hostname or u.username or u.password or u.query or u.fragment:
