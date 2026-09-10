@@ -1,0 +1,76 @@
+# SYSTEM SPECIFICATION: MULTI-TENANT AGENTIC WORKFLOW HARNESS (DISCUSSION->PLAN->REVIEW)
+
+You are an expert Principal AI Software Architect. Your task is to build a production-grade, highly modular, multi-tenant agentic workflow harness in Python. This framework orchestrates sequential multi-model execution loops across isolated tenant contexts.
+
+## 1. Core Architectural Requirements
+
+### A. Model Agnostic Abstraction Layer (Cross-Provider Broker)
+- Implement a unified `ModelBroker` or factory class capable of interacting with multiple APIs seamlessly.
+- Built-in support for:
+  1. Anthropic (e.g., `claude-3-5-sonnet`, `claude-3-opus`) via official SDK.
+  2. OpenAI / Codex (via official SDK).
+  3. Open-source or alternative endpoints (e.g., OpenCode via OpenAI-compatible OpenAI API base URLs or Ollama/VLLM).
+- Every model invocation must accept an abstract string identifier (e.g., `"anthropic/claude-3-5-sonnet"`, `"openai/gpt-4o"`, `"custom/opencode"`) and resolve it dynamically using credentials scoped exclusively to the request's tenant.
+
+### B. Strict Multi-Tenant Isolation
+- All state lookups, context memories, and database operations must be isolated by a mandatory `tenant_id` string component.
+- The harness must throw a fatal runtime `TenantIsolationViolationException` if an entity attempts to access a workflow context not explicitly owned by its verified `tenant_id`.
+- Tenant profiles must contain distinct API keys, model routing maps, and execution constraints (e.g., cost boundaries, max loops).
+
+### C. Deterministic State Machine (Discussion -> Plan -> Review -> Re-Plan Loop)
+- Implement an explicit state tracking mechanism managing the following deterministic phases:
+  - `DISCUSSION`: Interrogates a collaborative pool of agents or users to surface underlying goals and constraints.
+  - `PLANNING`: Forces a designated "Planner Model" to consume the entire text transcript of the discussion and output a highly structured, machine-readable plan artifact using strictly enforced JSON validation (`pydantic.BaseModel`).
+  - `REVIEW`: Passes the plan artifact to a dedicated "Reviewer/Critic Model" tasked with executing a zero-tolerance alignment evaluation against corporate rules and safety guardrails.
+  - `REPLAN`: If the Review phase returns an `approved: false` signal, the state transitions dynamically back to `PLANNING` with the critical feedback appended. The system must fail safely with an exception if it exceeds a tenant-configured maximum iteration circuit break counter (`max_loops`).
+
+### D. Multi-Model Hybrid Cross-Routing Pipeline
+- The engine must support routing distinct phases of a single execution chain to entirely different models, frameworks, or inference providers seamlessly.
+- Case Study Pipeline to support:
+  - Fable / Sonnet plans the architecture (`anthropic/claude-3-5-sonnet`)
+  - Opus builds/writes code or configurations (`anthropic/claude-3-opus`)
+  - Codex / OpenCode reviews and scans for errors (`openai/gpt-code` or custom open-source endpoint)
+
+---
+
+## 2. Reference Structural Interface (Pydantic / Typings)
+
+The target codebase must strictly adhere to or implement equivalent structures of these data objects:
+
+```python
+from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field
+
+class ModelConfig(BaseModel):
+    provider: str  # "anthropic", "openai", "custom_openai", "ollama"
+    model_name: str
+    api_key_override: Optional[str] = None
+    base_url_override: Optional[str] = None
+
+class TenantContext(BaseModel):
+    tenant_id: str
+    model_routing_table: Dict[str, ModelConfig]  # Keys: "discussion", "planning", "building", "review"
+    max_workflow_iterations: int = 3
+    tenant_metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class PlanArtifact(BaseModel):
+    title: str
+    execution_steps: List[str]
+    technical_dependencies: List[Dict[str, str]]
+    risk_assessment: str
+
+class ReviewReport(BaseModel):
+    approved: bool
+    quality_score: float  # 0.0 to 1.0
+    detected_vulnerabilities: List[str]
+    rejection_reasons: List[str]
+```
+
+---
+
+## 3. Output Generation Mandate
+
+Provide a comprehensive, production-ready, fully commented Python implementation of this architecture. 
+- Use standard libraries alongside `pydantic` and explicit mock hooks or stub implementations for `openai` and `anthropic` client routing logic.
+- Implement an execution simulation at the end of the script demonstrating a multi-model workflow where Tenant A maps "planning" to Anthropic, "building" to an OpenAI provider, and "reviewing" to an OpenCode/Custom API.
+- Ensure the state machine logic is decoupled from any specific transport layer so it can be wrapped inside FastAPI or a Celery task queue easily later.

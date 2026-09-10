@@ -1,0 +1,11 @@
+fastapi>=0.115,<1
+uvicorn>=0.34,<1
+pydantic>=2.10,<3
+openai>=2,<3
+anthropic>=0.65,<1
+cryptography>=45
+python-multipart>=0.0.20
+pypdf>=6
+httpx>=0.28
+pytest>=8
+pytest-asyncio>=1

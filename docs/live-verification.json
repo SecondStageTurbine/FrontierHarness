@@ -1,0 +1,88 @@
+{
+  "project": "Desktop verification",
+  "runs": [
+    {
+      "instruction": "Build a tiny Python calculator with add(a, b), unittest coverage for positive and negative numbers, and a short README. Use only the standard library. Create the actual files and run python -m unittest discover. Keep this verification project under 100 lines total.",
+      "status": "complete",
+      "iteration": 1,
+      "models": [
+        "claude-haiku-4-5-20251001"
+      ],
+      "input_tokens": 7843,
+      "output_tokens": 1880,
+      "cost_complete": false,
+      "changes": [
+        {
+          "path": "calculator.py",
+          "kind": "added",
+          "status": "applied"
+        },
+        {
+          "path": "test_calculator.py",
+          "kind": "added",
+          "status": "applied"
+        },
+        {
+          "path": "README.md",
+          "kind": "added",
+          "status": "applied"
+        }
+      ],
+      "checks": [
+        {
+          "command": "python -m unittest discover",
+          "exit_code": 0,
+          "output": "....\r\n----------------------------------------------------------------------\r\nRan 4 tests in 0.000s\r\n\r\nOK\r\n"
+        }
+      ],
+      "review": {
+        "approved": true,
+        "quality_score": 0.95,
+        "detected_vulnerabilities": [],
+        "rejection_reasons": []
+      }
+    },
+    {
+      "instruction": "Extend the existing calculator with subtract(a, b), add two unittest cases, and update the README. Preserve the existing tests, stay under 100 lines total, and run python -m unittest discover.",
+      "status": "complete",
+      "iteration": 1,
+      "models": [
+        "claude-haiku-4-5-20251001"
+      ],
+      "input_tokens": 11181,
+      "output_tokens": 2625,
+      "cost_complete": false,
+      "changes": [
+        {
+          "path": "calculator.py",
+          "kind": "modified",
+          "status": "applied"
+        },
+        {
+          "path": "test_calculator.py",
+          "kind": "modified",
+          "status": "applied"
+        },
+        {
+          "path": "README.md",
+          "kind": "modified",
+          "status": "applied"
+        }
+      ],
+      "checks": [
+        {
+          "command": "python -m unittest discover",
+          "exit_code": 0,
+          "output": "......\r\n----------------------------------------------------------------------\r\nRan 6 tests in 0.000s\r\n\r\nOK\r\n"
+        }
+      ],
+      "review": {
+        "approved": true,
+        "quality_score": 0.95,
+        "detected_vulnerabilities": [],
+        "rejection_reasons": []
+      }
+    }
+  ],
+  "latest_files_match_recorded_changes": true
+}

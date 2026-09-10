@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop",
+  "description": "Frontier's own loopback UI may open the native project folder picker.",
+  "windows": ["main"],
+  "remote": {"urls": ["http://127.0.0.1:*"]},
+  "permissions": ["core:default", "dialog:allow-open"]
+}
