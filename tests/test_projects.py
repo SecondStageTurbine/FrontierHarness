@@ -206,7 +206,8 @@ def test_files_outside_the_context_budget_stay_editable(tmp_path):
     project=files.create('tenant-a','Polyglot',str(root))
     context,hashes=files.snapshot('tenant-a',project['id'])
     assert {'app.rb','notes.md'}<=set(hashes)
-    assert any('app.rb' in c for c in context) and not any('notes.md' in c for c in context)
+    assert any('app.rb' in c for c in context) and not any(c.startswith('FILE notes.md') for c in context)
+    assert any(c.startswith('FILES PRESENT BUT NOT PROVIDED') and 'notes.md' in c for c in context)  # declared, not silently dropped
     run={'id':'budget','workflow':{'project_id':project['id'],'execution_mode':'edit'},'file_hashes':hashes,'changes':[],'iteration':1}
     files.apply('tenant-a',run,{'id':'builder'},[{'name':'app.rb','content':'puts 2\n'},{'name':'notes.md','content':'shorter\n'}])
     assert (root/'app.rb').read_text()=='puts 2\n' and (root/'notes.md').read_text()=='shorter\n'
@@ -234,3 +235,38 @@ def test_framework_file_names_are_accepted(tmp_path):
         assert ArtifactFile(name=name,content='x').name==name
     for name in ['C:/outside.txt','null\x00byte','star*name','tab\tname']:
         with pytest.raises(ValueError):ArtifactFile(name=name,content='x')
+
+def make_pdf(text):
+    """A minimal single-page PDF with one extractable text run."""
+    stream=('BT /F1 12 Tf 20 100 Td ('+text+') Tj ET').encode()
+    objects=[b'<</Type/Catalog/Pages 2 0 R>>',
+             b'<</Type/Pages/Kids[3 0 R]/Count 1>>',
+             b'<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>',
+             b'<</Length '+str(len(stream)).encode()+b'>>stream\n'+stream+b'\nendstream',
+             b'<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>']
+    out=bytearray(b'%PDF-1.4\n');offsets=[]
+    for i,body in enumerate(objects,1):
+        offsets.append(len(out))
+        out+=str(i).encode()+b' 0 obj'+body+b'endobj\n'
+    start=len(out)
+    out+=b'xref\n0 '+str(len(objects)+1).encode()+b'\n0000000000 65535 f \n'
+    for offset in offsets:
+        out+=('%010d 00000 n \n'%offset).encode()
+    out+=b'trailer<</Size '+str(len(objects)+1).encode()+b'/Root 1 0 R>>\nstartxref\n'+str(start).encode()+b'\n%%EOF\n'
+    return bytes(out)
+
+def test_project_pdfs_are_read_and_unreadable_files_are_declared(tmp_path):
+    store=setup_store(tmp_path/'state');files=ProjectFiles(store)
+    root=tmp_path/'project';root.mkdir()
+    (root/'report.pdf').write_bytes(make_pdf('Quarterly revenue rose 12 percent'))
+    (root/'logo.png').write_bytes(bytes.fromhex('89504e470d0a1a0a')+bytes(20))
+    project=files.create('tenant-a','Project',str(root))
+    assert 'Quarterly revenue rose 12 percent' in files.read('tenant-a',project['id'],'report.pdf')['content']
+    context,hashes=files.snapshot('tenant-a',project['id'])
+    assert any('Quarterly revenue rose 12 percent' in entry for entry in context)
+    assert 'report.pdf' in hashes and 'logo.png' not in hashes
+    notice=[entry for entry in context if entry.startswith('FILES PRESENT BUT NOT PROVIDED')]
+    assert len(notice)==1 and 'logo.png' in notice[0] and 'report.pdf' not in notice[0]
+    run={'id':'run-1','iteration':1,'changes':[],'file_hashes':hashes,'workflow':{'project_id':project['id'],'execution_mode':'execute'}}
+    with pytest.raises(ValueError):  # a build must never overwrite a PDF with its extracted text
+        files.apply('tenant-a',run,{'id':'stage-1'},[{'name':'report.pdf','content':'overwritten'}])

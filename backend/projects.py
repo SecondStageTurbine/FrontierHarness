@@ -7,6 +7,7 @@ they are local processes, not an OS sandbox, and receive a scrubbed environment.
 import asyncio
 import difflib
 import hashlib
+import io
 import json
 import os
 import re
@@ -14,12 +15,13 @@ import shlex
 import shutil
 import sys
 from pathlib import Path
+from pypdf import PdfReader
 from .localprocess import child_env, child_flags, terminate
 from .store import TenantIsolationViolationException, now, uid
 
 IGNORED = {'.git','.venv','venv','node_modules','dist','build','target','__pycache__','.pytest_cache','.next','.idea','.vscode','.ssh','.aws','.azure','.codex','data'}
 SENSITIVE = {'.env','.npmrc','.pypirc','credentials','credentials.json','secret.key','harness.db','id_rsa','id_ed25519'}
-TEXT_EXTENSIONS = {'.py','.js','.jsx','.ts','.tsx','.json','.md','.txt','.html','.css','.scss','.yml','.yaml','.toml','.ini','.cfg','.xml','.sql','.rs','.go','.java','.c','.h','.cpp','.sh','.ps1','.csv','.lock','.gitignore'}
+TEXT_EXTENSIONS = {'.py','.js','.jsx','.ts','.tsx','.json','.md','.txt','.html','.css','.scss','.yml','.yaml','.toml','.ini','.cfg','.xml','.sql','.rs','.go','.java','.c','.h','.cpp','.sh','.ps1','.csv','.lock','.gitignore','.pdf'}
 
 # A rooted path at the start of an argument, or straight after an option prefix
 # ('-sC:\Temp', '--rootdir=/etc'). Driveless roots are rooted on Windows too: the
@@ -29,6 +31,13 @@ ROOTED_ARG = re.compile(r'^(?:-{1,2}[A-Za-z][\w-]*=?)?(?:[/\\]|[A-Za-z]:)')
 def path_key(path):
     """Match Windows filesystem identity without changing displayed path spelling."""
     return path.casefold() if os.name=='nt' else path
+
+def pdf_text(data):
+    """Extract a PDF's text. Shared by project files and uploaded attachments."""
+    reader=PdfReader(io.BytesIO(data))
+    if len(reader.pages)>100:
+        raise ValueError('PDFs must contain at most 100 pages.')
+    return '\n'.join(page.extract_text() or '' for page in reader.pages)
 
 def read_form(text):
     """The text a later read() returns: Python decodes files with universal newlines."""
@@ -106,6 +115,16 @@ class ProjectFiles:
         file=self.resolve(tenant_id,project_id,relative)
         if not file.is_file():
             raise ValueError('This file is no longer available.')
+        if file.suffix.lower()=='.pdf':
+            if file.stat().st_size>5_000_000:
+                raise ValueError('PDFs are limited to 5 MB.')
+            try:
+                content=pdf_text(file.read_bytes())
+            except Exception as exc:
+                raise ValueError(f'This PDF could not be read: {exc}') from None
+            if not content.strip():
+                raise ValueError('This PDF holds no extractable text. A scanned PDF needs OCR before it can be read.')
+            return {'path':relative,'content':content,'hash':hashlib.sha256(content.encode()).hexdigest()}
         if file.stat().st_size>300000:
             raise ValueError('Preview is limited to text files under 300 KB.')
         try:
@@ -124,16 +143,23 @@ class ProjectFiles:
         read() accepts rather than only what fits in context. Files read() rejects (binary,
         undecodable, over its size limit) stay out: the model cannot edit what it cannot see.
         """
-        context=[];hashes={};size=0
+        context=[];hashes={};size=0;omitted=[]
         for f in self.tree(tenant_id,project_id):
             try:
                 item=self.read(tenant_id,project_id,f['path'])
-            except ValueError:
+            except ValueError as exc:
+                omitted.append(f'{f["path"]} - {exc}')
                 continue
             hashes[f['path']]=item['hash']
-            if len(item['content'])>50000 or size+len(item['content'])>90000:continue
+            if len(item['content'])>50000 or size+len(item['content'])>90000:
+                omitted.append(f'{f["path"]} - too large for the context budget.')
+                continue
             size+=len(item['content'])
             context.append(f'FILE {f["path"]}\n{item["content"]}')
+        if omitted:
+            # Silence reads to the model as an empty project, so it invents a reason the
+            # file is absent instead of reporting that it could not be read.
+            context.append('FILES PRESENT BUT NOT PROVIDED TO YOU\nSay so plainly if one is needed for the objective; never guess its contents.\n'+'\n'.join(omitted))
         return context,hashes
 
     def apply(self,tenant_id,run,stage,files):
@@ -144,6 +170,7 @@ class ProjectFiles:
         for artifact in files:
             relative=artifact['name'].replace('\\','/')
             identity=path_key(relative)
+            if relative.lower().endswith('.pdf'):raise ValueError('PDF files are read-only; they are read into context but never written.')
             if identity in seen:raise ValueError('A build cannot write the same file twice.')
             seen.add(identity)
             target=self.resolve(tenant_id,project_id,relative)

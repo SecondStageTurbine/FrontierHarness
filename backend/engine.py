@@ -281,7 +281,7 @@ class Engine:
                 if run['workflow'].get('project_id'):
                     context,run['file_hashes']=self.files.snapshot(tenant_id,run['workflow']['project_id'])
                     run['transcript'].append('PROJECT FILES\n'+'\n\n'.join(context))
-                    self.store.event(tenant_id,run_id,'files.read',f'Read {len(context)} project files into context.',paths=list(run['file_hashes']))
+                    self.store.event(tenant_id,run_id,'files.read',f'Read {len(run["file_hashes"])} project files.',paths=list(run['file_hashes']))
                 for aid in run['workflow']['attachment_ids']:
                     a = self.store.get(tenant_id,'attachments',aid)
                     run['transcript'].append('ATTACHMENT '+a['name']+'\n'+a['content'])

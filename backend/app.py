@@ -16,10 +16,10 @@ from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
-from pypdf import PdfReader
 from .schemas import LoginInput, TenantInput, ModelConfig, WorkflowInput, AgentInput, PromptInput, ContinueInput, SUBSCRIPTION_PROVIDERS
 from .store import Store, TenantIsolationViolationException, uid, now, public_model
 from .engine import Engine, TERMINAL
+from .projects import pdf_text
 from .broker import ProviderError, probe_cli
 
 SESSION_LIFETIME = 86400*7  # Seconds of inactivity before a stored session expires.
@@ -278,10 +278,7 @@ def create_app(directory=None, broker=None):
         filename = Path(file.filename or 'attachment.txt').name
         try:
             if filename.lower().endswith('.pdf'):
-                reader = PdfReader(io.BytesIO(raw))
-                if len(reader.pages)>100:
-                    raise ValueError('PDFs must contain at most 100 pages.')
-                content = '\n'.join(page.extract_text() or '' for page in reader.pages)
+                content = pdf_text(raw)
             else:
                 content = raw.decode('utf-8')
         except Exception:
