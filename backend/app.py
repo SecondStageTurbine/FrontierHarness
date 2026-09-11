@@ -276,14 +276,22 @@ def create_app(directory=None, broker=None):
         if len(raw)>5_000_000:
             raise ValueError('Files must be smaller than 5 MB.')
         filename = Path(file.filename or 'attachment.txt').name
+        # Decided by format, not by whether the bytes happen to survive a UTF-8 decode:
+        # a small office file that decodes would otherwise reach the model as gibberish.
+        if filename.lower().endswith(('.doc','.docx','.xls','.xlsx','.ppt','.pptx','.odt','.ods','.odp','.rtf','.pages','.numbers','.key')):
+            raise ValueError('Word, Excel and PowerPoint documents are not read. Export to PDF or plain text first.')
         try:
             if filename.lower().endswith('.pdf'):
                 content = pdf_text(raw)
             else:
                 content = raw.decode('utf-8')
         except Exception:
-            raise ValueError('Use UTF-8 text/source files or a text-based PDF (up to 100 pages).') from None
-        if not content.strip() or '\x00' in content or len(content)>100000:
+            raise ValueError('Use a UTF-8 text or source file, or a text-based PDF of up to 100 pages.') from None
+        if not content.strip():
+            # A scanned PDF is the common case here, and 'no extractable text' reads as a
+            # broken file unless the message says what is actually missing.
+            raise ValueError('This PDF holds no extractable text. A scanned PDF needs OCR before it can be read.' if filename.lower().endswith('.pdf') else 'This file contains no text.')
+        if '\x00' in content or len(content)>100000:
             raise ValueError('File must contain extractable text, up to 100,000 characters.')
         result = store.put(tenant_id,'attachments',dict(id=uid(),name=filename,content=content,size=len(raw),created_at=now()))
         return {k:v for k,v in result.items() if k!='content'}

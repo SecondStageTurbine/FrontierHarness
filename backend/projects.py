@@ -50,7 +50,10 @@ class ProjectFiles:
     def create(self,tenant_id,name,root=None):
         project_id=uid()
         if root:
-            location=Path(root).expanduser().resolve(strict=True)
+            try:
+                location=Path(root).expanduser().resolve(strict=True)
+            except OSError:
+                raise ValueError('That folder is not available. Check the path, or reconnect the drive.') from None
             if not location.is_dir() or location==Path(location.anchor) or location==Path.home():
                 raise ValueError('Choose a project folder, not your home folder or drive root.')
         else:
@@ -74,7 +77,10 @@ class ProjectFiles:
 
     def resolve(self,tenant_id,project_id,relative):
         project=self.store.get(tenant_id,'projects',project_id)
-        root=Path(project['root']).resolve(strict=True)
+        try:
+            root=Path(project['root']).resolve(strict=True)
+        except OSError:
+            raise ValueError('The project folder is unavailable. Reconnect the drive or restore the folder.') from None
         relative=relative.replace('\\','/')
         pieces=relative.split('/')
         if not relative or relative.startswith('/') or any(p in ('','..','.') for p in pieces) or ':' in relative:
@@ -93,30 +99,56 @@ class ProjectFiles:
         return target
 
     def tree(self,tenant_id,project_id):
+        return self.walk(tenant_id,project_id)[0]
+
+    def walk(self,tenant_id,project_id):
+        """List every entry the project exposes, and what the walk itself refused.
+
+        The refusals are returned rather than dropped. A folder pruned by name holds a
+        user's documents as often as a build output, and a walk that stops at its limit
+        looks exactly like a smaller project to everything downstream.
+        """
         project=self.store.get(tenant_id,'projects',project_id)
         root=Path(project['root'])
         if not root.is_dir():
             raise ValueError('The project folder is unavailable. Reconnect the drive or restore the folder.')
-        result=[]
+        result=[];refused=[]
         for directory,dirs,files in os.walk(root,followlinks=False):
-            dirs[:]=sorted(d for d in dirs if d not in IGNORED and not d.startswith('.') and not (Path(directory)/d).is_symlink() and not (hasattr(Path(directory)/d,'is_junction') and (Path(directory)/d).is_junction()))
+            keep=[]
+            for name in sorted(dirs):
+                path=Path(directory)/name
+                relative=path.relative_to(root).as_posix()
+                if name in IGNORED or name.startswith('.'):
+                    refused.append(relative+'/ - excluded folder name.')
+                elif path.is_symlink() or (hasattr(path,'is_junction') and path.is_junction()):
+                    refused.append(relative+'/ - linked folders are excluded.')
+                else:
+                    keep.append(name)
+            dirs[:]=keep
             for name in sorted(files):
                 relative=(Path(directory)/name).relative_to(root).as_posix()
                 try:
                     file=self.resolve(tenant_id,project_id,relative)
                     if file.is_file():
                         result.append({'path':relative,'size':file.stat().st_size,'text':file.suffix in TEXT_EXTENSIONS or name in ('Dockerfile','Makefile','LICENSE')})
-                except (ValueError,OSError):
+                except (ValueError,OSError) as exc:
+                    refused.append(f'{relative} - {exc}')
                     continue
-                if len(result)>=2000:return result
-        return result
+                if len(result)>=2000:
+                    refused.append('The folder holds more than 2,000 files. The rest were not listed at all.')
+                    return result,refused
+        return result,refused
 
     def read(self,tenant_id,project_id,relative):
         file=self.resolve(tenant_id,project_id,relative)
         if not file.is_file():
             raise ValueError('This file is no longer available.')
+        try:
+            size=file.stat().st_size
+        except OSError:
+            raise ValueError('This file could not be opened. Another program may be holding it.') from None
         if file.suffix.lower()=='.pdf':
-            if file.stat().st_size>5_000_000:
+            if size>5_000_000:
                 raise ValueError('PDFs are limited to 5 MB.')
             try:
                 content=pdf_text(file.read_bytes())
@@ -125,12 +157,14 @@ class ProjectFiles:
             if not content.strip():
                 raise ValueError('This PDF holds no extractable text. A scanned PDF needs OCR before it can be read.')
             return {'path':relative,'content':content,'hash':hashlib.sha256(content.encode()).hexdigest()}
-        if file.stat().st_size>300000:
+        if size>300000:
             raise ValueError('Preview is limited to text files under 300 KB.')
         try:
             content=file.read_text(encoding='utf-8')
         except UnicodeError:
             raise ValueError('This file is not UTF-8 text.') from None
+        except OSError:
+            raise ValueError('This file could not be opened. Another program may be holding it.') from None
         if '\x00' in content:
             raise ValueError('Binary files cannot be previewed.')
         return {'path':relative,'content':content,'hash':hashlib.sha256(content.encode()).hexdigest()}
@@ -143,8 +177,9 @@ class ProjectFiles:
         read() accepts rather than only what fits in context. Files read() rejects (binary,
         undecodable, over its size limit) stay out: the model cannot edit what it cannot see.
         """
-        context=[];hashes={};size=0;omitted=[]
-        for f in self.tree(tenant_id,project_id):
+        entries,omitted=self.walk(tenant_id,project_id)
+        context=[];hashes={};size=0
+        for f in entries:
             try:
                 item=self.read(tenant_id,project_id,f['path'])
             except ValueError as exc:
@@ -159,7 +194,9 @@ class ProjectFiles:
         if omitted:
             # Silence reads to the model as an empty project, so it invents a reason the
             # file is absent instead of reporting that it could not be read.
-            context.append('FILES PRESENT BUT NOT PROVIDED TO YOU\nSay so plainly if one is needed for the objective; never guess its contents.\n'+'\n'.join(omitted))
+            shown=omitted[:40]
+            if len(omitted)>len(shown):shown.append(f'...and {len(omitted)-len(shown)} more.')
+            context.append('FILES PRESENT BUT NOT PROVIDED TO YOU\nSay so plainly if one is needed for the objective; never guess its contents.\n'+'\n'.join(shown))
         return context,hashes
 
     def apply(self,tenant_id,run,stage,files):

@@ -68,6 +68,11 @@ def test_attachment_validation_and_references(tmp_path):
         assert a['name']=='context.md' and 'content' not in a
         bad=c.post(f'/api/t/{t}/attachments',files={'file':('binary.bin',b'\x00\xff','application/octet-stream')})
         assert bad.status_code==422
+        from tests.test_projects import make_pdf
+        scan=c.post(f'/api/t/{t}/attachments',files={'file':('scan.pdf',make_pdf(''),'application/pdf')})
+        assert scan.status_code==422 and 'OCR' in scan.json()['detail']  # says what is missing, not that the file is broken
+        doc=c.post(f'/api/t/{t}/attachments',files={'file':('minutes.docx',b'PK\x03\x04binary','application/vnd.openxmlformats-officedocument.wordprocessingml.document')})
+        assert doc.status_code==422 and 'Export to PDF' in doc.json()['detail']
 
 def test_unowned_tenant_rejected_even_with_valid_session(tmp_path):
     app=create_app(str(tmp_path),ScriptedBroker())

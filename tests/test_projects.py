@@ -270,3 +270,34 @@ def test_project_pdfs_are_read_and_unreadable_files_are_declared(tmp_path):
     run={'id':'run-1','iteration':1,'changes':[],'file_hashes':hashes,'workflow':{'project_id':project['id'],'execution_mode':'execute'}}
     with pytest.raises(ValueError):  # a build must never overwrite a PDF with its extracted text
         files.apply('tenant-a',run,{'id':'stage-1'},[{'name':'report.pdf','content':'overwritten'}])
+
+def test_pruned_folders_and_unreadable_entries_reach_the_model(tmp_path):
+    store=setup_store(tmp_path/'state');files=ProjectFiles(store)
+    root=tmp_path/'project';(root/'data').mkdir(parents=True);(root/'node_modules').mkdir()
+    (root/'data'/'report.md').write_text('Q3 revenue',encoding='utf-8')   # a pruned folder holding user content
+    (root/'node_modules'/'pkg.js').write_text('noise',encoding='utf-8')
+    (root/'.env').write_text('SECRET=value',encoding='utf-8')             # refused by the resolver, not the reader
+    (root/'notes.md').write_text('visible',encoding='utf-8')
+    project=files.create('tenant-a','Documents',str(root))
+    entries,refused=files.walk('tenant-a',project['id'])
+    assert [f['path'] for f in entries]==['notes.md']
+    assert any(line.startswith('data/') for line in refused) and any(line.startswith('node_modules/') for line in refused)
+    assert any(line.startswith('.env') for line in refused)
+    context,hashes=files.snapshot('tenant-a',project['id'])
+    notice=next(entry for entry in context if entry.startswith('FILES PRESENT BUT NOT PROVIDED'))
+    assert 'data/' in notice and '.env' in notice          # named, so the model reports the gap
+    assert 'SECRET=value' not in notice                    # named only; never its contents
+    assert list(hashes)==['notes.md']
+
+def test_an_unavailable_folder_is_reported_not_a_server_error(tmp_path):
+    """A disconnected drive or a deleted folder is a user condition; OSError has no handler."""
+    store=setup_store(tmp_path/'state');files=ProjectFiles(store)
+    with pytest.raises(ValueError):
+        files.create('tenant-a','Missing',str(tmp_path/'not-there'))
+    root=tmp_path/'project';root.mkdir();(root/'notes.md').write_text('x',encoding='utf-8')
+    project=files.create('tenant-a','Project',str(root))
+    (root/'notes.md').unlink();root.rmdir()
+    with pytest.raises(ValueError):files.tree('tenant-a',project['id'])
+    with pytest.raises(ValueError):files.read('tenant-a',project['id'],'notes.md')
+    with pytest.raises(ValueError):files.resolve('tenant-a',project['id'],'notes.md')
+
