@@ -101,16 +101,20 @@ class Store:
         with self.db() as db:
             db.execute('DELETE FROM entities WHERE tenant_id=? AND kind=? AND id=?', (tenant_id, kind, entity_id))
 
-    def event(self, tenant_id, run_id, event_type, message, **details):
-        self.get(tenant_id, 'runs', run_id)
+    def event(self, tenant_id, session_id, event_type, message, **details):
+        # Events belong to a conversation. The column keeps its original name so an existing
+        # store needs no migration; the scope it names is the session.
+        run_id = session_id
+        self.get(tenant_id, 'sessions', session_id)
         event = dict(type=event_type, message=message, time=now(), **details)
         with self.db() as db:
             cur = db.execute('INSERT INTO events(tenant_id,run_id,data) VALUES(?,?,?)', (tenant_id, run_id, json.dumps(event)))
             event['seq'] = cur.lastrowid
         return event
 
-    def events(self, tenant_id, run_id, after=0):
-        self.get(tenant_id, 'runs', run_id)
+    def events(self, tenant_id, session_id, after=0):
+        run_id = session_id
+        self.get(tenant_id, 'sessions', session_id)
         with self.db() as db:
             rows = db.execute('SELECT seq,data FROM events WHERE tenant_id=? AND run_id=? AND seq>? ORDER BY seq LIMIT 500', (tenant_id, run_id, after)).fetchall()
         return [{**json.loads(r['data']), 'seq': r['seq']} for r in rows]

@@ -5,13 +5,12 @@ import json
 import os
 from pathlib import Path
 from fastapi import Request, Response, HTTPException
-from fastapi.responses import RedirectResponse
-from .schemas import ProjectInput, SessionInput, InstructionInput, TenantInput, WorkflowInput, CommandInput
+from fastapi.responses import RedirectResponse, StreamingResponse
+from .schemas import ProjectInput, SessionInput, InstructionInput, TenantInput, CommandInput
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
-from .engine import TERMINAL
 
-def install_desktop_routes(app,store,engine,user,scoped,create_session):
+def install_desktop_routes(app,store,runner,user,scoped,create_session):
     files=ProjectFiles(store)
     ticket_used=False
 
@@ -69,7 +68,7 @@ def install_desktop_routes(app,store,engine,user,scoped,create_session):
     def new_session(tenant_id:str,project_id:str,payload:SessionInput,request:Request):
         scoped(request,tenant_id)
         store.get(tenant_id,'projects',project_id)
-        return store.put(tenant_id,'sessions',{'id':uid(),'project_id':project_id,'name':payload.name,'messages':[],'run_ids':[],'created_at':now()})
+        return store.put(tenant_id,'sessions',{'id':uid(),'project_id':project_id,'name':payload.name,'messages':[],'commands':[],'created_at':now(),'updated_at':now()})
 
     def get_session(tenant_id,project_id,session_id):
         store.get(tenant_id,'projects',project_id)
@@ -85,69 +84,48 @@ def install_desktop_routes(app,store,engine,user,scoped,create_session):
 
     @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/instructions')
     async def instruct(tenant_id:str,project_id:str,session_id:str,payload:InstructionInput,request:Request):
-        tenant=scoped(request,tenant_id)
-        session=get_session(tenant_id,project_id,session_id)
-        project=store.get(tenant_id,'projects',project_id)
-        engine.ensure_available(tenant_id)
-        roles=['discussion','planning','building','review']
-        if set(payload.team)!=set(roles):
-            raise ValueError('Choose a model for discussion, planning, building, and review in the AI team selector.')
-        prompts={}
-        for role,prompt_id in payload.prompt_ids.items():
-            prompt=store.get(tenant_id,'prompts',prompt_id)
-            if prompt['role']!=role:
-                raise ValueError('The saved prompt role must match its team role.')
-            prompts[role]=prompt['content']
-        context=['User-provided context:\n'+payload.context,'Previous session instructions:']
-        for message in session['messages']:
-            context.append(message['content'])
-        for rid in session['run_ids']:
-            previous=store.get(tenant_id,'runs',rid)
-            context.append(f'Previous run: {previous["status"]}.')
-            for s in previous['stages']:
-                if s['role']=='review' and s.get('artifact'):
-                    context.append(json.dumps(s['artifact']))
-        combined='\n\n'.join(context)
-        if len(combined)>60000:
-            raise ValueError('This session has reached its context capacity. Start a new session in the same project to continue with the current files.')
-        w=WorkflowInput(name=payload.content.splitlines()[0][:100],objective=payload.content if len(payload.content)>=10 else 'User instruction: '+payload.content,
-            context=combined,stages=[{'id':uid(),'role':r,'model_id':payload.team[r],'agent_id':payload.agent_ids.get(r),'prompt':prompts.get(r,''),'max_tokens':6000,'timeout':180} for r in roles],
-            project_id=project_id,session_id=session_id,execution_mode=payload.execution_mode,
-            max_workflow_iterations=min(payload.max_workflow_iterations,tenant['max_workflow_iterations']),attachment_ids=payload.attachment_ids)
-        engine.validate_workflow(tenant_id,w.model_dump())
-        workflow=store.put(tenant_id,'workflows',{'id':uid(),**w.model_dump(),'created_at':now()})
-        run=engine.start(tenant_id,workflow['id'])
-        session['messages'].append({'id':uid(),'role':'user','content':payload.content,'run_id':run['id'],'created_at':now()})
-        session['run_ids'].append(run['id'])
-        if len(session['messages'])==1:session['name']=payload.content.splitlines()[0][:80]
-        store.put(tenant_id,'sessions',session)
-        project.update(team=payload.team,agent_ids=payload.agent_ids,prompt_ids=payload.prompt_ids,execution_mode=payload.execution_mode,last_session_id=session_id)
-        store.put(tenant_id,'projects',project)
-        return {'session':session,'run':run}
+        """One message, one agentic turn. The reply arrives in the session, not in this response."""
+        scoped(request,tenant_id)
+        get_session(tenant_id,project_id,session_id)
+        return runner.send(tenant_id,project_id,session_id,payload.content,payload.model_id,payload.mode)
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/cancel')
+    async def stop_turn(tenant_id:str,project_id:str,session_id:str,request:Request):
+        scoped(request,tenant_id)
+        get_session(tenant_id,project_id,session_id)
+        await runner.cancel(tenant_id,session_id)
+        return get_session(tenant_id,project_id,session_id)
+
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/events')
+    async def session_events(tenant_id:str,project_id:str,session_id:str,request:Request,after:int=0):
+        """Live activity for one conversation. Closed when nothing in it is still working."""
+        scoped(request,tenant_id)
+        get_session(tenant_id,project_id,session_id)
+        try:
+            cursor=max(after,int(request.headers.get('last-event-id','0')))
+        except ValueError:
+            cursor=after
+        async def stream():
+            nonlocal cursor
+            while not await request.is_disconnected():
+                try:
+                    scoped(request,tenant_id)  # Session expiry or revocation also terminates open streams.
+                    batch=store.events(tenant_id,session_id,cursor)
+                    for event in batch:
+                        cursor=event['seq']
+                        yield f'id: {cursor}\ndata: {json.dumps(event)}\n\n'
+                    if not runner.busy(tenant_id,session_id) and len(batch)<500:
+                        yield 'event: done\ndata: {}\n\n'
+                        return
+                    yield ': heartbeat\n\n'
+                    await asyncio.sleep(0.4)
+                except (HTTPException,TenantIsolationViolationException):
+                    return
+        return StreamingResponse(stream(),media_type='text/event-stream',headers={'X-Accel-Buffering':'no'})
 
     @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/commands')
     async def command(tenant_id:str,project_id:str,session_id:str,payload:CommandInput,request:Request):
+        """The user's own project check, run at their request rather than by an agent."""
         scoped(request,tenant_id)
-        session=get_session(tenant_id,project_id,session_id)
-        engine.ensure_available(tenant_id)
-        if not session['run_ids']:
-            raise ValueError('Start a session instruction before running a project check.')
-        previous=store.get(tenant_id,'runs',session['run_ids'][-1])
-        # A separate run records manual checks; completed AI review history stays immutable.
-        run={**previous,'id':uid(),'status':'running','phase':'COMMAND','stages':[],'transcript':[],'commands':[],'changes':[],'file_hashes':{},'cost':0,'cost_complete':True,'input_tokens':0,'output_tokens':0,'usage_complete':True,'created_at':now(),'started_at':now(),'finished_at':None,'error':None,'error_code':None}
-        store.put(tenant_id,'runs',run)
-        session['run_ids'].append(run['id']);store.put(tenant_id,'sessions',session)
-        async def execute_check():
-            try:
-                result=await files.run_command(tenant_id,run,payload.command)
-                engine.finish(tenant_id,run,'complete' if result['status']=='completed' else 'failed',None if result['status']=='completed' else 'The project check failed. See terminal output.')
-            except asyncio.CancelledError:
-                engine.finish(tenant_id,run,'cancelled','Project check cancelled.')
-                raise
-            except Exception:
-                engine.finish(tenant_id,run,'failed','The project check could not finish. See terminal output.')
-        key=(tenant_id,run['id'])
-        task=asyncio.create_task(execute_check())
-        engine.tasks[key]=task
-        task.add_done_callback(lambda _:engine.tasks.pop(key,None))
-        return store.get(tenant_id,'runs',run['id'])
+        get_session(tenant_id,project_id,session_id)
+        return await files.run_command(tenant_id,project_id,session_id,payload.command)

@@ -1,0 +1,368 @@
+"""One message, one agentic turn, inside the project folder.
+
+The agent running a turn can change between any two turns, so nothing that matters is allowed
+to live inside a command line tool's own session store: the three tools do not share one, and
+a Claude session cannot be handed to Codex. The messages recorded here are the conversation,
+and every turn replays them into whichever agent is selected. That is what makes a switch
+lossless: the agent taking over reads the same conversation, in the same project folder, that
+the previous one left behind. The folder is the other half of the handover — an agent is told
+to read it rather than to trust a summary of what another agent did to it.
+
+With Adaptive selected, the agent is chosen at the start of the turn by `adaptive`, and if the
+attempt fails or the agent says it cannot, a stronger one continues the same turn with a
+handoff. A manual choice is never second-guessed.
+"""
+import asyncio
+import time
+from pathlib import Path
+
+from . import adaptive, localhealth
+from .adaptive import ADAPTIVE, MAX_ESCALATIONS
+from .broker import CLI_TOOLS, ProviderError
+from .projects import ProjectFiles
+from .store import now, uid
+
+# What the agent may do to the project this turn. The names are ours; each tool spells the
+# same three postures differently, and broker.agent_argv is the only place that translates.
+MODES = ('read', 'edit', 'auto')
+MODE_LABELS = {'read': 'Read only', 'edit': 'Edit files', 'auto': 'Full auto'}
+# Oldest turns are dropped rather than refusing to continue: a conversation that stops being
+# answerable is worse than one that has forgotten its beginning, and the model is told.
+TRANSCRIPT_LIMIT = 120_000
+HANDOVER = (
+    'You are continuing a conversation that a different agent was handling. The conversation so '
+    'far follows. Your working directory is the project it concerns and is the shared state '
+    'between you: read what is actually there rather than assuming what the previous agent left. '
+    'Answer the final USER message.'
+)
+CONTINUING = 'The conversation so far follows. Answer the final USER message.'
+
+
+def agentic_providers(models):
+    """Only a local agent command line tool can take a turn.
+
+    An API key reaches a model, not an agent: there is no tool loop, no file access and no
+    shell behind it. Those models stay configured and useful for dictation and for Adaptive's
+    classifier, and are simply not offered as something that can run a turn.
+    """
+    return [m for m in models if m['provider'] in CLI_TOOLS and m.get('enabled', True) is not False]
+
+
+def transcript(messages):
+    """The conversation in the portable form every agent can read.
+
+    Tool calls and file reads from a previous turn are deliberately absent: they belong to the
+    tool that made them, and the project folder already holds their result.
+    """
+    lines = []
+    for message in messages:
+        text = (message.get('content') or '').strip()
+        if not text:
+            continue
+        if message['role'] == 'user':
+            lines.append('USER:\n' + text)
+        else:
+            lines.append(f'ASSISTANT ({message.get("model_name") or "earlier agent"}):\n{text}')
+    return lines
+
+
+def build_prompt(messages, switched, handoff=None):
+    """Instructions, then as much of the conversation as fits, ending at the new message.
+
+    A handoff, when present, is what a previous agent left behind on this same turn; it goes
+    ahead of the conversation so the next agent continues rather than starts over.
+    """
+    lines = transcript(messages)
+    dropped = 0
+    while len('\n\n'.join(lines)) > TRANSCRIPT_LIMIT and len(lines) > 1:
+        lines.pop(0)
+        dropped += 1
+    head = HANDOVER if switched else CONTINUING
+    if dropped:
+        head += f' The first {dropped} messages of this conversation were dropped to fit; say so if one is needed.'
+    if handoff:
+        head += '\n\n' + handoff
+    return head + '\n\n' + '\n\n'.join(lines)
+
+
+def fingerprint(files, tenant_id, project_id):
+    """Every readable file's hash and text, so a turn's edits can be shown afterwards.
+
+    An agent writes to the folder itself, so this before-and-after is the only record of what
+    it changed. Git is not consulted, because a project folder need not be a repository.
+
+    ponytail: reads the whole project twice per turn, bounded by the walker's file cap and the
+    reader's size limit. Switch to a git diff where the folder is a repository if it ever shows.
+    """
+    entries, _ = files.walk(tenant_id, project_id)
+    captured = {}
+    for entry in entries:
+        try:
+            item = files.read(tenant_id, project_id, entry['path'])
+        except ValueError:
+            continue  # Unreadable before is unreadable after; it cannot produce a diff either way.
+        captured[entry['path']] = (item['hash'], item['content'])
+    return captured
+
+
+def changes_between(before, after):
+    changes = []
+    for path, (digest, text) in sorted(after.items()):
+        previous = before.get(path)
+        if previous is None:
+            changes.append({'id': uid(), 'path': path, 'status': 'added', 'before': None, 'after': text})
+        elif previous[0] != digest:
+            changes.append({'id': uid(), 'path': path, 'status': 'modified', 'before': previous[1], 'after': text})
+    for path, (_, text) in sorted(before.items()):
+        if path not in after:
+            changes.append({'id': uid(), 'path': path, 'status': 'removed', 'before': text, 'after': None})
+    return changes
+
+
+class AgentRunner:
+    def __init__(self, store, broker=None):
+        from .broker import ModelBroker
+        self.store = store
+        self.broker = broker or ModelBroker(store)
+        self.files = ProjectFiles(store)
+        self.turns: dict[tuple[str, str], asyncio.Task] = {}
+
+    def busy(self, tenant_id, session_id):
+        task = self.turns.get((tenant_id, session_id))
+        return bool(task and not task.done())
+
+    def select(self, tenant_id, model_id):
+        """The agent asked for, or a readable reason it cannot take a turn."""
+        config = self.store.get(tenant_id, 'models', model_id)
+        if config['provider'] not in CLI_TOOLS:
+            raise ValueError('That model is reached through an API key, which has no tools, no file access and no shell. Choose a Claude, Codex or OpenCode agent to run a turn.')
+        return config
+
+    def agents(self, tenant_id):
+        return agentic_providers(self.store.list(tenant_id, 'models'))
+
+    def send(self, tenant_id, project_id, session_id, content, model_id, mode):
+        """Record the message, start the turn, and answer immediately.
+
+        The reply is written into a message that already exists and is marked running, so the
+        conversation shows the turn in progress instead of appearing empty until it finishes.
+        With Adaptive selected the agent is not yet known; it is chosen at the start of the turn
+        and the message says so until then.
+        """
+        if mode not in MODES:
+            raise ValueError('Choose read only, edit files, or full auto.')
+        if self.busy(tenant_id, session_id):
+            raise ValueError('This conversation is still working. Wait for it to finish or stop it.')
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        project = self.store.get(tenant_id, 'projects', project_id)
+        if not Path(project['root']).is_dir():
+            raise FileNotFoundError('This project’s folder is not available. Reconnect the drive or open the project again.')
+        adaptive_turn = model_id == ADAPTIVE
+        if adaptive_turn:
+            if not self.agents(tenant_id):
+                raise ValueError('Adaptive needs at least one Claude, Codex or OpenCode agent connected.')
+            config = None
+        else:
+            config = self.select(tenant_id, model_id)
+        # The switch is decided against the last agent that actually answered, not against the
+        # selector, so reselecting the same agent never costs a handover preamble. An Adaptive
+        # turn decides this once it has chosen.
+        previous = self.previous_agent(session, None)
+        switched_from = previous['model_name'] if previous and not adaptive_turn and previous['model_id'] != model_id else None
+        session['messages'].append({'id': uid(), 'role': 'user', 'content': content, 'created_at': now()})
+        reply = {'id': uid(), 'role': 'assistant', 'content': '', 'status': 'running', 'error': None,
+                 'model_id': None if adaptive_turn else model_id,
+                 'model_name': 'Adaptive' if adaptive_turn else config['name'],
+                 'provider': None if adaptive_turn else config['provider'],
+                 'mode': mode, 'switched_from': switched_from,
+                 'routing': {'mode': 'adaptive', 'status': 'choosing'} if adaptive_turn else {'mode': 'manual'},
+                 'changes': [], 'input_tokens': None, 'output_tokens': None,
+                 'created_at': now(), 'finished_at': None}
+        session['messages'].append(reply)
+        if len(session['messages']) == 2:
+            session['name'] = content.splitlines()[0][:80]
+        session['updated_at'] = now()
+        self.store.put(tenant_id, 'sessions', session)
+        project.update(last_session_id=session_id, last_model_id=model_id, last_mode=mode)
+        self.store.put(tenant_id, 'projects', project)
+        self.store.event(tenant_id, session_id, 'turn.started',
+                         ('Adaptive is choosing an agent' if adaptive_turn else f'{config["name"]} is working') + f' in {project["name"]}.',
+                         message_id=reply['id'], mode=mode)
+        key = (tenant_id, session_id)
+        task = asyncio.create_task(self.run_turn(tenant_id, project_id, session_id, reply['id'], config, mode))
+        self.turns[key] = task
+        task.add_done_callback(lambda finished: self.turns.pop(key, None) if self.turns.get(key) is finished else None)
+        return session
+
+    def previous_agent(self, session, message_id):
+        """The last agent that actually answered before this message, for the handover decision."""
+        for message in reversed(session['messages']):
+            if message['id'] == message_id:
+                continue
+            if message['role'] == 'assistant' and message.get('model_id'):
+                return message
+        return None
+
+    async def route(self, tenant_id, project_id, session, message):
+        """Choose an agent for an Adaptive turn and write the decision onto the message."""
+        content = next(m['content'] for m in reversed(session['messages']) if m['role'] == 'user')
+        tenant = self.store.tenant_internal(tenant_id)
+        classifier = None
+        if tenant.get('router_model_id'):
+            try:
+                classifier = self.store.get(tenant_id, 'models', tenant['router_model_id'])
+            except Exception:
+                classifier = None  # A classifier that was disconnected is not a reason to refuse a turn.
+        repo = adaptive.repository_signals(self.files, tenant_id, project_id)
+        requirements, classified_by = await adaptive.classify(content, repo, classifier, self.store.decrypt)
+        cooling = lambda model_id: self.broker.cooldowns.get((tenant_id, model_id), 0) > time.monotonic()
+        # A local model whose server is not running is not available, however good its profile:
+        # several can be configured while only one holds the GPU, and a turn sent to a server
+        # that is down would fail and escalate to a cloud agent for no reason.
+        agents = self.agents(tenant_id)
+        online = await localhealth.availability(agents)
+        offline = [m for m in agents if online.get(m['id']) is False]
+        chosen, ranked = adaptive.choose(requirements, [m for m in agents if online.get(m['id']) is not False], cooling)
+        if chosen is None:
+            raise ProviderError('Adaptive found no agent that can take a turn.' + (' Every local agent is configured but none of their servers is running.' if offline else ' Connect a Claude, Codex or OpenCode agent.'))
+        message['routing'] = {'mode': 'adaptive', 'status': 'chosen', 'classified_by': classified_by,
+                              'requirements': requirements.model_dump(), 'repository': repo,
+                              'chosen': {'id': chosen['id'], 'name': chosen['name'], 'because': chosen['because']},
+                              'candidates': [{k: r[k] for k in ('id', 'name', 'cost_class', 'sufficient', 'deficit')} for r in ranked[:6]],
+                              'offline': [m['name'] for m in offline],
+                              'attempts': [], 'escalations': 0}
+        return self.store.get(tenant_id, 'models', chosen['id']), ranked
+
+    def bind(self, tenant_id, session_id, message_id, config, note):
+        """Point the running message at the agent now taking it, and tell the stream."""
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        message = next(m for m in session['messages'] if m['id'] == message_id)
+        previous = self.previous_agent(session, message_id)
+        message.update(model_id=config['id'], model_name=config['name'], provider=config['provider'],
+                       switched_from=previous['model_name'] if previous and previous['model_id'] != config['id'] else None)
+        self.store.put(tenant_id, 'sessions', session)
+        self.store.event(tenant_id, session_id, 'turn.agent', note, message_id=message_id)
+        return session, message
+
+    async def run_turn(self, tenant_id, project_id, session_id, message_id, config, mode):
+        project = self.store.get(tenant_id, 'projects', project_id)
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        message = next(m for m in session['messages'] if m['id'] == message_id)
+        adaptive_turn = message['routing']['mode'] == 'adaptive'
+        # Read only cannot change the folder, so it is not read twice to prove that.
+        before = fingerprint(self.files, tenant_id, project_id) if mode != 'read' else {}
+        status, error, result = 'complete', None, None
+        attempts, tried, handoff_text, ranked = [], set(), None, []
+        try:
+            if adaptive_turn:
+                config, ranked = await self.route(tenant_id, project_id, session, message)
+                self.store.put(tenant_id, 'sessions', session)
+                session, message = self.bind(tenant_id, session_id, message_id, config,
+                                             f'Adaptive chose {config["name"]}: {message["routing"]["chosen"]["because"]}.')
+            elif (await localhealth.availability([config])).get(config['id']) is False:
+                # Fail in a second with the address, rather than in a minute with the tool's error.
+                raise ProviderError(f'{config["name"]} is not running: nothing at {localhealth.where(config)} is serving it. Start that server, or pick another agent.')
+            for _ in range(1 + (MAX_ESCALATIONS if adaptive_turn else 0)):
+                tried.add(config['id'])
+                prompt = build_prompt(session['messages'], bool(message.get('switched_from')), handoff_text)
+                result, error = None, None
+                try:
+                    result = await self.broker.invoke_agent(tenant_id, config, prompt, mode, project['root'])
+                except ProviderError as exc:
+                    if exc.exhausted:
+                        raise  # Every login for this agent is spent; that is a real failure, not a struggle.
+                    error = str(exc)
+                if not adaptive_turn:
+                    break
+                changed = changes_between(before, fingerprint(self.files, tenant_id, project_id)) if mode != 'read' else []
+                reason = adaptive.struggled(result.text if result else '', error, mode, changed)
+                following = adaptive.stronger(ranked, tried) if reason else None
+                attempts.append({'id': config['id'], 'name': config['name'], 'outcome': reason or 'completed',
+                                 'reply': result.text if result else ''})
+                if not reason or following is None:
+                    break
+                # Escalate: a stronger agent continues this same turn, told what happened so far.
+                message['routing'].update(attempts=attempts, escalations=message['routing'].get('escalations', 0) + 1)
+                message['changes'] = changed
+                self.store.put(tenant_id, 'sessions', session)
+                handoff_text = adaptive.render_handoff(adaptive.handoff(session, message, attempts))
+                config = self.store.get(tenant_id, 'models', following['id'])
+                session, message = self.bind(tenant_id, session_id, message_id, config, f'Escalating to {config["name"]}: {reason}.')
+            if result is None and error:
+                status = 'failed'
+        except asyncio.CancelledError:
+            status, error = 'cancelled', 'Stopped. Anything the agent had already written to the folder is still there.'
+            raise
+        except ProviderError as exc:
+            status, error = 'failed', str(exc)
+        except (OSError, ValueError) as exc:
+            status, error = 'failed', str(exc)
+        except Exception:
+            # A turn runs detached, so an unexpected failure has nowhere else to surface. The
+            # message has to close, or the conversation stays busy forever.
+            status, error = 'failed', 'The turn stopped unexpectedly. Anything the agent had already written to the folder is still there.'
+        finally:
+            if result is not None and status == 'complete':
+                error = None
+            self.finish(tenant_id, project_id, session_id, message_id, status, error, result, before, mode, attempts)
+
+    def finish(self, tenant_id, project_id, session_id, message_id, status, error, result, before, mode, attempts=()):
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        message = next((m for m in session['messages'] if m['id'] == message_id), None)
+        if message is None or message['status'] != 'running':
+            return
+        changes = []
+        if mode != 'read':
+            try:
+                changes = changes_between(before, fingerprint(self.files, tenant_id, project_id))
+            except (OSError, ValueError):
+                changes = []  # A folder that vanished mid-turn is already reported by the turn itself.
+        message.update(status=status, error=error, changes=changes, finished_at=now(),
+                       content=(result.text if result else '') or (error or ''),
+                       input_tokens=result.input_tokens if result else None,
+                       output_tokens=result.output_tokens if result else None)
+        if attempts and message.get('routing'):
+            message['routing']['attempts'] = [{k: v for k, v in a.items() if k != 'reply'} for a in attempts]
+        if result and result.served_by and result.served_by != message['model_id']:
+            # Another connected subscription answered because the selected one was spent. The
+            # message names the agent that replied, or the conversation credits the wrong one.
+            served = self.store.get(tenant_id, 'models', result.served_by)
+            message.update(model_id=result.served_by, model_name=served['name'])
+            self.store.event(tenant_id, session_id, 'account.switched',
+                             f'{served["name"]} took over after the previous subscription ran out of usage.', message_id=message_id)
+        session['updated_at'] = now()
+        self.store.put(tenant_id, 'sessions', session)
+        summary = f'{len(changes)} file{"" if len(changes) == 1 else "s"} changed.' if changes else 'No files changed.'
+        self.store.event(tenant_id, session_id, f'turn.{status}',
+                         error or (summary if mode != 'read' else 'Answered without touching the folder.'),
+                         message_id=message_id)
+
+    async def cancel(self, tenant_id, session_id):
+        task = self.turns.get((tenant_id, session_id))
+        if not task or task.done():
+            raise ValueError('This conversation is not running.')
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    def recover(self):
+        """A turn cannot survive a restart: its subprocess died with the application.
+
+        The message is closed out rather than left running forever, because a message stuck in
+        running blocks its conversation from ever being used again.
+        """
+        import json
+        with self.store.db() as db:
+            rows = db.execute("SELECT tenant_id,data FROM entities WHERE kind='sessions'").fetchall()
+        for row in rows:
+            session = json.loads(row['data'])
+            stuck = [m for m in session['messages'] if m.get('role') == 'assistant' and m.get('status') == 'running']
+            if not stuck:
+                continue
+            for message in stuck:
+                message.update(status='failed', finished_at=now(),
+                               error='Frontier closed while this turn was running. Anything already written to the folder is still there.')
+                message['content'] = message['content'] or message['error']
+            self.store.put(row['tenant_id'], 'sessions', session)

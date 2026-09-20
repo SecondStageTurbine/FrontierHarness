@@ -5,7 +5,6 @@ overlapping cross-tenant project roots. Commands run only in explicit execute mo
 they are local processes, not an OS sandbox, and receive a scrubbed environment.
 """
 import asyncio
-import difflib
 import hashlib
 import io
 import json
@@ -169,77 +168,6 @@ class ProjectFiles:
             raise ValueError('Binary files cannot be previewed.')
         return {'path':relative,'content':content,'hash':hashlib.sha256(content.encode()).hexdigest()}
 
-    def snapshot(self,tenant_id,project_id):
-        """Hash every readable file; include content while it fits the context budget.
-
-        A file with no baseline hash cannot be modified at all, because apply() cannot tell
-        an external edit from a file it was never shown, so the baseline covers everything
-        read() accepts rather than only what fits in context. Files read() rejects (binary,
-        undecodable, over its size limit) stay out: the model cannot edit what it cannot see.
-        """
-        entries,omitted=self.walk(tenant_id,project_id)
-        context=[];hashes={};size=0
-        for f in entries:
-            try:
-                item=self.read(tenant_id,project_id,f['path'])
-            except ValueError as exc:
-                omitted.append(f'{f["path"]} - {exc}')
-                continue
-            hashes[f['path']]=item['hash']
-            if len(item['content'])>50000 or size+len(item['content'])>90000:
-                omitted.append(f'{f["path"]} - too large for the context budget.')
-                continue
-            size+=len(item['content'])
-            context.append(f'FILE {f["path"]}\n{item["content"]}')
-        if omitted:
-            # Silence reads to the model as an empty project, so it invents a reason the
-            # file is absent instead of reporting that it could not be read.
-            shown=omitted[:40]
-            if len(omitted)>len(shown):shown.append(f'...and {len(omitted)-len(shown)} more.')
-            context.append('FILES PRESENT BUT NOT PROVIDED TO YOU\nSay so plainly if one is needed for the objective; never guess its contents.\n'+'\n'.join(shown))
-        return context,hashes
-
-    def apply(self,tenant_id,run,stage,files):
-        project_id=run['workflow']['project_id']
-        expected_hashes={path_key(p):value for p,value in run['file_hashes'].items()}
-        prepared=[]
-        seen=set()
-        for artifact in files:
-            relative=artifact['name'].replace('\\','/')
-            identity=path_key(relative)
-            if relative.lower().endswith('.pdf'):raise ValueError('PDF files are read-only; they are read into context but never written.')
-            if identity in seen:raise ValueError('A build cannot write the same file twice.')
-            seen.add(identity)
-            target=self.resolve(tenant_id,project_id,relative)
-            before=self.read(tenant_id,project_id,relative)['content'] if target.exists() else None
-            expected=expected_hashes.get(identity)
-            if before is not None and (expected is None or hashlib.sha256(before.encode()).hexdigest()!=expected):
-                raise ValueError(f'{relative} changed outside this run, or was not read into context. The file was not overwritten.')
-            after=artifact['content']
-            if before==read_form(after):continue  # Identical text, even if the file on disk uses CRLF.
-            change={'id':uid(),'stage_id':stage['id'],'iteration':run['iteration'],'path':relative,'before':before,'after':after,'status':'proposed','kind':'added' if before is None else 'modified','diff':'\n'.join(difflib.unified_diff((before or '').splitlines(),after.splitlines(),fromfile='a/'+relative,tofile='b/'+relative,lineterm=''))}
-            prepared.append((target,change))
-        for target,change in prepared:
-            run['changes'].append(change)
-            self.store.put(tenant_id,'runs',run)  # Durable intention precedes the write.
-            if run['workflow']['execution_mode']!='propose':
-                target.parent.mkdir(parents=True,exist_ok=True)
-                safe=self.resolve(tenant_id,project_id,change['path'])
-                temp=safe.with_name(safe.name+'.frontier-'+uid()+'.tmp')
-                try:
-                    temp.write_text(change['after'],encoding='utf-8',newline='')
-                    os.replace(temp,safe)
-                finally:
-                    if temp.exists():temp.unlink()
-                change['status']='applied'
-                for old in list(run['file_hashes']):
-                    if path_key(old)==path_key(change['path']):del run['file_hashes'][old]
-                # The bytes written keep the model's own line endings; the baseline has to match
-                # what the next read returns, or a CRLF file fails as changed outside the run.
-                run['file_hashes'][change['path']]=hashlib.sha256(read_form(change['after']).encode()).hexdigest()
-            self.store.put(tenant_id,'runs',run)
-            self.store.event(tenant_id,run['id'],'file.changed',f'{"Wrote" if change["status"]=="applied" else "Proposed"} {change["path"]}',iteration=run['iteration'],path=change['path'],kind=change['kind'])
-
     def command_argv(self,root,command):
         if re.search(r'[;&|><`\r\n]',command) or '$(' in command:
             raise ValueError('Use one supported project check without shell operators.')
@@ -270,17 +198,30 @@ class ProjectFiles:
             raise ValueError('Supported checks: python -m pytest, python -m unittest, python -m compileall, npm test, npm run build/test/lint/typecheck.')
         return args
 
-    async def run_command(self,tenant_id,run,command):
-        project=self.store.get(tenant_id,'projects',run['workflow']['project_id'])
-        record={'id':uid(),'command':command,'started_at':now(),'finished_at':None,'status':'running','output':'','exit_code':None,'iteration':run['iteration']}
-        run['commands'].append(record);self.store.put(tenant_id,'runs',run)
-        self.store.event(tenant_id,run['id'],'command.started','Running: '+command,iteration=run['iteration'])
+    async def run_command(self,tenant_id,project_id,session_id,command):
+        """Run one supported project check in the project folder and stream it to the terminal.
+
+        This is the user's own check, run at their request. The agent runs its own commands
+        through its tool, under the posture chosen for that turn; the two do not share a path.
+        """
+        project=self.store.get(tenant_id,'projects',project_id)
+        session=self.store.get(tenant_id,'sessions',session_id)
+        record={'id':uid(),'command':command,'started_at':now(),'finished_at':None,'status':'running','output':'','exit_code':None}
+        session.setdefault('commands',[]).append(record)
+        session['commands']=session['commands'][-40:]
+        self.store.put(tenant_id,'sessions',session)
+        self.store.event(tenant_id,session_id,'command.started','Running: '+command)
         proc=None
+        def save():
+            current=self.store.get(tenant_id,'sessions',session_id)
+            for index,item in enumerate(current.get('commands',[])):
+                if item['id']==record['id']:
+                    current['commands'][index]=record
+                    break
+            else:
+                current.setdefault('commands',[]).append(record)
+            self.store.put(tenant_id,'sessions',current)
         try:
-            # Every caller routes through here, so the execute-mode gate lives here and
-            # not in each route; rejection is reported through the command record.
-            if run['workflow'].get('execution_mode')!='execute':
-                raise ValueError('Project checks run only in Build & test mode. Change this project’s execution mode to run commands.')
             argv=self.command_argv(project['root'],command)
             env=child_env(PYTHONUTF8='1',PYTHONIOENCODING='utf-8',CI='true',NO_COLOR='1')
             proc=await asyncio.create_subprocess_exec(*argv,cwd=project['root'],env=env,stdin=asyncio.subprocess.DEVNULL,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT,**child_flags())
@@ -290,18 +231,17 @@ class ProjectFiles:
                     if not data:break
                     chunk=data.decode('utf-8',errors='replace')
                     record['output']=(record['output']+chunk)[-150000:]
-                    self.store.put(tenant_id,'runs',run)
-                    self.store.event(tenant_id,run['id'],'command.output',chunk[:4000],iteration=run['iteration'],command_id=record['id'])
+                    save()
+                    self.store.event(tenant_id,session_id,'command.output',chunk[:4000],command_id=record['id'])
                 record['exit_code']=await proc.wait()
                 record['status']='completed' if record['exit_code']==0 else 'failed'
         except asyncio.CancelledError:
-            record.update(status='cancelled',finished_at=now())
-            self.store.put(tenant_id,'runs',run)
+            record.update(status='cancelled',finished_at=now());save()
             raise
         except (ValueError,OSError,TimeoutError) as exc:
             record.update(status='failed',output=record['output']+'\n'+('Command exceeded its 120-second limit.' if isinstance(exc,TimeoutError) else str(exc)))
         finally:
             if proc:await terminate(proc)
-            record['finished_at']=now();self.store.put(tenant_id,'runs',run)
-        self.store.event(tenant_id,run['id'],'command.completed',f'{command} · {"passed" if record["status"]=="completed" else "failed"}',iteration=run['iteration'],exit_code=record['exit_code'])
+            record['finished_at']=now();save()
+        self.store.event(tenant_id,session_id,'command.completed',f'{command} · {"passed" if record["status"]=="completed" else "failed"}',exit_code=record['exit_code'])
         return record

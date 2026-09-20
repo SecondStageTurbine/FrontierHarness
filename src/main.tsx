@@ -11,6 +11,7 @@ import '@fontsource/inter/600.css';
 import '@fontsource/inter/700.css';
 import 'highlight.js/styles/github-dark.css';
 import './styles/global.css';
+import './styles/shell.css';
 const DesktopWorkspace=lazy(()=>import('./desktop/DesktopWorkspace'));
 function TenantDesktop(){const {tenant}=useWorkspace();return <DesktopWorkspace key={tenant?.id||'no-workspace'}/>}
 const client=new QueryClient({defaultOptions:{queries:{staleTime:5000,retry:(count,error)=>error instanceof ApiError&&error.status<500?false:count<2,refetchOnWindowFocus:true}}});

@@ -11,16 +11,17 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
-from fastapi import FastAPI, Request, Response, HTTPException, UploadFile, File
+from fastapi import FastAPI, Request, Response, HTTPException, UploadFile, File, Form
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
-from .schemas import LoginInput, TenantInput, ModelConfig, WorkflowInput, AgentInput, PromptInput, ContinueInput, SUBSCRIPTION_PROVIDERS
+from .schemas import LoginInput, TenantInput, ModelConfig, SUBSCRIPTION_PROVIDERS
 from .store import Store, TenantIsolationViolationException, uid, now, public_model
-from .engine import Engine, TERMINAL
+from .agent import AgentRunner
+from . import localhealth
 from .projects import pdf_text
-from .broker import ProviderError, probe_cli
+from .broker import ProviderError, probe_cli, account_env, account_home, ACCOUNT_HOME_VARS, SIGNIN_COMMANDS
 
 SESSION_LIFETIME = 86400*7  # Seconds of inactivity before a stored session expires.
 
@@ -30,12 +31,12 @@ def password_hash(password, salt=None):
 
 def create_app(directory=None, broker=None):
     store = Store(directory or os.environ.get('HARNESS_DATA_DIR', 'data'))
-    engine = Engine(store, broker)
+    runner = AgentRunner(store, broker)
     attempts = defaultdict(deque)
 
     @asynccontextmanager
     async def lifespan(app):
-        # Exclusive OS file lock prevents accidental multiple engine workers.
+        # Exclusive OS file lock prevents accidental multiple workers on one store.
         lock = (store.directory / 'worker.lock').open('a+b')
         lock.seek(0)
         if lock.read(1) == b'':
@@ -47,18 +48,18 @@ def create_app(directory=None, broker=None):
         else:
             import fcntl
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        engine.recover()
+        runner.recover()
         try:
             yield
         finally:
-            tasks = list(engine.tasks.values())
+            tasks = list(runner.turns.values())
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             lock.close()
 
     app = FastAPI(title='Frontier Harness', version='1.0.0', lifespan=lifespan)
-    app.state.store, app.state.engine = store, engine
+    app.state.store, app.state.runner = store, runner
 
     @app.middleware('http')
     async def security(request, call_next):
@@ -186,8 +187,6 @@ def create_app(directory=None, broker=None):
     @app.post('/api/tenants')
     def create_tenant(payload:TenantInput,request:Request):
         current = user(request)
-        if payload.model_routing_table:
-            raise ValueError('Connect models before setting routing defaults.')
         tenant = dict(id=uid(),created_at=now(),**payload.model_dump())
         with store.db() as db:
             db.execute('INSERT INTO tenants VALUES(?,?,?)',(tenant['id'],current['id'],json.dumps(tenant)))
@@ -196,9 +195,6 @@ def create_app(directory=None, broker=None):
     @app.put('/api/tenants/{tenant_id}')
     def update_tenant(tenant_id:str,payload:TenantInput,request:Request):
         tenant = scoped(request,tenant_id)
-        engine.ensure_available(tenant_id)
-        for model in payload.model_routing_table.values():
-            store.get(tenant_id,'models',model)
         tenant.update(payload.model_dump())
         with store.db() as db:
             db.execute('UPDATE tenants SET data=? WHERE id=? AND owner=?',(json.dumps(tenant),tenant_id,user(request)['id']))
@@ -207,7 +203,6 @@ def create_app(directory=None, broker=None):
     @app.delete('/api/tenants/{tenant_id}')
     def delete_tenant(tenant_id:str,request:Request,name:str):
         tenant = scoped(request,tenant_id)
-        engine.ensure_available(tenant_id)
         if name != tenant['name']:
             raise ValueError('Type the exact workspace name to delete it.')
         with store.db() as db:
@@ -217,15 +212,18 @@ def create_app(directory=None, broker=None):
         return {'ok':True}
 
     @app.get('/api/t/{tenant_id}/models')
-    def models(tenant_id:str,request:Request):
+    async def models(tenant_id:str,request:Request):
         scoped(request,tenant_id)
-        return [public_model(m) for m in store.list(tenant_id,'models')]
+        rows = store.list(tenant_id,'models')
+        # Whether each local agent's server is up right now, so the picker can say so before a
+        # turn is spent finding out. Cloud agents carry no answer.
+        online = await localhealth.availability(rows)
+        return [{**public_model(m),'online':online.get(m['id'])} for m in rows]
 
     @app.post('/api/t/{tenant_id}/models')
     @app.put('/api/t/{tenant_id}/models/{model_id}')
     def save_model(tenant_id:str,payload:ModelConfig,request:Request,model_id:str|None=None):
         scoped(request,tenant_id)
-        engine.ensure_available(tenant_id)
         old = store.get(tenant_id,'models',model_id) if model_id else {}
         data = payload.model_dump(exclude={'api_key'})
         if old and (data['provider'] != old['provider'] or data['base_url'] != old['base_url']) and not payload.api_key:
@@ -251,23 +249,68 @@ def create_app(directory=None, broker=None):
         try:
             async with asyncio.timeout(20):
                 if model['provider'] in SUBSCRIPTION_PROVIDERS:
-                    await probe_cli(model['provider'])
+                    await probe_cli(model['provider'], account_env(store, tenant_id, model))
                 elif model['provider'] == 'anthropic':
                     async with AsyncAnthropic(api_key=key,max_retries=0) as client:
                         await client.models.retrieve(model['model_name'])
                 else:
                     async with AsyncOpenAI(api_key=key,base_url=model.get('base_url') or 'https://api.openai.com/v1',max_retries=0) as client:
                         found = await client.models.list()
-                        if model['model_name'] not in [m.id for m in found.data]:
-                            raise ValueError('The configured model was not returned by the endpoint.')
+                        served = [m.id for m in found.data]
+                        if model['model_name'] not in served:
+                            # A local server often serves a model under an alias rather than the
+                            # file name; naming what it actually lists turns a dead end into a fix.
+                            shown = ', '.join(served[:8]) + (f' and {len(served)-8} more' if len(served) > 8 else '')
+                            raise ProviderError(f'The endpoint does not list "{model["model_name"]}". It lists: {shown or "nothing"}. Use one of those as the model identifier.')
             model.update(status='connected',latency_ms=round((time.monotonic()-start)*1000),tested_at=now())
         except Exception as exc:
             model.update(status='error',tested_at=now())
             store.put(tenant_id,'models',model)
             if isinstance(exc,ProviderError):
                 raise  # A subscription check already explains what to install or sign in to.
-            raise ProviderError('Connection check failed. Verify the key, model identifier, and endpoint. The endpoint must support model discovery.') from None
+            # The address is the thing most often wrong, so the message names the one it tried.
+            tried = model.get('base_url') or ('api.anthropic.com' if model['provider']=='anthropic' else 'api.openai.com')
+            raise ProviderError(f'Could not reach {tried}. Check that the server is running and the address is right — a local server usually ends in /v1 — then test again.') from None
         return public_model(store.put(tenant_id,'models',model))
+
+    @app.post('/api/t/{tenant_id}/models/{model_id}/signin')
+    def signin(tenant_id:str,model_id:str,request:Request):
+        """Prepare one named subscription's own credential directory and name the command that
+        signs into it. Frontier never sees the credential: the command line tool writes it there
+        and reads it back, which is what lets a second subscription exist alongside the first."""
+        scoped(request,tenant_id)
+        model = store.get(tenant_id,'models',model_id)
+        if model['provider'] not in SUBSCRIPTION_PROVIDERS or not model.get('account'):
+            raise ValueError('Only a subscription login with a named account signs in separately.')
+        home = account_home(store,tenant_id,model['provider'],model['account'])
+        variable = ACCOUNT_HOME_VARS[model['provider']][0]
+        assign = f'set {variable}={home}' if os.name=='nt' else f'export {variable}="{home}"'
+        return {'directory':str(home),'variable':variable,'command':assign+chr(10)+SIGNIN_COMMANDS[model['provider']]}
+
+    @app.post('/api/t/{tenant_id}/transcribe')
+    async def transcribe(tenant_id:str,request:Request,model_id:str=Form(...),file:UploadFile=File(...)):
+        """Dictation, through a model this workspace already configured rather than a credential
+        of its own. The recording is held for the length of one request and never stored: speech
+        is how a prompt was typed, not an artifact of the workspace."""
+        scoped(request,tenant_id)
+        model = store.get(tenant_id,'models',model_id)
+        if model['provider'] not in ('openai','custom_openai'):
+            raise ValueError('Choose an OpenAI or OpenAI-compatible model for dictation.')
+        raw = await file.read(25_000_001)
+        if len(raw)>25_000_000:
+            raise ValueError('Recordings must be smaller than 25 MB.')
+        from openai import AsyncOpenAI
+        key = store.decrypt(model['encrypted_key']) if model.get('encrypted_key') else 'local-no-key'
+        try:
+            async with asyncio.timeout(120):
+                async with AsyncOpenAI(api_key=key,base_url=model.get('base_url') or 'https://api.openai.com/v1',max_retries=0) as client:
+                    result = await client.audio.transcriptions.create(model=model['model_name'],file=(Path(file.filename or 'speech.webm').name,raw))
+        except TimeoutError:
+            raise ProviderError('Transcription timed out. Record a shorter passage.') from None
+        except Exception:
+            # Provider exception strings can carry the request payload, so none of it is passed on.
+            raise ProviderError('Transcription failed. Confirm the model accepts audio and the key is valid.') from None
+        return {'text':result.text}
 
     @app.post('/api/t/{tenant_id}/attachments')
     async def upload(tenant_id:str,request:Request,file:UploadFile=File(...)):
@@ -296,141 +339,20 @@ def create_app(directory=None, broker=None):
         result = store.put(tenant_id,'attachments',dict(id=uid(),name=filename,content=content,size=len(raw),created_at=now()))
         return {k:v for k,v in result.items() if k!='content'}
 
-    @app.get('/api/t/{tenant_id}/workflows')
-    def workflows(tenant_id:str,request:Request):
-        scoped(request,tenant_id)
-        runs = store.list(tenant_id,'runs')
-        return [{**w,'latest_run':next((summary(r) for r in runs if r['workflow_id']==w['id']),None)} for w in store.list(tenant_id,'workflows')]
-
-    @app.get('/api/t/{tenant_id}/workflows/{workflow_id}')
-    def workflow(tenant_id:str,workflow_id:str,request:Request):
-        scoped(request,tenant_id)
-        return store.get(tenant_id,'workflows',workflow_id)
-
-    @app.post('/api/t/{tenant_id}/workflows')
-    @app.put('/api/t/{tenant_id}/workflows/{workflow_id}')
-    def save_workflow(tenant_id:str,payload:WorkflowInput,request:Request,workflow_id:str|None=None):
-        scoped(request,tenant_id)
-        old = store.get(tenant_id,'workflows',workflow_id) if workflow_id else {}
-        engine.validate_workflow(tenant_id,payload.model_dump())
-        return store.put(tenant_id,'workflows',dict(**payload.model_dump(),id=workflow_id or uid(),created_at=old.get('created_at',now())))
-
-    @app.post('/api/t/{tenant_id}/workflows/{workflow_id}/runs')
-    async def execute(tenant_id:str,workflow_id:str,request:Request):
-        scoped(request,tenant_id)
-        return engine.start(tenant_id,workflow_id)
-
-    @app.post('/api/t/{tenant_id}/workflows/{workflow_id}/duplicate')
-    def duplicate(tenant_id:str,workflow_id:str,request:Request):
-        scoped(request,tenant_id)
-        w = store.get(tenant_id,'workflows',workflow_id)
-        w.update(id=uid(),name=w['name'][:113]+' (copy)',created_at=now(),archived=False)
-        return store.put(tenant_id,'workflows',w)
-
-    def summary(run):
-        reviews = [s['artifact'] for s in run['stages'] if s['role']=='review' and s.get('artifact')]
-        return {**{k:v for k,v in run.items() if k not in ('transcript','stages','workflow','models')},'quality_score':reviews[-1]['quality_score'] if reviews else None}
-
-    @app.get('/api/t/{tenant_id}/runs')
-    def runs(tenant_id:str,request:Request):
-        scoped(request,tenant_id)
-        return [summary(r) for r in store.list(tenant_id,'runs')]
-
-    @app.get('/api/t/{tenant_id}/runs/{run_id}')
-    def run(tenant_id:str,run_id:str,request:Request):
-        scoped(request,tenant_id)
-        r = store.get(tenant_id,'runs',run_id)
-        return {**r,'events':store.events(tenant_id,run_id)}
-
-    @app.post('/api/t/{tenant_id}/runs/{run_id}/cancel')
-    async def cancel(tenant_id:str,run_id:str,request:Request):
-        scoped(request,tenant_id)
-        return await engine.cancel(tenant_id,run_id)
-
-    @app.post('/api/t/{tenant_id}/runs/{run_id}/continue')
-    async def continue_run(tenant_id:str,run_id:str,payload:ContinueInput,request:Request):
-        scoped(request,tenant_id)
-        return engine.continue_run(tenant_id,run_id,payload.max_workflow_iterations)
-
-    @app.get('/api/t/{tenant_id}/runs/{run_id}/events')
-    async def events(tenant_id:str,run_id:str,request:Request,after:int=0):
-        scoped(request,tenant_id)
-        store.get(tenant_id,'runs',run_id)
-        try:
-            cursor = max(after,int(request.headers.get('last-event-id','0')))
-        except ValueError:
-            cursor = after
-        async def stream():
-            nonlocal cursor
-            while not await request.is_disconnected():
-                try:
-                    scoped(request,tenant_id)  # Session expiry/revocation also terminates open streams.
-                    batch = store.events(tenant_id,run_id,cursor)
-                    for event in batch:
-                        cursor = event['seq']
-                        yield f'id: {cursor}\ndata: {json.dumps(event)}\n\n'
-                    r = store.get(tenant_id,'runs',run_id)
-                    if r['status'] in TERMINAL and len(batch)<500:
-                        yield 'event: done\ndata: {}\n\n'
-                        return
-                    yield ': heartbeat\n\n'
-                    await asyncio.sleep(0.4)
-                except (HTTPException,TenantIsolationViolationException):
-                    return
-        return StreamingResponse(stream(),media_type='text/event-stream',headers={'X-Accel-Buffering':'no'})
-
-    @app.get('/api/t/{tenant_id}/usage')
-    def usage(tenant_id:str,request:Request):
-        scoped(request,tenant_id)
-        return [{'run_id':r['id'],'workflow_id':r['workflow_id'],'workflow_name':r['name'],'date':s['started_at'],'role':s['role'],'model_id':s['model_id'],'model_name':r['models'].get(s['model_id'],{}).get('name',s['model_id']),'provider':r['models'].get(s['model_id'],{}).get('provider','unknown'),'cost':s['cost'],'input_tokens':s['input_tokens'],'output_tokens':s['output_tokens']} for r in store.list(tenant_id,'runs') for s in r['stages']]
-
     from .desktop_routes import install_desktop_routes
-    install_desktop_routes(app,store,engine,user,scoped,session)
-
-    @app.get('/api/t/{tenant_id}/{kind}')
-    def resources(tenant_id:str,kind:str,request:Request):
-        scoped(request,tenant_id)
-        if kind not in ('agents','prompts'):
-            raise HTTPException(404)
-        return store.list(tenant_id,kind)
-
-    @app.post('/api/t/{tenant_id}/{kind}')
-    @app.put('/api/t/{tenant_id}/{kind}/{resource_id}')
-    async def save_resource(tenant_id:str,kind:str,request:Request,resource_id:str|None=None):
-        scoped(request,tenant_id)
-        if kind not in ('agents','prompts'):
-            raise HTTPException(404)
-        schema = AgentInput if kind=='agents' else PromptInput
-        try:
-            payload = schema.model_validate(await request.json())
-        except ValidationError:
-            raise ValueError('Check the name, role, model, and prompt fields.') from None
-        old = store.get(tenant_id,kind,resource_id) if resource_id else {}
-        if kind=='agents':
-            engine.ensure_available(tenant_id)
-            store.get(tenant_id,'models',payload.model_id)
-        return store.put(tenant_id,kind,dict(**payload.model_dump(),id=resource_id or uid(),created_at=old.get('created_at',now())))
+    install_desktop_routes(app,store,runner,user,scoped,session)
 
     @app.delete('/api/t/{tenant_id}/{kind}/{resource_id}')
     def delete_resource(tenant_id:str,kind:str,resource_id:str,request:Request):
-        tenant = scoped(request,tenant_id)
-        if kind not in ('agents','prompts','models','workflows','attachments'):
+        scoped(request,tenant_id)
+        if kind not in ('models','attachments'):
             raise HTTPException(404)
-        engine.ensure_available(tenant_id)
-        if kind in ('models','agents','attachments','prompts'):
-            uses = []
-            project_field={'models':'team','agents':'agent_ids','prompts':'prompt_ids'}.get(kind)
-            if project_field:
-                uses += [p['name'] for p in store.list(tenant_id,'projects') if resource_id in p.get(project_field,{}).values()]
-            for w in store.list(tenant_id,'workflows'):
-                if (kind=='attachments' and resource_id in w['attachment_ids']) or any(resource_id in [s['model_id'],s.get('fallback_model_id'),s.get('agent_id')] for s in w['stages']):
-                    uses.append(w['name'])
-            if kind=='models':
-                uses += [a['name'] for a in store.list(tenant_id,'agents') if a['model_id']==resource_id]
-                if resource_id in tenant['model_routing_table'].values():
-                    uses.append('Workspace routing defaults')
+        if kind=='models':
+            # A conversation records the agent that answered each message, so disconnecting one
+            # still in use would leave those messages naming a model that no longer exists.
+            uses=[p['name'] for p in store.list(tenant_id,'projects') if p.get('last_model_id')==resource_id]
             if uses:
-                raise ValueError('Still used by: '+', '.join(uses)+'. Update these references before deleting.')
+                raise ValueError('Still selected in: '+', '.join(sorted(set(uses)))+'. Choose another agent there first.')
         store.delete(tenant_id,kind,resource_id)
         return {'ok':True}
 
