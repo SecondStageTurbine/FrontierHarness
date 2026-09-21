@@ -232,5 +232,6 @@ modal no longer depends on the router, so Settings opens from the toolbar withou
 and closes without navigating. Local agent-tooling files (graft's wiring for Claude Code,
 OpenCode and Gemini) are now gitignored.
 
-Not rebuilt: the installer manifest and packaged-verification checksums still describe the
-0.4.4 build and are refreshed by the packaging script on the next build.
+The 0.4.5 installer was built, its bundled backend passed the packaged checks with no Python
+or Node on the path, and it was installed over 0.4.4; the manifest records that the installed
+executables match the build that was tested.
