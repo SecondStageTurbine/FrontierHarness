@@ -17,6 +17,7 @@ import json
 import re
 from pathlib import Path
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 ADAPTIVE = 'adaptive'
@@ -142,20 +143,17 @@ def repository_signals(files, tenant_id, project_id):
     return {'file_count': len(entries), 'languages': languages, 'flagged': sorted(flagged)}
 
 
-def heuristic_requirements(content, repo):
-    """Deterministic first pass. Length is not a signal: a short request can be the hardest."""
-    text = content.lower()
-    task_type = next((kind for kind, pattern in TYPE_SIGNALS if re.search(pattern, text)), 'implementation')
+def _derive(task_type, broad_scope, ambiguous, risks, repo, note=None):
+    """A task type plus a handful of yes/no signals, turned into a requirements vector.
+
+    Shared by the regex heuristics and the TypeSafe classifier below so the two ever differ
+    only in how they detect `broad_scope` / `ambiguous` / `risks`, never in what one of those
+    signals is worth — a routing rule lives in exactly one place regardless of which detector
+    found the signal.
+    """
     needs = dict(TASK_BASE[task_type])
-    risks = [name for name, pattern in RISK_SIGNALS.items() if re.search(pattern, text)]
-    risks += [flag for flag in repo.get('flagged', []) if flag not in risks and task_type != 'explain']
-    scope = bool(re.search(SCOPE_SIGNALS, text))
-    files_named = len(re.findall(r'[\w/.-]+\.(?:py|ts|tsx|js|jsx|rs|go|java|cs|rb|php|sql|md|yaml|yml|json|toml)\b', text))
-    # Ambiguity: a broad noun with no anchor is harder than a precise one. "Fix authentication."
-    # names a whole subsystem in two words; "Add pagination to the customer API." names its target.
-    ambiguous = task_type in ('debugging', 'implementation', 'analysis') and files_named == 0 and len(text.split()) <= 4
     bumps = 0
-    if scope or files_named >= 3:
+    if broad_scope:
         needs['repository'] = min(10, needs['repository'] + 2); needs['planning'] = min(10, needs['planning'] + 1); bumps += 1
     if risks:
         needs['reasoning'] = min(10, needs['reasoning'] + 2); needs['review'] = min(10, needs['review'] + 2); bumps += 1
@@ -167,9 +165,25 @@ def heuristic_requirements(content, repo):
         needs['repository'] = min(10, needs['repository'] + 1)
     complexity = 'high' if bumps >= 2 or task_type in ('analysis', 'planning') else 'medium' if bumps == 1 or task_type in ('implementation', 'debugging', 'refactor', 'review') else 'low'
     risk = 'high' if len(risks) >= 2 or 'data' in risks else 'medium' if risks else 'low'
-    reason = f'{task_type}, {complexity} complexity' + (f', {"/".join(risks)} risk' if risks else '') + (', broad scope' if scope else '') + (', ambiguous' if ambiguous else '')
+    reason = f'{task_type}, {complexity} complexity' + (f', {"/".join(risks)} risk' if risks else '') + (', broad scope' if broad_scope else '') + (', ambiguous' if ambiguous else '')
+    if note:
+        reason = f'{reason} ({note})'
     return TaskRequirements(task_type=task_type, complexity=complexity, risk=risk, requirements=needs,
-                            needs_repository_inspection=task_type != 'explain' or scope, reason=reason)
+                            needs_repository_inspection=task_type != 'explain' or broad_scope, reason=reason)
+
+
+def heuristic_requirements(content, repo):
+    """Deterministic first pass. Length is not a signal: a short request can be the hardest."""
+    text = content.lower()
+    task_type = next((kind for kind, pattern in TYPE_SIGNALS if re.search(pattern, text)), 'implementation')
+    risks = [name for name, pattern in RISK_SIGNALS.items() if re.search(pattern, text)]
+    risks += [flag for flag in repo.get('flagged', []) if flag not in risks and task_type != 'explain']
+    files_named = len(re.findall(r'[\w/.-]+\.(?:py|ts|tsx|js|jsx|rs|go|java|cs|rb|php|sql|md|yaml|yml|json|toml)\b', text))
+    broad_scope = bool(re.search(SCOPE_SIGNALS, text)) or files_named >= 3
+    # Ambiguity: a broad noun with no anchor is harder than a precise one. "Fix authentication."
+    # names a whole subsystem in two words; "Add pagination to the customer API." names its target.
+    ambiguous = task_type in ('debugging', 'implementation', 'analysis') and files_named == 0 and len(text.split()) <= 4
+    return _derive(task_type, broad_scope, ambiguous, risks, repo)
 
 
 ROUTER_PROMPT = (
@@ -187,24 +201,31 @@ ROUTER_PROMPT = (
 
 
 async def classify(content, repo, classifier, decrypt):
-    """Heuristics, refined by a small classifier model when the workspace names one.
+    """Heuristics, refined by a small classifier when the workspace names one.
 
-    The classifier is any keyed OpenAI-compatible or Anthropic model — a local Ollama model is
-    the intended case — and it is replaceable: the workspace setting points at a model row, not
-    at a provider. Any failure falls back to the heuristic answer, so routing never blocks a turn.
+    The classifier is either a TypeSafe row (see `typesafe_requirements` below) or any keyed
+    OpenAI-compatible or Anthropic model — a local Ollama model is the intended case for the
+    latter. It is replaceable either way: the workspace setting points at a model row, not at a
+    provider. Any failure falls back to the heuristic answer, so routing never blocks a turn.
     """
     baseline = heuristic_requirements(content, repo)
     if not classifier:
         return baseline, 'heuristics'
+    key = decrypt(classifier['encrypted_key']) if classifier.get('encrypted_key') else None
+    if classifier['provider'] == 'typesafe':
+        if not key:
+            return baseline, 'heuristics (classifier unavailable)'
+        refined = await typesafe_requirements(content, repo, key, classifier.get('model_name') or 'jev-latest')
+        return (refined, classifier['name']) if refined else (baseline, 'heuristics (classifier unavailable)')
     user = json.dumps({'request': content[:4000], 'heuristic_estimate': baseline.model_dump(),
                        'repository': repo}, ensure_ascii=False)
     try:
         async with asyncio.timeout(20):
-            raw = await _complete(classifier, decrypt(classifier['encrypted_key']) if classifier.get('encrypted_key') else 'local-no-key', user)
+            raw = await _complete(classifier, key or 'local-no-key', user)
         payload = json.loads(_json_object(raw))
         payload['requirements'] = {k: max(0, min(10, int(v))) for k, v in (payload.get('requirements') or {}).items() if k in CAPABILITIES}
-        for key in CAPABILITIES[:-1]:
-            payload['requirements'].setdefault(key, baseline.need(key))
+        for cap_key in CAPABILITIES[:-1]:
+            payload['requirements'].setdefault(cap_key, baseline.need(cap_key))
         refined = TaskRequirements.model_validate({k: payload.get(k, getattr(baseline, k)) for k in ('task_type', 'complexity', 'risk', 'requirements', 'needs_repository_inspection', 'reason')})
         return refined, classifier['name']
     except Exception:
@@ -230,6 +251,75 @@ def _json_object(text):
     if start < 0 or end < 0:
         raise ValueError('no JSON object in classifier output')
     return text[start:end+1]
+
+
+# ── TypeSafe classifier ──────────────────────────────────────────────────────
+# TypeSafe (https://docs.typesafe.ai) returns typed, calibrated judgments instead of a chat
+# model's free-form text, so classification is a handful of Choice/Noul questions rather than
+# "ask a model to write JSON and hope it parses." Every answer's own confidence is used, rather
+# than trusted blindly: `_derive` above is the one place a signal becomes a requirement, so
+# swapping this in for the regex path changes nothing about what a signal is worth.
+TYPESAFE_ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
+TYPESAFE_TASK_TYPES = {
+    'explain': 'Wants an explanation of existing code or behavior. No changes requested.',
+    'edit_simple': 'A small, well-specified change: rename, replace, tweak, formatting, wording, a single clear value change.',
+    'implementation': 'Add or build new functionality: a feature, endpoint, integration, capability that does not exist yet.',
+    'debugging': 'Fix a bug, crash, failure, or behavior that is wrong compared to what it should be.',
+    'refactor': 'Reorganize, rename, or restructure existing code without changing its behavior.',
+    'analysis': 'Understand or explain WHY the system behaves a certain way; investigate a root cause; no change requested yet.',
+    'review': 'Review or audit existing code or a proposed change for correctness, security, or quality.',
+    'planning': 'Design an approach, architecture, or strategy before any implementation happens.',
+}
+TYPESAFE_RISK_NOULS = {
+    'security_risk': {'true': 'Touches authentication, authorization, sessions, credentials, permissions, or user identity.', 'false': 'Does not touch any of those.'},
+    'data_risk': {'true': 'Touches a database schema, migration, or could delete, overwrite, or lose stored data.', 'false': 'Does not.'},
+    'money_risk': {'true': 'Touches payments, billing, invoicing, or financial transactions.', 'false': 'Does not.'},
+    'external_risk': {'true': 'Touches a third-party API, webhook, or external integration.', 'false': 'Does not.'},
+}
+# Verified against jev-latest on 12 representative requests: task_type matched all 12 (0.55-1.0
+# confidence); risk nouls matched every seeded case at >0.6 / <0.4. The ambiguous wording below
+# is the second of two tried — the first read almost every short request as ambiguous, since
+# "without inspecting the code" is technically true of any one-line instruction. This phrasing
+# isolates a request that names no concrete target ("fix authentication", "improve performance")
+# from one that does ("change this button green"), and separately, it reads high by nature for
+# investigative task types (explain/analysis/review/planning are open-ended on purpose) — which
+# is why `typesafe_requirements` only applies it to the four task types where a concrete target
+# is expected, the same restriction the regex heuristic already places on its own `ambiguous`.
+TYPESAFE_AMBIGUOUS = {
+    'instructions': 'Does this request name a broad area or symptom without saying what specifically should change, so many different concrete changes could satisfy it? Or does it name a specific, concrete target and outcome, even if minor implementation details are left out?',
+    'criteria': {
+        'true': "Names a broad area, goal, or symptom, not a concrete target (e.g. 'fix authentication', 'improve performance', 'clean up the code', 'make it better'). Many unrelated changes could all reasonably satisfy it.",
+        'false': "Names a specific, concrete target and a clear intended outcome, even without file paths or line numbers (e.g. 'change this button from blue to green', 'add pagination to the customer API').",
+    },
+}
+# Only task types with a determinate target; see the note above.
+AMBIGUITY_APPLIES_TO = ('debugging', 'implementation', 'refactor', 'edit_simple')
+
+
+async def typesafe_requirements(content, repo, api_key, model='jev-latest'):
+    """The same requirements vector as `heuristic_requirements`, from TypeSafe's judgments
+    instead of regexes. Returns `None` on any failure so the caller falls back to heuristics."""
+    questions = {'task_type': {'type': 'choice', 'instructions': 'What kind of software-engineering request is this?', 'criteria': TYPESAFE_TASK_TYPES},
+                'broad_scope': {'type': 'noul', 'instructions': 'Is completing this request likely to require touching many files, multiple modules, or the whole project, rather than one narrow, well-contained change?'},
+                'ambiguous': {'type': 'noul', **TYPESAFE_AMBIGUOUS}}
+    questions.update({name: {'type': 'noul', 'instructions': f'Does this request involve {name.removesuffix("_risk")}-sensitive work?', 'criteria': criteria}
+                      for name, criteria in TYPESAFE_RISK_NOULS.items()})
+    body = {'state': {'request': content[:4000], 'repository': repo}, 'model': model, 'questions': questions}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(TYPESAFE_ENDPOINT, headers={'Authorization': f'Bearer {api_key}'}, json=body)
+            response.raise_for_status()
+            answers = response.json()['answers']
+        task_type = answers['task_type']['choice']
+        if task_type not in TASK_BASE:
+            return None
+        broad = answers['broad_scope']['noul'] > 0.6
+        ambiguous = task_type in AMBIGUITY_APPLIES_TO and answers['ambiguous']['noul'] > 0.6
+        risks = [name.removesuffix('_risk') for name in TYPESAFE_RISK_NOULS if answers[name]['noul'] > 0.6]
+        note = f"{answers['task_type']['confidence']:.2f} confidence"
+        return _derive(task_type, broad, ambiguous, risks, repo, note=note)
+    except Exception:
+        return None
 
 
 # ── Candidate scoring ────────────────────────────────────────────────────────

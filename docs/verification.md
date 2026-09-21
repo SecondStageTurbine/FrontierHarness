@@ -155,3 +155,62 @@ Verified against the machine itself with the real configuration: eleven local pr
 One limit. The probe knows a model is served only when the server lists it; a server that lists nothing is taken at its word that it is up. And the diagnosis that prompted this — a connection test that failed against a running server — traced to the server still loading its model at the moment of the test, which the probe will now report as offline until it finishes.
 
 Version 0.4.3 changes two sentences, because 0.4.2's installed-build check showed the first of them never reached anyone. The connection test had been taught to name what an endpoint actually serves when the configured identifier is not among them — the exact case of a llama.cpp server launched under an alias — but it said so with the wrong exception type, and the handler that turns every unexpected failure into a generic message swallowed it. It is now raised as the provider error it is. The generic message itself now names the address it tried and says that a local server usually ends in `/v1`, since the address is the thing most often wrong. Verified against the machine's real servers: the wrong identifier against the running server answers `It lists: Prometheus`, the right one connects, and a stopped server answers `Could not reach http://127.0.0.1:9095/v1`.
+
+Version 0.4.4 adds a second Adaptive classifier: TypeSafe (docs.typesafe.ai), alongside the
+existing "any keyed chat model" path. The existing classifier works by asking a chat model to
+write JSON matching the requirements schema and parsing whatever comes back; TypeSafe's System
+One API instead returns typed, calibrated answers to a fixed set of questions, so the same job
+needs no JSON-writing and no parsing to fail. `adaptive.py` was refactored first: the bump/
+complexity/risk rules that turn a task type and a handful of yes/no signals into a requirements
+vector were pulled out of `heuristic_requirements` into a shared `_derive`, so the regex path and
+the new TypeSafe path only ever differ in how they detect a signal, never in what the signal is
+worth. `typesafe_requirements` asks one Choice (task type, matching `TASK_BASE`'s eight
+categories) and six Nouls (broad scope; ambiguous — does the request name a concrete target or a
+vague symptom; and one each for security/data/money/external risk) in a single call, then runs
+the answers through `_derive` exactly as the regex path does.
+
+The question wording was iterated against the real API, not shipped on the first draft. The
+first `ambiguous` phrasing — "is it unclear without inspecting the code exactly what needs to
+change" — read almost every short request as ambiguous, including ones with an obvious concrete
+target, because that framing is technically true of any one-line instruction detached from an
+actual codebase. Rephrased to ask whether the request names a broad symptom or a concrete target
+("fix authentication" vs. "change this button from blue to green"), it separated cleanly, but
+then read high by nature for explain/analysis/review/planning requests, which are open-ended on
+purpose. `typesafe_requirements` now applies the ambiguous signal only to the four task types
+that name a determinate change (debugging, implementation, refactor, edit_simple) — the same
+restriction the regex heuristic already places on its own ambiguous detection, arrived at
+independently and for the same reason.
+
+Everything was verified against the real API rather than only against mocks. Twelve
+representative coding requests were classified before any code was written: task type matched
+all twelve; risk detection matched every seeded case; the final `ambiguous` wording separated
+"fix authentication" / "improve performance" / "clean up the code" (all correctly high) from
+every request with a named target (all correctly low). After wiring, `typesafe_requirements` was
+called directly against the real API and matched by hand on four cases including a specialist
+one (a payment webhook correctly flagged security, money, and external risk together). Then the
+full chain was exercised end to end: a real encrypted TypeSafe key stored on a model row, a real
+`tenant.router_model_id` lookup, a real System One call, a real Adaptive turn routed on the
+result — `routing.classified_by` read back as the connected model's own name and
+`routing.requirements.reason` carried the classifier's stated confidence. The `/models/{id}/test`
+connection check was exercised against both a real key (200, connected) and a deliberately wrong
+one (502, "TypeSafe rejected this API key") through TypeSafe's own `/v1/models` endpoint, since
+it has no chat-completion surface to discover a model against the way the OpenAI-compatible path
+does. The suite gained ten tests covering the shared derivation, the ambiguity restriction, the
+"return None rather than raise" failure path, and `classify`'s dispatch by provider, all against
+a scripted TypeSafe response rather than the network — the real-API calls above are what checked
+that the scripted responses describe what the real service actually returns.
+
+TypeSafe was added as a model provider (`typesafe` in `ModelConfig.provider`) rather than a new
+per-workspace setting, so it goes through the credential storage every other keyed provider
+already has — encrypted on this device, never returned to the interface — instead of a new
+plaintext environment variable. It is excluded from the agent picker and from Adaptive's own
+candidate list the same way every keyed provider already is (no agent loop), and it appears in a
+workspace's Adaptive classifier dropdown the same way any other non-agent model already does,
+so neither list needed a new special case, only a new entry in `providerNames`.
+
+One limit stands, inherited from the classifier design generally: TypeSafe's own confidence is
+recorded in the routing reason but not yet used to decide whether to trust the classification at
+all — a low-confidence TypeSafe answer is treated the same as a high-confidence one, the same way
+a low-confidence answer from the existing chat-model classifier already is. Gating the
+classification itself on that confidence, the way Adaptive already gates escalation on whether
+an attempt succeeded, is a natural next step once there is real usage to tune a threshold against.

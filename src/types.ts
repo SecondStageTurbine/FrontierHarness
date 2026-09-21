@@ -4,7 +4,7 @@ export const modeLabels:Record<Mode,string>={read:'Read only',edit:'Edit files',
 export const modeHints:Record<Mode,string>={read:'The agent can read the project and answer. It cannot change anything.',edit:'The agent can read and write files in this project.',auto:'The agent can read, write, and run commands in this project as you.'};
 // Only a local agent command line tool can take a turn; an API key reaches a model, not an agent.
 export const agentProviders=['claude_cli','codex_cli','opencode_cli'];
-export const providerNames:Record<string,string>={claude_cli:'Claude',codex_cli:'Codex',opencode_cli:'OpenCode',anthropic:'Anthropic',openai:'OpenAI',custom_openai:'OpenAI Compatible',ollama:'Ollama / local'};
+export const providerNames:Record<string,string>={claude_cli:'Claude',codex_cli:'Codex',opencode_cli:'OpenCode',anthropic:'Anthropic',openai:'OpenAI',custom_openai:'OpenAI Compatible',ollama:'Ollama / local',typesafe:'TypeSafe'};
 export const ADAPTIVE='adaptive';
 export const ADAPTIVE_HINT='Picks the least expensive agent that can do this message, and hands it to a stronger one if that agent fails.';
 // The capability registry, as far as the interface sees it: what a row may say it is good at.

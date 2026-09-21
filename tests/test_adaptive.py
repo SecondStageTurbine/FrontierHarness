@@ -97,6 +97,103 @@ def test_struggle_is_a_failure_or_a_stated_inability_with_nothing_done():
     assert adaptive.struggled('Done.', None, 'edit', []) is None
 
 
+class FakeTypesafeResponse:
+    def __init__(self, answers):
+        self._answers = answers
+    def raise_for_status(self):
+        pass
+    def json(self):
+        return {'answers': self._answers}
+
+
+class FakeTypesafeClient:
+    """Stands in for httpx.AsyncClient so a test controls TypeSafe's answers directly,
+    the same way ScriptedAgent stands in for a real agent tool."""
+    def __init__(self, answers=None, sent=None, **_):
+        self.answers = answers or {}
+        self._sent = sent
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, url, headers=None, json=None):
+        if self._sent is not None:
+            self._sent.append(json)
+        return FakeTypesafeResponse(self.answers)
+
+
+def choice(value, confidence=0.95):
+    return {'type': 'choice', 'choice': value, 'confidence': confidence, 'probabilities': {value: confidence}}
+
+
+def noul(value):
+    return {'type': 'noul', 'noul': value}
+
+
+@pytest.mark.asyncio
+async def test_typesafe_requirements_reads_answers_through_the_same_derivation_as_heuristics(monkeypatch):
+    sent = []
+    answers = {'task_type': choice('planning', 0.9), 'broad_scope': noul(0.85), 'ambiguous': noul(0.9),
+              'security_risk': noul(0.1), 'data_risk': noul(0.98), 'money_risk': noul(0.1), 'external_risk': noul(0.1)}
+    monkeypatch.setattr(adaptive.httpx, 'AsyncClient', lambda **kw: FakeTypesafeClient(answers, sent))
+    repo = {'file_count': 40, 'languages': ['.py'], 'flagged': []}
+    result = await adaptive.typesafe_requirements('Design a zero-downtime migration strategy.', repo, 'sk-test', 'jev-latest')
+    # planning is not in AMBIGUITY_APPLIES_TO, so a high `ambiguous` noul is ignored for it -
+    # the same restriction the regex heuristic places on its own ambiguous signal.
+    heuristic_planning = adaptive._derive('planning', True, False, ['data'], repo)
+    assert result.requirements == heuristic_planning.requirements
+    assert result.complexity == 'high' and result.risk == 'high'
+    assert '0.90 confidence' in result.reason
+    # The request actually sent to TypeSafe carries the request text and the repo signals, and
+    # nothing else - no project file contents.
+    assert sent[0]['state'] == {'request': 'Design a zero-downtime migration strategy.', 'repository': repo}
+    assert set(sent[0]['questions']) == {'task_type', 'broad_scope', 'ambiguous', 'security_risk', 'data_risk', 'money_risk', 'external_risk'}
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_noul_only_applies_to_tasks_with_a_determinate_target(monkeypatch):
+    # "Fix authentication." - debugging IS in AMBIGUITY_APPLIES_TO, so a high ambiguous noul
+    # should raise reasoning/repository the same way the regex heuristic's own ambiguous case does.
+    answers = {'task_type': choice('debugging', 0.95), 'broad_scope': noul(0.1), 'ambiguous': noul(0.95),
+              'security_risk': noul(0.9), 'data_risk': noul(0.1), 'money_risk': noul(0.1), 'external_risk': noul(0.1)}
+    monkeypatch.setattr(adaptive.httpx, 'AsyncClient', lambda **kw: FakeTypesafeClient(answers))
+    repo = {'file_count': 10, 'languages': [], 'flagged': []}
+    result = await adaptive.typesafe_requirements('Fix authentication.', repo, 'sk-test')
+    expected = adaptive._derive('debugging', False, True, ['security'], repo)
+    assert result.requirements == expected.requirements
+    assert 'ambiguous' in result.reason
+
+
+@pytest.mark.asyncio
+async def test_typesafe_requirements_returns_none_on_failure_rather_than_raising(monkeypatch):
+    class BoomClient(FakeTypesafeClient):
+        async def post(self, *a, **kw):
+            raise RuntimeError('network is down')
+    monkeypatch.setattr(adaptive.httpx, 'AsyncClient', lambda **kw: BoomClient())
+    result = await adaptive.typesafe_requirements('Explain this.', {'file_count': 0, 'languages': [], 'flagged': []}, 'sk-test')
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_classify_dispatches_typesafe_models_and_falls_back_without_a_key(monkeypatch):
+    # No stored key at all -> heuristics immediately, never calls out.
+    unkeyed = {'id': 'ts', 'name': 'TypeSafe', 'provider': 'typesafe', 'model_name': 'jev-latest', 'encrypted_key': None}
+    requirements, by = await adaptive.classify('Explain this.', {'file_count': 0, 'languages': [], 'flagged': []}, unkeyed, lambda v: v)
+    assert by == 'heuristics (classifier unavailable)' and requirements.task_type == 'explain'
+
+    # A working key dispatches to typesafe_requirements and is credited by the model's own name.
+    keyed = {**unkeyed, 'encrypted_key': 'enc'}
+    async def fake_typesafe(content, repo, api_key, model):
+        assert api_key == 'sk-decrypted' and model == 'jev-latest'
+        return adaptive._derive('explain', False, False, [], repo)
+    monkeypatch.setattr(adaptive, 'typesafe_requirements', fake_typesafe)
+    requirements, by = await adaptive.classify('Explain this.', {'file_count': 0, 'languages': [], 'flagged': []}, keyed, lambda v: 'sk-decrypted')
+    assert by == 'TypeSafe' and requirements.task_type == 'explain'
+
+
 @pytest.mark.asyncio
 async def test_a_failed_classifier_falls_back_to_heuristics():
     bogus = {'id': 'x', 'name': 'Bogus', 'provider': 'custom_openai', 'model_name': 'x', 'base_url': 'http://127.0.0.1:9/v1', 'encrypted_key': None}

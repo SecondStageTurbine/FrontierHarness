@@ -7,6 +7,7 @@ import json
 import os
 import secrets
 import time
+import httpx
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -229,7 +230,7 @@ def create_app(directory=None, broker=None):
         if old and (data['provider'] != old['provider'] or data['base_url'] != old['base_url']) and not payload.api_key:
             raise ValueError('Re-enter credentials when changing provider or endpoint.')
         encrypted = store.encrypt(payload.api_key) if payload.api_key else old.get('encrypted_key')
-        if payload.provider in ('openai','anthropic') and not encrypted:
+        if payload.provider in ('openai','anthropic','typesafe') and not encrypted:
             raise ValueError('An API key is required for this provider.')
         if payload.provider in SUBSCRIPTION_PROVIDERS:
             encrypted = None  # Switching to a subscription login discards any stored key.
@@ -250,6 +251,14 @@ def create_app(directory=None, broker=None):
             async with asyncio.timeout(20):
                 if model['provider'] in SUBSCRIPTION_PROVIDERS:
                     await probe_cli(model['provider'], account_env(store, tenant_id, model))
+                elif model['provider'] == 'typesafe':
+                    # TypeSafe has no chat-completion surface to discover a model against; its
+                    # own /v1/models lists what the key can send in a request's `model` field.
+                    async with httpx.AsyncClient(timeout=15) as client:
+                        found = await client.get('https://api.typesafe.ai/v1/models', headers={'Authorization': f'Bearer {key}'})
+                        if found.status_code == 401:
+                            raise ProviderError('TypeSafe rejected this API key.')
+                        found.raise_for_status()
                 elif model['provider'] == 'anthropic':
                     async with AsyncAnthropic(api_key=key,max_retries=0) as client:
                         await client.models.retrieve(model['model_name'])
@@ -269,7 +278,7 @@ def create_app(directory=None, broker=None):
             if isinstance(exc,ProviderError):
                 raise  # A subscription check already explains what to install or sign in to.
             # The address is the thing most often wrong, so the message names the one it tried.
-            tried = model.get('base_url') or ('api.anthropic.com' if model['provider']=='anthropic' else 'api.openai.com')
+            tried = model.get('base_url') or {'anthropic':'api.anthropic.com','typesafe':'api.typesafe.ai'}.get(model['provider'],'api.openai.com')
             raise ProviderError(f'Could not reach {tried}. Check that the server is running and the address is right — a local server usually ends in /v1 — then test again.') from None
         return public_model(store.put(tenant_id,'models',model))
 

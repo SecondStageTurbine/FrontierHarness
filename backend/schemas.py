@@ -15,7 +15,7 @@ SUBSCRIPTION_PROVIDERS = ('claude_cli', 'codex_cli', 'opencode_cli')
 
 class ModelConfig(StrictModel):
     name: str = Field(min_length=1, max_length=100)
-    provider: Literal['anthropic', 'openai', 'custom_openai', 'ollama', 'claude_cli', 'codex_cli', 'opencode_cli']
+    provider: Literal['anthropic', 'openai', 'custom_openai', 'ollama', 'claude_cli', 'codex_cli', 'opencode_cli', 'typesafe']
     model_name: str = Field(min_length=1, max_length=150)
     api_key: str | None = Field(default=None, max_length=1000)
     base_url: str | None = None
@@ -54,7 +54,7 @@ class ModelConfig(StrictModel):
             u = urlparse(self.base_url)
             if u.scheme not in ('http', 'https') or not u.hostname or u.username or u.password or u.query or u.fragment:
                 raise ValueError('Use an HTTP(S) endpoint without credentials, query, or fragment.')
-            if self.provider in ('openai', 'anthropic'):
+            if self.provider in ('openai', 'anthropic', 'typesafe'):
                 raise ValueError('Use OpenAI Compatible for a custom endpoint.')
         return self
 
