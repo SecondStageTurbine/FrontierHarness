@@ -36,6 +36,18 @@ HANDOVER = (
     'Answer the final USER message.'
 )
 CONTINUING = 'The conversation so far follows. Answer the final USER message.'
+# Verified against Codex 0.155: workspace-write keeps every .git directory read-only whatever
+# writable_roots says, and its restricted token cannot reach the credential store a push needs.
+# Claude's acceptEdits has no one to approve a shell command. So the agent is told, rather than
+# discovering it and telling the user to run git by hand.
+POSTURE = {
+    'read': 'This turn is Read only: you may not change files or run commands.',
+    'edit': ('This turn is Edit files: you may change files in the project, but git commit and push '
+             'are not possible — the .git directory and the network are off limits under this posture. '
+             'If the task needs a commit or push, do the file work, then say the user should resend '
+             'that part under Full auto. Do not ask the user to run git by hand.'),
+    'auto': 'This turn is Full auto: you may edit, run commands, commit, and push as the task needs.',
+}
 
 
 def agentic_providers(models):
@@ -66,7 +78,7 @@ def transcript(messages):
     return lines
 
 
-def build_prompt(messages, switched, handoff=None):
+def build_prompt(messages, switched, handoff=None, mode=None):
     """Instructions, then as much of the conversation as fits, ending at the new message.
 
     A handoff, when present, is what a previous agent left behind on this same turn; it goes
@@ -78,6 +90,8 @@ def build_prompt(messages, switched, handoff=None):
         lines.pop(0)
         dropped += 1
     head = HANDOVER if switched else CONTINUING
+    if mode in POSTURE:
+        head += ' ' + POSTURE[mode]
     if dropped:
         head += f' The first {dropped} messages of this conversation were dropped to fit; say so if one is needed.'
     if handoff:
@@ -264,7 +278,7 @@ class AgentRunner:
                 raise ProviderError(f'{config["name"]} is not running: nothing at {localhealth.where(config)} is serving it. Start that server, or pick another agent.')
             for _ in range(1 + (MAX_ESCALATIONS if adaptive_turn else 0)):
                 tried.add(config['id'])
-                prompt = build_prompt(session['messages'], bool(message.get('switched_from')), handoff_text)
+                prompt = build_prompt(session['messages'], bool(message.get('switched_from')), handoff_text, mode)
                 result, error = None, None
                 try:
                     result = await self.broker.invoke_agent(tenant_id, config, prompt, mode, project['root'])

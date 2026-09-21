@@ -82,6 +82,8 @@ Chosen per turn, and translated into each tool's own setting:
 | Edit files | `--permission-mode acceptEdits` | `--sandbox workspace-write` | `--agent build` |
 | Full auto | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | `--agent build --auto` |
 
+A commit or push needs **Full auto**. Under Edit files, Codex's sandbox keeps `.git` read-only and blocks the network, and Claude has no one to approve a shell command; the agent is told this on every turn so it asks for Full auto rather than asking you to run git by hand.
+
 ### Adaptive
 
 Pick **Adaptive** in the agent selector and the harness chooses the agent for each message: the least expensive one that can reliably do it, escalating to a stronger one if that agent fails. A manual pick is never routed; Adaptive is consulted only when it is what the selector says.

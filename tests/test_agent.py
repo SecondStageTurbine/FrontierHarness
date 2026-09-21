@@ -123,6 +123,14 @@ def test_an_overlong_conversation_drops_its_oldest_turns_rather_than_refusing():
     assert len(prompt) < 130_000
 
 
+def test_the_agent_is_told_its_posture_so_it_asks_for_full_auto_instead_of_manual_git():
+    messages = [{'role': 'user', 'content': 'commit and push this'}]
+    edit = build_prompt(messages, switched=False, mode='edit')
+    assert 'Full auto' in edit and 'commit' in edit
+    assert 'push' in build_prompt(messages, switched=False, mode='auto')
+    assert 'Full auto' not in build_prompt(messages, switched=False)
+
+
 def test_a_folder_read_twice_reports_only_what_actually_moved(tmp_path):
     store = setup_store(tmp_path/'state')
     folder = tmp_path/'work'
