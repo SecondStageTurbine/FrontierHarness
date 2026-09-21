@@ -36,6 +36,11 @@ HANDOVER = (
     'Answer the final USER message.'
 )
 CONTINUING = 'The conversation so far follows. Answer the final USER message.'
+# Two agents, asked to reinstall Frontier, stopped its processes to free the executable and
+# ended their own turn with it, before the installer ran. The host is named so the agent knows.
+HOST = ('You are running inside Frontier, a desktop application; this turn is one of its subprocesses. '
+        'Stopping, killing, reinstalling or updating Frontier ends this turn before anything after it runs. '
+        'If asked to install or update Frontier, build it and tell the user to run the installer themselves.')
 # Verified against Codex 0.155: workspace-write keeps every .git directory read-only whatever
 # writable_roots says, and its restricted token cannot reach the credential store a push needs.
 # Claude's acceptEdits has no one to approve a shell command. So the agent is told, rather than
@@ -89,7 +94,7 @@ def build_prompt(messages, switched, handoff=None, mode=None):
     while len('\n\n'.join(lines)) > TRANSCRIPT_LIMIT and len(lines) > 1:
         lines.pop(0)
         dropped += 1
-    head = HANDOVER if switched else CONTINUING
+    head = (HANDOVER if switched else CONTINUING) + ' ' + HOST
     if mode in POSTURE:
         head += ' ' + POSTURE[mode]
     if dropped:

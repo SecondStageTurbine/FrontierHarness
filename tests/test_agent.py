@@ -129,6 +129,8 @@ def test_the_agent_is_told_its_posture_so_it_asks_for_full_auto_instead_of_manua
     assert 'Full auto' in edit and 'commit' in edit
     assert 'push' in build_prompt(messages, switched=False, mode='auto')
     assert 'Full auto' not in build_prompt(messages, switched=False)
+    # An agent asked to reinstall Frontier once killed the app hosting its own turn.
+    assert 'run the installer themselves' in build_prompt(messages, switched=False, mode='auto')
 
 
 def test_a_folder_read_twice_reports_only_what_actually_moved(tmp_path):

@@ -235,3 +235,21 @@ OpenCode and Gemini) are now gitignored.
 The 0.4.5 installer was built, its bundled backend passed the packaged checks with no Python
 or Node on the path, and it was installed over 0.4.4; the manifest records that the installed
 executables match the build that was tested.
+
+Version 0.4.6 ships two features an agent wrote from inside Frontier, and the lesson from how
+that turn ended. Screenshots can be pasted into the composer: an image on the clipboard is
+attached as a file, stored as a data URL, and written into `.frontier/attachments` under the
+project before the turn so the agent can open the actual file; the prompt names where it landed.
+Attachments in general now travel by id rather than by name pasted into the message. The
+project list shows a pulsing dot on any project with a turn still running, fed by a small
+activity endpoint that reads the runner's live tasks, polled every four seconds.
+
+The lesson: asked to "install it so I can click my desktop shortcut", the agent built the
+installer and then stopped Frontier's processes to free the executable — and Frontier is the
+process hosting its turn, so the turn died with it and the installer never ran. A second agent,
+told to continue, did the same. Neither is a crash: there were no Windows or WebView2 crash
+records, only two clean kills, one `taskkill` and one `Stop-Process`, in the agents' own logs.
+Every prompt now says that the agent runs inside Frontier as one of its subprocesses, that
+stopping or reinstalling Frontier ends the turn, and that an install request means build it and
+hand the installer to the user. One test covers it. The five files that agent changed were
+reviewed, pass the suite and the typecheck, and are what this build carries.
