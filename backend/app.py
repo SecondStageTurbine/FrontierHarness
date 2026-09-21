@@ -1,5 +1,6 @@
 """Same-origin HTTP/SSE adapter. Authentication precedes every tenant lookup."""
 import asyncio
+import base64
 import hashlib
 import hmac
 import io
@@ -321,6 +322,8 @@ def create_app(directory=None, broker=None):
             raise ProviderError('Transcription failed. Confirm the model accepts audio and the key is valid.') from None
         return {'text':result.text}
 
+    IMAGE_MIME = {'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.gif':'image/gif'}
+
     @app.post('/api/t/{tenant_id}/attachments')
     async def upload(tenant_id:str,request:Request,file:UploadFile=File(...)):
         scoped(request,tenant_id)
@@ -328,6 +331,12 @@ def create_app(directory=None, broker=None):
         if len(raw)>5_000_000:
             raise ValueError('Files must be smaller than 5 MB.')
         filename = Path(file.filename or 'attachment.txt').name
+        # Screenshots and pasted images are stored as data URLs; the instruct route writes them
+        # back to disk in the project so an agent can open the actual file.
+        mime = IMAGE_MIME.get(Path(filename).suffix.lower())
+        if mime:
+            result = store.put(tenant_id,'attachments',dict(id=uid(),name=filename,kind='image',content=f'data:{mime};base64,'+base64.b64encode(raw).decode('ascii'),size=len(raw),created_at=now()))
+            return {k:v for k,v in result.items() if k!='content'}
         # Decided by format, not by whether the bytes happen to survive a UTF-8 decode:
         # a small office file that decodes would otherwise reach the model as gibberish.
         if filename.lower().endswith(('.doc','.docx','.xls','.xlsx','.ppt','.pptx','.odt','.ods','.odp','.rtf','.pages','.numbers','.key')):
@@ -345,7 +354,7 @@ def create_app(directory=None, broker=None):
             raise ValueError('This PDF holds no extractable text. A scanned PDF needs OCR before it can be read.' if filename.lower().endswith('.pdf') else 'This file contains no text.')
         if '\x00' in content or len(content)>100000:
             raise ValueError('File must contain extractable text, up to 100,000 characters.')
-        result = store.put(tenant_id,'attachments',dict(id=uid(),name=filename,content=content,size=len(raw),created_at=now()))
+        result = store.put(tenant_id,'attachments',dict(id=uid(),name=filename,kind='text',content=content,size=len(raw),created_at=now()))
         return {k:v for k,v in result.items() if k!='content'}
 
     from .desktop_routes import install_desktop_routes

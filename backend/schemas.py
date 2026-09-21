@@ -84,6 +84,8 @@ class InstructionInput(StrictModel):
     content: str = Field(min_length=2, max_length=40000)
     model_id: str = Field(min_length=1)
     mode: Mode = 'edit'
+    # Attachments named here are written into the project before the turn so the agent can read them.
+    attachment_ids: list[str] = Field(default_factory=list, max_length=8)
 
 class CommandInput(StrictModel):
     command: str = Field(min_length=1, max_length=300)

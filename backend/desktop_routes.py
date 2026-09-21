@@ -1,5 +1,6 @@
 """Project/session API and a one-use native-launch authentication exchange."""
 import asyncio
+import base64
 import hmac
 import json
 import os
@@ -9,6 +10,33 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from .schemas import ProjectInput, SessionInput, InstructionInput, TenantInput, CommandInput
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
+
+def attachment_note(store,tenant_id,project_id,attachment_ids):
+    """Write each named attachment into the project so the agent can open the actual file.
+
+    They land in .frontier/attachments: a dot directory the tree and change fingerprint ignore,
+    so context files never read as project changes."""
+    if not attachment_ids:
+        return ''
+    project=store.get(tenant_id,'projects',project_id)
+    folder=Path(project['root'])/'.frontier'/'attachments'
+    lines=[]
+    for aid in dict.fromkeys(attachment_ids):
+        attachment=store.get(tenant_id,'attachments',aid)
+        name=Path(attachment['name']).name or 'attachment.txt'
+        content=attachment.get('content') or ''
+        data=base64.b64decode(content.split(';base64,',1)[1]) if content.startswith('data:') and ';base64,' in content else content.encode('utf-8')
+        target=folder/name
+        n=2
+        while target.exists() and target.read_bytes()!=data:
+            target=folder/f'{Path(name).stem}-{n}{Path(name).suffix}'
+            n+=1
+        if not target.exists():
+            folder.mkdir(parents=True,exist_ok=True)
+            target.write_bytes(data)
+        lines.append(f'- {target.relative_to(project["root"]).as_posix()}')
+    return ('\n\nAttached for context — harness-managed files in your working directory. '
+            'Read them as needed; they are not project source and should not be committed:\n'+'\n'.join(lines))
 
 def install_desktop_routes(app,store,runner,user,scoped,create_session):
     files=ProjectFiles(store)
@@ -42,6 +70,21 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
     def list_projects(tenant_id:str,request:Request):
         scoped(request,tenant_id)
         return store.list(tenant_id,'projects')
+
+    @app.get('/api/t/{tenant_id}/activity')
+    def activity(tenant_id:str,request:Request):
+        """Which conversations still have a turn running, so the sidebar can show it."""
+        scoped(request,tenant_id)
+        active=[]
+        for (tid,session_id),task in list(runner.turns.items()):
+            if tid!=tenant_id or task.done():
+                continue
+            try:
+                session=store.get(tenant_id,'sessions',session_id)
+            except TenantIsolationViolationException:
+                continue
+            active.append({'project_id':session['project_id'],'session_id':session_id})
+        return {'active':active}
 
     @app.post('/api/t/{tenant_id}/projects')
     def create_project(tenant_id:str,payload:ProjectInput,request:Request):
@@ -87,7 +130,8 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         """One message, one agentic turn. The reply arrives in the session, not in this response."""
         scoped(request,tenant_id)
         get_session(tenant_id,project_id,session_id)
-        return runner.send(tenant_id,project_id,session_id,payload.content,payload.model_id,payload.mode)
+        content=payload.content+attachment_note(store,tenant_id,project_id,payload.attachment_ids or [])
+        return runner.send(tenant_id,project_id,session_id,content,payload.model_id,payload.mode)
 
     @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/cancel')
     async def stop_turn(tenant_id:str,project_id:str,session_id:str,request:Request):
