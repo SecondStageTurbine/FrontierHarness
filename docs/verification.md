@@ -214,3 +214,23 @@ all — a low-confidence TypeSafe answer is treated the same as a high-confidenc
 a low-confidence answer from the existing chat-model classifier already is. Gating the
 classification itself on that confidence, the way Adaptive already gates escalation on whether
 an attempt succeeded, is a natural next step once there is real usage to tune a threshold against.
+
+Version 0.4.5 fixes a turn that ended with the agent asking the user to run git by hand. Under
+Edit files, Codex runs in `--sandbox workspace-write`, and a probe of the installed Codex 0.155
+with `codex sandbox` showed that posture keeps every `.git` directory read-only no matter what
+`writable_roots` says, blocks the network by default, and even with network on cannot push
+because its restricted token cannot reach the credential store. Claude's Edit files posture has
+the same limit for a different reason: headless `acceptEdits` has no one to approve a shell
+command. There is no configuration that lets Edit files commit; Full auto does, and always did.
+So the agent is now told its posture at the top of every prompt: under Edit files it is told that
+commit and push are off and to ask for that part to be resent under Full auto, rather than
+discovering the wall and handing the user three git commands. One test covers the three
+postures, and the README's posture table says the same in one sentence.
+
+The same release carries the desktop settings modal fix that turn had left uncommitted: the
+modal no longer depends on the router, so Settings opens from the toolbar without a route change
+and closes without navigating. Local agent-tooling files (graft's wiring for Claude Code,
+OpenCode and Gemini) are now gitignored.
+
+Not rebuilt: the installer manifest and packaged-verification checksums still describe the
+0.4.4 build and are refreshed by the packaging script on the next build.
