@@ -253,3 +253,25 @@ Every prompt now says that the agent runs inside Frontier as one of its subproce
 stopping or reinstalling Frontier ends the turn, and that an install request means build it and
 hand the installer to the user. One test covers it. The five files that agent changed were
 reviewed, pass the suite and the typecheck, and are what this build carries.
+
+Version 0.4.7 ships a project the user could remove from a session but never from Frontier
+itself: a right-click on a sidebar project now offers "Remove from Frontier", which untracks the
+project and deletes its conversations and events, but leaves the folder and its files exactly
+where they are on disk — this had been built and tested by an earlier turn and was carried
+forward uncommitted; it was reviewed here, the suite (76 tests, including its own
+`test_removing_a_project_untracks_it_but_keeps_the_folder`) passed, and it was folded into this
+release rather than left stranded in the working tree.
+
+It also fixes Settings → Workspaces always showing "Not Found". `Tenants.tsx` fetched its list
+through `useResource('/tenants')`, which builds a tenant-scoped URL, `/api/t/{id}/tenants`; no
+such route exists, only the unscoped `/api/tenants` does, so the tab 404'd every time it opened.
+It now reads the tenants list already held on the shared workspace context — the same list the
+sidebar's workspace switcher already used successfully — instead of re-fetching it from the
+wrong URL. Confirmed directly against a running instance of the built app: the old URL returns
+404, the corrected one returns the workspace list, and `tsc --noEmit` is clean.
+
+The 0.4.7 installer was built, its bundled backend passed the packaged checks (runtime, unittest,
+pytest, compileall, frontend assets, authentication, tenant file isolation — the same suite that
+exercises `/api/tenants` end to end) with no Python or Node on the path, and it was installed
+over 0.4.6 for the current user; the manifest records that the installed executables match the
+build that was tested.
