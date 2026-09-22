@@ -1,9 +1,33 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Frontier",
-  "version": "0.4.7",
+  "version": "0.5.0",
   "identifier": "dev.frontier.harness",
-  "build": {"beforeDevCommand": "npm run build", "beforeBuildCommand": "npm run build", "frontendDist": "../dist"},
-  "app": {"windows": [], "withGlobalTauri": true, "security": {"csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data:; font-src 'self' data:; frame-src 'none'"}},
-  "bundle": {"active": false, "targets": "all"}
+  "build": {
+    "beforeDevCommand": "npm run build",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [],
+    "withGlobalTauri": true,
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data:; font-src 'self' data:; frame-src 'none'"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFEQ0FFOEM2ODc1NDc1QzkKUldUSmRWU0h4dWpLclZCWk0vK29qNW1rMzBsWjh6ZjBjSU5jTkh5T0RyL0ZBUU4rdE5tY2kxNDQK",
+      "endpoints": [
+        "https://github.com/SecondStageTurbine/FrontierHarness/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
 }

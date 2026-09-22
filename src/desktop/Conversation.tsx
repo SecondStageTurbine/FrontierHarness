@@ -1,33 +1,47 @@
 import {useState} from 'react';
-import {Check,ChevronRight,LoaderCircle,FileCode2,AlertTriangle,Square,ArrowRightLeft,Eye,Pencil,Zap} from 'lucide-react';
+import {Check,ChevronRight,LoaderCircle,FileCode2,AlertTriangle,Square,ArrowRightLeft,Eye,Pencil,Zap,Clock,X} from 'lucide-react';
 import {MarkdownOutput} from '../components/Markdown';
-import {duration} from '../lib/api';
+import {duration,money} from '../lib/api';
 import {modeLabels,type Message,type Mode,type Session} from '../types';
 export type InspectorTab='Files'|'Changes'|'Terminal';
 const modeIcon={read:Eye,edit:Pencil,auto:Zap};
 
-export function Conversation({session,onInspect}:{session:Session;onInspect:(tab:InspectorTab,path?:string)=>void}){
+export function Conversation({session,onInspect,onUnqueue}:{session:Session;onInspect:(tab:InspectorTab,path?:string)=>void;onUnqueue?:(id:string)=>void}){
  const [visible,setVisible]=useState(20);
  const shown=session.messages.slice(-visible);
+ const queue=session.queue||[];
  return <div className="conversation-thread">
   {session.messages.length>visible&&<button className="history-more" onClick={()=>setVisible(v=>v+20)}>Load earlier messages</button>}
   {shown.map(message=>message.role==='user'
    ?<section className="conversation-turn" key={message.id}><div className="user-message"><span className="message-author">You</span><p>{message.content}</p></div></section>
    :<AgentMessage key={message.id} message={message} onInspect={onInspect}/>)}
+  {queue.map((q,i)=><section className="conversation-turn queued" key={q.id}><div className="user-message"><span className="message-author"><Clock size={11}/> Queued {i+1} of {queue.length} · {modeLabels[q.mode]}</span><p>{q.content}</p>{onUnqueue&&<button className="icon-button" aria-label="Remove from queue" title="Remove from queue" onClick={()=>onUnqueue(q.id)}><X size={12}/></button>}</div></section>)}
  </div>;
 }
+
+/** What a finished turn cost: time, tokens in and out, money when the model has rates, and how many agents it took. */
+function turnStats(m:Message){
+ const parts:string[]=[];
+ const seconds=m.finished_at?Math.round((new Date(m.finished_at).getTime()-new Date(m.created_at).getTime())/1000):0;
+ if(seconds>2)parts.push(duration(m.created_at,m.finished_at));
+ if(m.input_tokens!=null||m.output_tokens!=null)parts.push(`${compact(m.input_tokens||0)} in · ${compact(m.output_tokens||0)} out`);
+ if(m.cost)parts.push(money(m.cost)); // 0 is a subscription turn: covered, not worth a line.
+ const attempts=m.routing?.attempts?.length||0;
+ if(attempts>1)parts.push(`${attempts} attempts`);
+ return parts.join(' · ');
+}
+const compact=(n:number)=>n>=1000?`${(n/1000).toFixed(n>=10000?0:1)}k`:String(n);
 
 function AgentMessage({message,onInspect}:{message:Message;onInspect:(tab:InspectorTab,path?:string)=>void}){
  const running=message.status==='running';
  const ModeIcon=modeIcon[(message.mode||'edit') as Mode];
  const changes=message.changes||[];
- const seconds=message.finished_at?Math.round((new Date(message.finished_at).getTime()-new Date(message.created_at).getTime())/1000):0;
  return <div className={`agent-turn ${running?'working':''}`}>
   <div className="frontier-author">
    <span className="frontier-spark">{running?<LoaderCircle size={14} className="spin"/>:'✳'}</span>
    <strong>{message.model_name||'Agent'}</strong>
    <span className="agent-mode-badge" title={modeLabels[(message.mode||'edit') as Mode]}><ModeIcon size={12}/>{modeLabels[(message.mode||'edit') as Mode]}</span>
-   <small>{running?`Working · ${duration(message.created_at,null)}`:message.status!=='complete'?message.status:seconds>2?duration(message.created_at,message.finished_at):''}</small>
+   <small>{running?`Working · ${duration(message.created_at,null)}`:[message.status!=='complete'?message.status:'',turnStats(message)].filter(Boolean).join(' · ')}</small>
   </div>
   {message.switched_from&&<div className="handover-note"><ArrowRightLeft size={13}/>Took over from {message.switched_from}. It was given this conversation and the project folder.</div>}
   {message.routing?.mode==='adaptive'&&message.routing.chosen&&<div className="routing-note" title={message.routing.requirements?.reason}>

@@ -80,12 +80,20 @@ class ProjectInput(StrictModel):
 class SessionInput(StrictModel):
     name: str = Field(default='New session', min_length=1, max_length=120)
 
+class SessionPatch(StrictModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    pinned: bool | None = None
+    archived: bool | None = None
+
 class InstructionInput(StrictModel):
     content: str = Field(min_length=2, max_length=40000)
     model_id: str = Field(min_length=1)
     mode: Mode = 'edit'
     # Attachments named here are written into the project before the turn so the agent can read them.
     attachment_ids: list[str] = Field(default_factory=list, max_length=8)
+    # While a turn is running: queue waits for it to finish; steer stops it and sends this instead.
+    queue: bool = False
+    steer: bool = False
 
 class CommandInput(StrictModel):
     command: str = Field(min_length=1, max_length=300)

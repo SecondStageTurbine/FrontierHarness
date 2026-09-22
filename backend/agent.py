@@ -20,7 +20,7 @@ from . import adaptive, localhealth
 from .adaptive import ADAPTIVE, MAX_ESCALATIONS
 from .broker import CLI_TOOLS, ProviderError
 from .projects import ProjectFiles
-from .store import now, uid
+from .store import TenantIsolationViolationException, now, uid
 
 # What the agent may do to the project this turn. The names are ours; each tool spells the
 # same three postures differently, and broker.agent_argv is the only place that translates.
@@ -160,19 +160,23 @@ class AgentRunner:
     def agents(self, tenant_id):
         return agentic_providers(self.store.list(tenant_id, 'models'))
 
-    def send(self, tenant_id, project_id, session_id, content, model_id, mode):
+    def send(self, tenant_id, project_id, session_id, content, model_id, mode, queue=False):
         """Record the message, start the turn, and answer immediately.
 
         The reply is written into a message that already exists and is marked running, so the
         conversation shows the turn in progress instead of appearing empty until it finishes.
         With Adaptive selected the agent is not yet known; it is chosen at the start of the turn
-        and the message says so until then.
+        and the message says so until then. While a turn is running, `queue` keeps the message
+        for the moment it finishes instead of refusing it.
         """
         if mode not in MODES:
             raise ValueError('Choose read only, edit files, or full auto.')
-        if self.busy(tenant_id, session_id):
-            raise ValueError('This conversation is still working. Wait for it to finish or stop it.')
         session = self.store.get(tenant_id, 'sessions', session_id)
+        if self.busy(tenant_id, session_id):
+            if not queue:
+                raise ValueError('This conversation is still working. Wait for it to finish or stop it.')
+            session.setdefault('queue', []).append({'id': uid(), 'content': content, 'model_id': model_id, 'mode': mode, 'created_at': now()})
+            return self.store.put(tenant_id, 'sessions', session)
         project = self.store.get(tenant_id, 'projects', project_id)
         if not Path(project['root']).is_dir():
             raise FileNotFoundError('This project’s folder is not available. Reconnect the drive or open the project again.')
@@ -211,7 +215,29 @@ class AgentRunner:
         task = asyncio.create_task(self.run_turn(tenant_id, project_id, session_id, reply['id'], config, mode))
         self.turns[key] = task
         task.add_done_callback(lambda finished: self.turns.pop(key, None) if self.turns.get(key) is finished else None)
+        task.add_done_callback(lambda finished: self.drain(tenant_id, project_id, session_id))
         return session
+
+    def drain(self, tenant_id, project_id, session_id):
+        """The next queued message takes its turn, unless the conversation was stopped or is busy again."""
+        try:
+            session = self.store.get(tenant_id, 'sessions', session_id)
+        except Exception:
+            return  # The conversation went away with its project; nothing left to run.
+        queued = session.get('queue') or []
+        if not queued or self.busy(tenant_id, session_id):
+            return
+        item, session['queue'] = queued[0], queued[1:]
+        self.store.put(tenant_id, 'sessions', session)
+        try:
+            self.send(tenant_id, project_id, session_id, item['content'], item['model_id'], item['mode'])
+        except (ValueError, FileNotFoundError, TenantIsolationViolationException) as exc:
+            self.store.event(tenant_id, session_id, 'queue.dropped', f'A queued message could not start: {exc}')
+
+    def unqueue(self, tenant_id, session_id, item_id):
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        session['queue'] = [q for q in session.get('queue') or [] if q['id'] != item_id]
+        return self.store.put(tenant_id, 'sessions', session)
 
     def previous_agent(self, session, message_id):
         """The last agent that actually answered before this message, for the handover decision."""
@@ -339,7 +365,8 @@ class AgentRunner:
         message.update(status=status, error=error, changes=changes, finished_at=now(),
                        content=(result.text if result else '') or (error or ''),
                        input_tokens=result.input_tokens if result else None,
-                       output_tokens=result.output_tokens if result else None)
+                       output_tokens=result.output_tokens if result else None,
+                       cost=self.cost(tenant_id, (result.served_by if result else None) or message.get('model_id'), result))
         if attempts and message.get('routing'):
             message['routing']['attempts'] = [{k: v for k, v in a.items() if k != 'reply'} for a in attempts]
         if result and result.served_by and result.served_by != message['model_id']:
@@ -356,10 +383,28 @@ class AgentRunner:
                          error or (summary if mode != 'read' else 'Answered without touching the folder.'),
                          message_id=message_id)
 
+    def cost(self, tenant_id, model_id, result):
+        """USD for this turn from the model's own per-million rates, or None when either is unknown."""
+        if not result or not model_id or result.input_tokens is None or result.output_tokens is None:
+            return None
+        try:
+            model = self.store.get(tenant_id, 'models', model_id)
+        except Exception:
+            return None
+        rates = model.get('input_price'), model.get('output_price')
+        if rates[0] is None or rates[1] is None:
+            return None
+        return round((result.input_tokens * rates[0] + result.output_tokens * rates[1]) / 1_000_000, 6)
+
     async def cancel(self, tenant_id, session_id):
         task = self.turns.get((tenant_id, session_id))
         if not task or task.done():
             raise ValueError('This conversation is not running.')
+        # Stopping is the user stepping in, so whatever was waiting behind this turn is dropped too.
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        if session.get('queue'):
+            session['queue'] = []
+            self.store.put(tenant_id, 'sessions', session)
         task.cancel()
         try:
             await task

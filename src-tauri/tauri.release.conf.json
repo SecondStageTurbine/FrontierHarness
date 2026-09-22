@@ -5,18 +5,26 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "externalBin": ["binaries/frontier-backend"],
+    "targets": [
+      "nsis"
+    ],
+    "externalBin": [
+      "binaries/frontier-backend"
+    ],
     "shortDescription": "A project-first desktop AI workspace",
     "category": "DeveloperTool",
     "windows": {
-      "webviewInstallMode": {"type": "downloadBootstrapper", "silent": true},
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
       "nsis": {
         "installMode": "currentUser",
         "displayLanguageSelector": false,
         "startMenuFolder": "Frontier",
         "installerHooks": "installer-hooks.nsh"
       }
-    }
+    },
+    "createUpdaterArtifacts": true
   }
 }

@@ -16,8 +16,9 @@ export interface CommandResult {id:string; command:string; started_at:string; fi
 export interface Message {id:string; role:'user'|'assistant'; content:string; created_at:string;
  status?:'running'|'complete'|'failed'|'cancelled'; error?:string|null; finished_at?:string|null;
  model_id?:string; model_name?:string; provider?:string; mode?:Mode; switched_from?:string|null;
- changes?:FileChange[]; input_tokens?:number|null; output_tokens?:number|null; routing?:Routing}
-export interface Session {id:string; project_id:string; name:string; messages:Message[]; commands:CommandResult[]; created_at:string; updated_at:string}
+ changes?:FileChange[]; input_tokens?:number|null; output_tokens?:number|null; cost?:number|null; routing?:Routing}
+export interface QueuedMessage {id:string; content:string; model_id:string; mode:Mode; created_at:string}
+export interface Session {id:string; project_id:string; name:string; messages:Message[]; commands:CommandResult[]; created_at:string; updated_at:string; pinned?:boolean; archived?:boolean; queue?:QueuedMessage[]}
 export interface Project {id:string; name:string; root:string; created_at:string; last_session_id?:string; last_model_id?:string; last_mode?:Mode}
 export interface ProjectFile {path:string; size:number; text:boolean}
 export interface SessionEvent {seq:number; type:string; message:string; time:string; message_id?:string}

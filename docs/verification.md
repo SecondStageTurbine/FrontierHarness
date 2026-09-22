@@ -275,3 +275,19 @@ pytest, compileall, frontend assets, authentication, tenant file isolation — t
 exercises `/api/tenants` end to end) with no Python or Node on the path, and it was installed
 over 0.4.6 for the current user; the manifest records that the installed executables match the
 build that was tested.
+
+Version 0.5.0 adds five things the desktop shell lacked next to T3 Code and PandaOS. Enter while
+a turn is running now queues the message on the session (`queue` on the instruction, drained by
+the turn's done callback), and Ctrl+Enter steers: since a turn is one opaque subprocess, steering
+stops it and sends the new message with the conversation so far; stopping drops the queue.
+Finished turns carry `cost`, computed from the served model's per-million rates (0 for a
+subscription login, absent when a rate is unknown), and the message shows duration, tokens in and
+out, cost, and Adaptive's attempt count. A turn that finishes while the window is unfocused raises
+a desktop notification (Tauri notification plugin, with a chime synthesised by the audio API so no
+sound file ships), driven by the same activity poll as the sidebar dots. Sessions can be renamed,
+pinned, and archived through `PATCH …/sessions/{id}`. The app checks
+`releases/latest/download/latest.json` on launch through the Tauri updater plugin and installs a
+minisign-signed package in place; the public key is in `tauri.conf.json`, the private key stays
+outside the repository, and `scripts/write_update_manifest.py` writes the feed. Three new tests
+cover the queue, stop-drops-queue, and cost; the API test covers rename, pin, archive, and their
+workspace boundary. The suite is at 79.

@@ -57,6 +57,12 @@ def test_a_conversation_streams_its_turn_and_stays_inside_its_workspace(tmp_path
         assert session['messages'][-1]['status']=='complete'
         b=c.post('/api/tenants',json={'name':'B'}).json()['id']
         assert c.get(route.replace(f'/t/{t}/',f'/t/{b}/')+'/events').status_code==403
+        # A session can be renamed, pinned and archived in place; another workspace cannot touch it.
+        renamed=c.patch(route,json={'name':'Auth work','pinned':True}).json()
+        assert renamed['name']=='Auth work' and renamed['pinned'] is True and renamed['messages'][-1]['status']=='complete'
+        assert c.patch(route,json={'archived':True}).json()['archived'] is True
+        assert c.patch(route,json={'name':''}).status_code==422
+        assert c.patch(route.replace(f'/t/{t}/',f'/t/{b}/'),json={'name':'X'}).status_code==403
 
 def test_cross_origin_blocked(tmp_path):
     with TestClient(create_app(str(tmp_path),ScriptedAgent())) as c:

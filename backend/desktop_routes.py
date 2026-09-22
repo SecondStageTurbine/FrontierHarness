@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from fastapi import Request, Response, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse
-from .schemas import ProjectInput, SessionInput, InstructionInput, TenantInput, CommandInput
+from .schemas import ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
 
@@ -179,7 +179,23 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         scoped(request,tenant_id)
         get_session(tenant_id,project_id,session_id)
         content=payload.content+attachment_note(store,tenant_id,project_id,payload.attachment_ids or [])
-        return runner.send(tenant_id,project_id,session_id,content,payload.model_id,payload.mode)
+        if payload.steer and runner.busy(tenant_id,session_id):
+            # A turn is one opaque subprocess, so steering means stopping it and sending this instead.
+            await runner.cancel(tenant_id,session_id)
+        return runner.send(tenant_id,project_id,session_id,content,payload.model_id,payload.mode,queue=payload.queue)
+
+    @app.patch('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}')
+    def update_session(tenant_id:str,project_id:str,session_id:str,payload:SessionPatch,request:Request):
+        scoped(request,tenant_id)
+        session=get_session(tenant_id,project_id,session_id)
+        session.update({k:v for k,v in payload.model_dump().items() if v is not None})
+        return store.put(tenant_id,'sessions',session)
+
+    @app.delete('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/queue/{item_id}')
+    def unqueue(tenant_id:str,project_id:str,session_id:str,item_id:str,request:Request):
+        scoped(request,tenant_id)
+        get_session(tenant_id,project_id,session_id)
+        return runner.unqueue(tenant_id,session_id,item_id)
 
     @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/cancel')
     async def stop_turn(tenant_id:str,project_id:str,session_id:str,request:Request):

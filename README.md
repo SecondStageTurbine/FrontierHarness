@@ -13,7 +13,9 @@ folder looked like before and after.
 
 ## Install the desktop application
 
-Run `src-tauri/target/release/bundle/nsis/Frontier_0.4.7_x64-setup.exe`. The per-user Windows installer includes Frontier, its Python runtime, backend dependencies, and frontend assets. Launch **Frontier** from the Start menu afterward. It does not need this repository, Python, Rust, Node.js, or a terminal to run. Existing projects, sessions, and encrypted credentials stay in the same application-data directory.
+Run `src-tauri/target/release/bundle/nsis/Frontier_0.5.0_x64-setup.exe`. The per-user Windows installer includes Frontier, its Python runtime, backend dependencies, and frontend assets. Launch **Frontier** from the Start menu afterward. It does not need this repository, Python, Rust, Node.js, or a terminal to run. Existing projects, sessions, and encrypted credentials stay in the same application-data directory.
+
+Frontier checks GitHub releases once at launch. When a newer version is published, a banner offers **Install and restart**; the installer runs for the current user and the app reopens on the new version. **Settings → General → Check for updates** does the same on demand. Feeds are signed: the app only installs a package whose signature matches the public key built into it.
 
 The installer installs WebView2 if it is missing; that step needs internet access. This build is unsigned. Project-specific dependencies are separate: npm checks need Node.js, and projects with additional Python packages can supply a `.venv`.
 
@@ -60,15 +62,21 @@ npm run desktop:build
 .venv\Scripts\python scripts/test_package.py
 ```
 
-The build bundles the backend with PyInstaller, then creates a Tauri NSIS installer. Release builds refuse to fall back to a development checkout if their bundled backend is missing. The bundled Python runner supports unittest, pytest, and compileall without a system Python installation. Signing and automatic-update distribution are not configured.
+The build bundles the backend with PyInstaller, then creates a Tauri NSIS installer. Release builds refuse to fall back to a development checkout if their bundled backend is missing. The bundled Python runner supports unittest, pytest, and compileall without a system Python installation.
+
+Updates are signed with a minisign key that is not in this repository. Set `TAURI_SIGNING_PRIVATE_KEY` to the private key's text (PowerShell: `$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content ~/.tauri/frontier.key -Raw`) before `npm run desktop:build` so the installer gets its `.sig`; an already built installer can be signed afterwards with `npx tauri signer sign -f ~/.tauri/frontier.key <installer>`. Then run `.venv\Scripts\python scripts/write_update_manifest.py` to write `latest.json` beside it. A GitHub release for tag `v<version>` needs the installer, its `.sig`, and `latest.json`; installed copies read `releases/latest/download/latest.json`. The public key lives in `src-tauri/tauri.conf.json`; losing the private key means shipping a new key with a manually installed version. Authenticode signing of the installer itself is not configured.
 
 ## Everyday use
 
 1. Create a project or open an existing folder using the native folder picker.
 2. Pick an agent next to the composer, and what it may do this turn.
 3. Type a message and press Enter. Shift+Enter adds a line.
-4. The agent works in the folder. When it finishes, its reply appears with the files it changed; open Files, Changes, or Terminal as needed.
+4. The agent works in the folder. When it finishes, its reply appears with the files it changed, how long it took, its tokens in and out, and its cost when the model has rates; open Files, Changes, or Terminal as needed.
 5. Pick a different agent whenever you like. The next turn goes to it, and it is given this conversation and the same folder.
+
+While a turn is running, Enter queues the next message for the moment it finishes, and Ctrl+Enter stops the turn and sends the new message instead. A turn is one opaque subprocess, so that is what steering means here: what the agent had already written to the folder stays, and the new message is sent with the conversation so far. Queued messages are shown under the conversation and can be removed; stopping a turn drops its queue.
+
+Right-click a session to rename, pin, or archive it. Pinned sessions stay at the top; archived ones move to an **Archived** list at the bottom of the sidebar. A turn that finishes while Frontier is in the background raises a desktop notification with a short chime; **Settings → General** turns the chime or the notification off.
 
 Ctrl+N starts a session, Ctrl+K finds a session, and Escape closes the contextual panel. Project and session selection, drafts, and appearance survive a restart.
 
