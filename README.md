@@ -13,7 +13,7 @@ folder looked like before and after.
 
 ## Install the desktop application
 
-Run `src-tauri/target/release/bundle/nsis/Frontier_0.4.6_x64-setup.exe`. The per-user Windows installer includes Frontier, its Python runtime, backend dependencies, and frontend assets. Launch **Frontier** from the Start menu afterward. It does not need this repository, Python, Rust, Node.js, or a terminal to run. Existing projects, sessions, and encrypted credentials stay in the same application-data directory.
+Run `src-tauri/target/release/bundle/nsis/Frontier_0.4.7_x64-setup.exe`. The per-user Windows installer includes Frontier, its Python runtime, backend dependencies, and frontend assets. Launch **Frontier** from the Start menu afterward. It does not need this repository, Python, Rust, Node.js, or a terminal to run. Existing projects, sessions, and encrypted credentials stay in the same application-data directory.
 
 The installer installs WebView2 if it is missing; that step needs internet access. This build is unsigned. Project-specific dependencies are separate: npm checks need Node.js, and projects with additional Python packages can supply a `.venv`.
 
