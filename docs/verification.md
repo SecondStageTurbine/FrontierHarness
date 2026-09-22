@@ -324,3 +324,19 @@ that line. Two new tests cover editing and search inside the project boundary (i
 refused `.env` write and the workspace boundary) and message search across sessions. The suite
 is at 85. The terminal itself was verified at runtime by launching the installed build with
 WebView2 remote debugging and driving it over the Chrome DevTools Protocol with Playwright.
+
+Version 0.8.0 is the polish batch, plus the new application icon. Adaptive is the default
+selection whenever an agent is connected: the selector no longer restores a project's last
+manual pick on open, and a manual pick holds only while that project stays open. The first turn's
+prompt asks for a `Title:` line, `take_title` strips it from the reply and names the session
+unless the user has already renamed it (`auto_named` is cleared by `PATCH`). `context_usage`
+measures the transcript the agent would be sent against `TRANSCRIPT_LIMIT` and is attached to
+the session detail; the composer shows it as a meter with a Compact action. `AgentRunner.compact`
+asks the conversation's agent, under Read only, for a handoff summary and stores it on the
+session with the id of the last message it covers; `conversation()` then hands `build_prompt`
+only later messages plus the summary, and the commit-message writer shares the same agent
+choice through `AgentRunner.writer`. A fifth native command, `open_with`, launches `code`,
+`cursor` or the file manager on a folder from a fixed list of tools. Prompt history and the
+draft stash are composer-only state, the stash in localStorage per project. The icon set was
+regenerated with `tauri icon` from the supplied artwork after flood-filling its black canvas
+to transparent. Four new tests cover the title line, the meter, and compaction. The suite is at 89.

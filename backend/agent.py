@@ -13,6 +13,7 @@ attempt fails or the agent says it cannot, a stronger one continues the same tur
 handoff. A manual choice is never second-guessed.
 """
 import asyncio
+import re
 import time
 from pathlib import Path
 
@@ -36,6 +37,14 @@ HANDOVER = (
     'Answer the final USER message.'
 )
 CONTINUING = 'The conversation so far follows. Answer the final USER message.'
+# The first reply names the conversation. One line the harness strips, instead of a second call.
+TITLE_ASK = ('On the very first line of your reply write "Title: " followed by a title for this conversation '
+             'of at most six words, then continue your actual reply on the next line.')
+TITLE_LINE = re.compile(r'^\s*\**\s*Title:\s*\**\s*(.+?)\s*\**\s*$', re.IGNORECASE)
+COMPACT_ASK = ('Write a handoff summary of the conversation below for an agent that will continue it without seeing '
+               'the original messages: the objective, what was decided, what was done and which files changed, what '
+               'is still open, and anything the user asked to keep in mind. Plain prose or short bullets, under 600 '
+               'words. Reply with the summary only; do not run commands or change files.')
 # Two agents, asked to reinstall Frontier, stopped its processes to free the executable and
 # ended their own turn with it, before the installer ran. The host is named so the agent knows.
 HOST = ('You are running inside Frontier, a desktop application; this turn is one of its subprocesses. '
@@ -83,11 +92,37 @@ def transcript(messages):
     return lines
 
 
-def build_prompt(messages, switched, handoff=None, mode=None):
+def conversation(session):
+    """The messages an agent is sent, and the summary standing in for the ones compacted away."""
+    messages = session.get('messages') or []
+    summary = session.get('summary')
+    if summary:
+        index = next((i for i, m in enumerate(messages) if m['id'] == summary['through']), -1)
+        return messages[index+1:], summary['text']
+    return messages, None
+
+
+def context_usage(session):
+    """How full the transcript is against the limit, as the composer shows it."""
+    messages, summary = conversation(session)
+    lines = transcript(messages)
+    if summary:
+        lines.insert(0, summary)
+    chars = len('\n\n'.join(lines))
+    dropped = 0
+    while len('\n\n'.join(lines)) > TRANSCRIPT_LIMIT and len(lines) > 1:
+        lines.pop(0)
+        dropped += 1
+    compacted = (session.get('summary') or {}).get('count', 0)
+    return {'chars': chars, 'limit': TRANSCRIPT_LIMIT, 'dropped': dropped, 'compacted': compacted}
+
+
+def build_prompt(messages, switched, handoff=None, mode=None, summary=None, first=False):
     """Instructions, then as much of the conversation as fits, ending at the new message.
 
     A handoff, when present, is what a previous agent left behind on this same turn; it goes
-    ahead of the conversation so the next agent continues rather than starts over.
+    ahead of the conversation so the next agent continues rather than starts over. A summary
+    stands in for messages that were compacted away.
     """
     lines = transcript(messages)
     dropped = 0
@@ -97,11 +132,26 @@ def build_prompt(messages, switched, handoff=None, mode=None):
     head = (HANDOVER if switched else CONTINUING) + ' ' + HOST
     if mode in POSTURE:
         head += ' ' + POSTURE[mode]
+    if first:
+        head += ' ' + TITLE_ASK
     if dropped:
         head += f' The first {dropped} messages of this conversation were dropped to fit; say so if one is needed.'
     if handoff:
         head += '\n\n' + handoff
+    if summary:
+        head += '\n\nEarlier messages of this conversation were compacted into this summary:\n' + summary
     return head + '\n\n' + '\n\n'.join(lines)
+
+
+def take_title(text):
+    """The title line an agent was asked for, and the reply without it."""
+    if not text:
+        return None, text
+    first, _, rest = text.lstrip().partition('\n')
+    found = TITLE_LINE.match(first)
+    if not found:
+        return None, text
+    return found.group(1).strip().strip('"\'')[:80] or None, rest.lstrip('\n')
 
 
 def fingerprint(files, tenant_id, project_id, session_id=None):
@@ -202,8 +252,9 @@ class AgentRunner:
                  'changes': [], 'input_tokens': None, 'output_tokens': None,
                  'created_at': now(), 'finished_at': None}
         session['messages'].append(reply)
-        if len(session['messages']) == 2:
+        if len(session['messages']) == 2 and session.get('name') in (None, '', 'New session'):
             session['name'] = content.splitlines()[0][:80]
+            session['auto_named'] = True  # The first reply may still improve on this.
         session['updated_at'] = now()
         self.store.put(tenant_id, 'sessions', session)
         project.update(last_session_id=session_id, last_model_id=model_id, last_mode=mode)
@@ -313,7 +364,9 @@ class AgentRunner:
                 raise ProviderError(f'{config["name"]} is not running: nothing at {localhealth.where(config)} is serving it. Start that server, or pick another agent.')
             for _ in range(1 + (MAX_ESCALATIONS if adaptive_turn else 0)):
                 tried.add(config['id'])
-                prompt = build_prompt(session['messages'], bool(message.get('switched_from')), handoff_text, mode)
+                visible, summary = conversation(session)
+                prompt = build_prompt(visible, bool(message.get('switched_from')), handoff_text, mode, summary,
+                                      first=sum(1 for m in session['messages'] if m['role'] == 'user') == 1)
                 result, error = None, None
                 try:
                     result = await self.broker.invoke_agent(tenant_id, config, prompt, mode, root)
@@ -374,8 +427,12 @@ class AgentRunner:
                 changes = changes_between(before, fingerprint(self.files, tenant_id, project_id, session_id))
             except (OSError, ValueError):
                 changes = []  # A folder that vanished mid-turn is already reported by the turn itself.
+        title, text = take_title(result.text if result else '')
+        if title and session.get('auto_named'):
+            session['name'] = title
+            session['auto_named'] = False
         message.update(status=status, error=error, changes=changes, finished_at=now(), checkpoint=checkpoint,
-                       content=(result.text if result else '') or (error or ''),
+                       content=text or (error or ''),
                        input_tokens=result.input_tokens if result else None,
                        output_tokens=result.output_tokens if result else None,
                        cost=self.cost(tenant_id, (result.served_by if result else None) or message.get('model_id'), result))
@@ -394,6 +451,40 @@ class AgentRunner:
         self.store.event(tenant_id, session_id, f'turn.{status}',
                          error or (summary if mode != 'read' else 'Answered without touching the folder.'),
                          message_id=message_id)
+
+    def writer(self, tenant_id, session, project):
+        """The agent that writes on the conversation's behalf: its last one, the project's, or any."""
+        agents = self.agents(tenant_id)
+        if not agents:
+            raise ValueError('Connect a Claude, Codex or OpenCode agent first.')
+        preferred = [m.get('model_id') for m in reversed(session['messages']) if m.get('role') == 'assistant'] + [project.get('last_model_id')]
+        return next((a for pick in preferred if pick and pick != ADAPTIVE for a in agents if a['id'] == pick), agents[0])
+
+    async def compact(self, tenant_id, project_id, session_id):
+        """Replace everything said so far with a summary the current agent writes, so the next turn
+        is sent that instead. The messages stay in the conversation for the user; only the agent
+        stops seeing them.
+        """
+        if self.busy(tenant_id, session_id):
+            raise ValueError('This conversation is still working. Wait for it to finish or stop it.')
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        project = self.store.get(tenant_id, 'projects', project_id)
+        visible, summary = conversation(session)
+        done = [m for m in visible if m.get('status') != 'running']
+        if len(done) < 2:
+            raise ValueError('There is nothing to compact yet.')
+        config = self.writer(tenant_id, session, project)
+        prompt = COMPACT_ASK + ('\n\nSummary of messages compacted earlier:\n' + summary if summary else '') + '\n\n' + '\n\n'.join(transcript(done))
+        result = await self.broker.invoke_agent(tenant_id, config, prompt, 'read', str(self.files.root(tenant_id, project_id, session_id)))
+        text = (result.text or '').strip()
+        if not text:
+            raise ValueError(f'{config["name"]} returned no summary.')
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        session['summary'] = {'text': text, 'through': done[-1]['id'], 'created_at': now(), 'model_name': config['name'],
+                              'count': (session.get('summary') or {}).get('count', 0) + len(done)}
+        self.store.put(tenant_id, 'sessions', session)
+        self.store.event(tenant_id, session_id, 'session.compacted', f'{config["name"]} summarised {len(done)} messages.')
+        return session
 
     async def revert(self, tenant_id, project_id, session_id, message_id):
         """Put every file this turn touched back to how it was before it, and record that.

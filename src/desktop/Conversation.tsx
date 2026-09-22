@@ -1,5 +1,5 @@
 import {useState} from 'react';
-import {Check,ChevronRight,LoaderCircle,FileCode2,AlertTriangle,Square,ArrowRightLeft,Eye,Pencil,Zap,Clock,X,Undo2} from 'lucide-react';
+import {Check,ChevronRight,LoaderCircle,FileCode2,AlertTriangle,Square,ArrowRightLeft,Eye,Pencil,Zap,Clock,X,Undo2,FoldVertical} from 'lucide-react';
 import {MarkdownOutput} from '../components/Markdown';
 import {duration,money} from '../lib/api';
 import {modeLabels,type Message,type Mode,type Session} from '../types';
@@ -10,11 +10,14 @@ export function Conversation({session,onInspect,onUnqueue,onRevert}:{session:Ses
  const [visible,setVisible]=useState(20);
  const shown=session.messages.slice(-visible);
  const queue=session.queue||[];
+ const [showSummary,setShowSummary]=useState(false);
+ const boundary=session.summary?.through;
  return <div className="conversation-thread">
   {session.messages.length>visible&&<button className="history-more" onClick={()=>setVisible(v=>v+20)}>Load earlier messages</button>}
-  {shown.map(message=>message.role==='user'
-   ?<section className="conversation-turn" key={message.id}><div className="user-message"><span className="message-author">You</span><p>{message.content}</p></div></section>
-   :<AgentMessage key={message.id} message={message} onInspect={onInspect} onRevert={onRevert}/>)}
+  {shown.map(message=><div key={message.id} className={message.id===boundary?'':undefined}>{message.role==='user'
+   ?<section className="conversation-turn"><div className="user-message"><span className="message-author">You</span><p>{message.content}</p></div></section>
+   :<AgentMessage message={message} onInspect={onInspect} onRevert={onRevert}/>}
+   {message.id===boundary&&session.summary&&<div className="compact-note"><button onClick={()=>setShowSummary(v=>!v)}><FoldVertical size={13}/>{session.summary.count} earlier messages compacted by {session.summary.model_name}. The agent now sees this summary instead.<ChevronRight size={12} className={showSummary?'expanded-chevron':''}/></button>{showSummary&&<div className="compact-summary"><MarkdownOutput text={session.summary.text}/></div>}</div>}</div>)}
   {queue.map((q,i)=><section className="conversation-turn queued" key={q.id}><div className="user-message"><span className="message-author"><Clock size={11}/> Queued {i+1} of {queue.length} · {modeLabels[q.mode]}</span><p>{q.content}</p>{onUnqueue&&<button className="icon-button" aria-label="Remove from queue" title="Remove from queue" onClick={()=>onUnqueue(q.id)}><X size={12}/></button>}</div></section>)}
  </div>;
 }

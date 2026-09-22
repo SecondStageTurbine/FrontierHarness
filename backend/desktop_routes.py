@@ -13,6 +13,7 @@ from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
 from . import gitops
 from .adaptive import ADAPTIVE
+from .agent import context_usage
 from .broker import CLI_TOOLS
 
 def attachment_note(store,tenant_id,root,attachment_ids):
@@ -238,14 +239,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         diff=await gitops.staged_diff(root)
         if not diff.strip():
             raise ValueError('Stage some changes first.')
-        agents=runner.agents(tenant_id)
-        if not agents:
-            raise ValueError('Connect a Claude, Codex or OpenCode agent to write commit messages.')
-        preferred=[]
-        if session_id:
-            preferred+=[m.get('model_id') for m in reversed(store.get(tenant_id,'sessions',session_id)['messages']) if m.get('role')=='assistant']
-        preferred.append(store.get(tenant_id,'projects',project_id).get('last_model_id'))
-        config=next((a for pick in preferred if pick and pick!=ADAPTIVE for a in agents if a['id']==pick),agents[0])
+        config=runner.writer(tenant_id,store.get(tenant_id,'sessions',session_id) if session_id else {'messages':[]},store.get(tenant_id,'projects',project_id))
         prompt=('Write a git commit message for the staged diff below. Reply with the message only: a summary line '
                 'under 72 characters, then optionally a blank line and a short body in plain sentences. No code fences, '
                 'no preamble, and do not run any commands.\n\n'+diff)
@@ -301,7 +295,14 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
     @app.get('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}')
     def session_detail(tenant_id:str,project_id:str,session_id:str,request:Request):
         scoped(request,tenant_id)
-        return get_session(tenant_id,project_id,session_id)
+        session=get_session(tenant_id,project_id,session_id)
+        return {**session,'context':context_usage(session)}
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/compact')
+    async def compact(tenant_id:str,project_id:str,session_id:str,request:Request):
+        scoped(request,tenant_id)
+        get_session(tenant_id,project_id,session_id)
+        return await runner.compact(tenant_id,project_id,session_id)
 
     @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/instructions')
     async def instruct(tenant_id:str,project_id:str,session_id:str,payload:InstructionInput,request:Request):
@@ -319,6 +320,8 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         scoped(request,tenant_id)
         session=get_session(tenant_id,project_id,session_id)
         session.update({k:v for k,v in payload.model_dump().items() if v is not None})
+        if payload.name is not None:
+            session['auto_named']=False  # A name the user chose is never replaced by the agent's.
         return store.put(tenant_id,'sessions',session)
 
     @app.delete('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/queue/{item_id}')

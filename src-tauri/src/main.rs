@@ -75,6 +75,30 @@ fn pty_close(ptys: State<Ptys>, id: String) -> Result<(),String> {
     if let Some(mut pty) = ptys.0.lock().map_err(|_|"terminal registry busy")?.remove(&id) { let _ = pty.child.kill(); }
     Ok(())
 }
+/// Open a project folder in an editor the user has on their PATH, or reveal it in the file manager.
+/// The tool is one of a fixed few; nothing typed by the page ever becomes a command name.
+#[tauri::command]
+fn open_with(tool: String, path: String) -> Result<(),String> {
+    if !Path::new(&path).is_dir() { return Err("That folder is not available.".into()); }
+    let mut command = match (tool.as_str(), cfg!(windows)) {
+        ("code", true) | ("cursor", true) => { let mut c=Command::new("cmd"); c.args(["/C",&tool,&path]); c }
+        ("code", false) | ("cursor", false) => { let mut c=Command::new(&tool); c.arg(&path); c }
+        ("explorer", true) => { let mut c=Command::new("explorer.exe"); c.arg(&path); c }
+        ("explorer", false) => { let mut c=Command::new(if cfg!(target_os="macos") {"open"} else {"xdg-open"}); c.arg(&path); c }
+        _ => return Err("Unknown tool.".into()),
+    };
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    let output = command.stdin(Stdio::null()).output().map_err(|e|e.to_string())?;
+    if tool != "explorer" && !output.status.success() {
+        let text = String::from_utf8_lossy(&output.stderr).to_string() + &String::from_utf8_lossy(&output.stdout);
+        return Err(if text.contains("not recognized") || text.contains("not found") {
+            format!("{} is not on your PATH. Install it, or enable its shell command from the editor.", if tool=="code" {"VS Code (code)"} else {"Cursor (cursor)"})
+        } else { text.trim().chars().take(300).collect() });
+    }
+    Ok(())
+}
+
 fn close_ptys(handle: &tauri::AppHandle) {
     if let Some(state)=handle.try_state::<Ptys>() { if let Ok(mut map)=state.0.lock() { for (_,mut pty) in map.drain() { let _=pty.child.kill(); } } }
 }
@@ -140,7 +164,7 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .manage(Ptys(Mutex::new(HashMap::new())))
-        .invoke_handler(tauri::generate_handler![pty_open,pty_write,pty_resize,pty_close])
+        .invoke_handler(tauri::generate_handler![pty_open,pty_write,pty_resize,pty_close,open_with])
         .setup(|app| {
             let data = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&data)?;

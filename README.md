@@ -13,7 +13,7 @@ folder looked like before and after.
 
 ## Install the desktop application
 
-Run `src-tauri/target/release/bundle/nsis/Frontier_0.7.0_x64-setup.exe`. The per-user Windows installer includes Frontier, its Python runtime, backend dependencies, and frontend assets. Launch **Frontier** from the Start menu afterward. It does not need this repository, Python, Rust, Node.js, or a terminal to run. Existing projects, sessions, and encrypted credentials stay in the same application-data directory.
+Run `src-tauri/target/release/bundle/nsis/Frontier_0.8.0_x64-setup.exe`. The per-user Windows installer includes Frontier, its Python runtime, backend dependencies, and frontend assets. Launch **Frontier** from the Start menu afterward. It does not need this repository, Python, Rust, Node.js, or a terminal to run. Existing projects, sessions, and encrypted credentials stay in the same application-data directory.
 
 Frontier checks GitHub releases once at launch. When a newer version is published, a banner offers **Install and restart**; the installer runs for the current user and the app reopens on the new version. **Settings → General → Check for updates** does the same on demand. Feeds are signed: the app only installs a package whose signature matches the public key built into it.
 
@@ -69,12 +69,20 @@ Updates are signed with a minisign key that is not in this repository. Set `TAUR
 ## Everyday use
 
 1. Create a project or open an existing folder using the native folder picker.
-2. Pick an agent next to the composer, and what it may do this turn.
+2. The agent selector opens on **Adaptive**, which picks an agent per message; choose a specific agent next to the composer to override it for as long as the project stays open, and choose what the agent may do this turn.
 3. Type a message and press Enter. Shift+Enter adds a line.
 4. The agent works in the folder. When it finishes, its reply appears with the files it changed, how long it took, its tokens in and out, and its cost when the model has rates; open Files, Changes, or Terminal as needed. **Revert this turn** under the changed files puts every file the turn touched back to how it was before it.
 5. Pick a different agent whenever you like. The next turn goes to it, and it is given this conversation and the same folder.
 
 While a turn is running, Enter queues the next message for the moment it finishes, and Ctrl+Enter stops the turn and sends the new message instead. A turn is one opaque subprocess, so that is what steering means here: what the agent had already written to the folder stays, and the new message is sent with the conversation so far. Queued messages are shown under the conversation and can be removed; stopping a turn drops its queue.
+
+### The composer
+
+A session is named by its first reply: the agent is asked to put a one-line title at the top of its first answer, Frontier takes it off the reply and onto the session, and a name you set yourself is never replaced. ArrowUp in an empty composer walks back through your earlier messages in the session and ArrowDown returns. Ctrl+Shift+S stashes the draft aside; a **Stash** chip below the composer lists stashed drafts per project and puts one back.
+
+The meter below the composer shows how much of the transcript limit the conversation the agent is sent occupies. Past 70 percent it turns amber and offers **Compact**; once the oldest messages are already being dropped, it says how many. Compact asks the current agent, under Read only, for a handoff summary of everything so far and sends that in place of the earlier messages from then on. The messages stay in the conversation for you, with a note at the point of compaction that shows the summary.
+
+Right-click a project for **Open in VS Code**, **Open in Cursor**, or **Show in Explorer**; a session with a worktree offers the same for that worktree. The editor commands need `code` or `cursor` on your PATH, which each editor's own "install shell command" enables.
 
 ### Working alongside the agent
 
