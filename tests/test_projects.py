@@ -136,6 +136,28 @@ def test_a_project_check_records_its_own_output_in_the_conversation(tmp_path):
         assert c.get(route).json()['commands'][0]['id']==record['id']
 
 
+def test_removing_a_project_untracks_it_but_keeps_the_folder(tmp_path):
+    import sqlite3
+    with TestClient(create_app(str(tmp_path/'state'),ScriptedAgent())) as c:
+        t=setup(c);connect_agent(c,t)
+        root=tmp_path/'project';root.mkdir();(root/'keep.md').write_text('stays on disk',encoding='utf-8')
+        p=c.post(f'/api/t/{t}/projects',json={'name':'Removable','root':str(root)}).json()
+        s=c.post(f'/api/t/{t}/projects/{p["id"]}/sessions',json={}).json()
+        db=sqlite3.connect(tmp_path/'state'/'harness.db')
+        db.execute('INSERT INTO events(tenant_id,run_id,data) VALUES(?,?,?)',(t,s['id'],'{"type":"note","message":"x","time":"now"}'))
+        db.commit();db.close()
+        assert c.delete(f'/api/t/{t}/projects/{p["id"]}').json()=={'ok':True}
+        assert [x['name'] for x in c.get(f'/api/t/{t}/projects').json()]==[]
+        # The conversation is gone with the project, and its events do not outlive it.
+        assert c.get(f"/api/t/{t}/projects/{p['id']}/sessions/{s['id']}").status_code==403
+        db=sqlite3.connect(tmp_path/'state'/'harness.db')
+        assert db.execute('SELECT COUNT(*) FROM events WHERE tenant_id=? AND run_id=?',(t,s['id'])).fetchone()[0]==0
+        assert db.execute("SELECT COUNT(*) FROM entities WHERE tenant_id=? AND kind='sessions'",(t,)).fetchone()[0]==0
+        db.close()
+    # Untracking is not deletion: the folder and its files are exactly where they were.
+    assert (root/'keep.md').read_text(encoding='utf-8')=='stays on disk'
+
+
 def test_desktop_ticket_is_one_use_and_does_not_bypass_workspace_scope(tmp_path,monkeypatch):
     monkeypatch.setenv('HARNESS_DESKTOP_TOKEN','one-time-desktop-ticket')
     monkeypatch.delenv('HARNESS_IMPORT_ENV',raising=False)

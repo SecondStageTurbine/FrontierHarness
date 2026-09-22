@@ -17,3 +17,7 @@ html,body,#root{height:100%;overflow:hidden}.desktop-workspace{display:flex;heig
 .sidebar-status.compact{padding:3px;min-width:14px;justify-content:center}
 .sidebar-status.compact span{display:none}
 .session-list>button .sidebar-status{margin-left:auto}
+.menu-backdrop{position:fixed;inset:0;z-index:90}
+.context-menu{position:fixed;z-index:100;display:flex;flex-direction:column;gap:2px;min-width:185px;padding:4px;background:var(--elevated);border:1px solid var(--border);border-radius:8px;box-shadow:0 12px 32px #0009}
+.context-menu button{display:flex;align-items:center;gap:8px;width:100%;padding:7px 9px;border:0;background:none;border-radius:6px;font-size:11px;color:var(--muted);cursor:pointer;text-align:left}
+.context-menu button:hover{background:color-mix(in srgb,var(--danger) 12%,transparent);color:var(--danger)}

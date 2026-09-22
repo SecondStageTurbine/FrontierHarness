@@ -123,6 +123,22 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         scoped(request,tenant_id)
         return files.create(tenant_id,payload.name,payload.root)
 
+    @app.delete('/api/t/{tenant_id}/projects/{project_id}')
+    def remove_project(tenant_id:str,project_id:str,request:Request):
+        """Untrack a project from this workspace. The folder on disk is left exactly where it is."""
+        scoped(request,tenant_id)
+        store.get(tenant_id,'projects',project_id)
+        sessions=[s for s in store.list(tenant_id,'sessions') if s['project_id']==project_id]
+        if any(runner.busy(tenant_id,s['id']) for s in sessions):
+            raise ValueError('Stop the conversation that is still working before removing this project.')
+        with store.db() as db:
+            for s in sessions:
+                db.execute('DELETE FROM events WHERE tenant_id=? AND run_id=?',(tenant_id,s['id']))
+        for s in sessions:
+            store.delete(tenant_id,'sessions',s['id'])
+        store.delete(tenant_id,'projects',project_id)
+        return {'ok':True}
+
     @app.get('/api/t/{tenant_id}/projects/{project_id}/files')
     def tree(tenant_id:str,project_id:str,request:Request):
         scoped(request,tenant_id)
