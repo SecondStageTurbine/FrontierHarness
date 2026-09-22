@@ -13,7 +13,7 @@ folder looked like before and after.
 
 ## Install the desktop application
 
-Run `src-tauri/target/release/bundle/nsis/Frontier_0.6.0_x64-setup.exe`. The per-user Windows installer includes Frontier, its Python runtime, backend dependencies, and frontend assets. Launch **Frontier** from the Start menu afterward. It does not need this repository, Python, Rust, Node.js, or a terminal to run. Existing projects, sessions, and encrypted credentials stay in the same application-data directory.
+Run `src-tauri/target/release/bundle/nsis/Frontier_0.7.0_x64-setup.exe`. The per-user Windows installer includes Frontier, its Python runtime, backend dependencies, and frontend assets. Launch **Frontier** from the Start menu afterward. It does not need this repository, Python, Rust, Node.js, or a terminal to run. Existing projects, sessions, and encrypted credentials stay in the same application-data directory.
 
 Frontier checks GitHub releases once at launch. When a newer version is published, a banner offers **Install and restart**; the installer runs for the current user and the app reopens on the new version. **Settings → General → Check for updates** does the same on demand. Feeds are signed: the app only installs a package whose signature matches the public key built into it.
 
@@ -76,6 +76,14 @@ Updates are signed with a minisign key that is not in this repository. Set `TAUR
 
 While a turn is running, Enter queues the next message for the moment it finishes, and Ctrl+Enter stops the turn and sends the new message instead. A turn is one opaque subprocess, so that is what steering means here: what the agent had already written to the folder stays, and the new message is sent with the conversation so far. Queued messages are shown under the conversation and can be removed; stopping a turn drops its queue.
 
+### Working alongside the agent
+
+The **Terminal** panel is a real shell: PowerShell on Windows, your login shell elsewhere, one ConPTY per tab, opened in the folder the conversation works in, worktree included. It runs with your full environment as your own terminal would, unlike agent tools, whose environment is stripped of provider keys. Shells outlive the panel: close and reopen it and the same sessions are still there. Closing Frontier ends them. In a browser, where there is no native process, the panel falls back to the bounded project check runner described under execution boundaries.
+
+The **Files** panel edits: open a text file, type, and press **Save** or Ctrl+S. The write goes through the same path boundary as every read, so credentials, linked paths, and anything outside the project stay untouchable. A save while a turn is running is attributed to that turn, as any write during a turn is. The search box above the tree finds lines in every readable text file; each hit opens the file at that line. The sidebar search still filters sessions by name and now also searches their messages across every project in the workspace, listing matches under **In messages**.
+
+A path the agent writes in inline code, such as `src/app.py:42`, is a link: it opens the file in the Files panel at that line.
+
 ### Git
 
 When the project folder is a git repository, the **Changes** panel opens with the repository: the current branch, what is staged, and the working tree. Tick a change to stage it, open it to read its diff, write a commit message or press **Write message** to have the current agent draft one from the staged diff under Read only, then **Commit** and **Push**. These are your own commits made by Frontier's git, so they need no posture; an agent's commits still need Full auto. Below the repository, the panel keeps the per-turn record it always had.
@@ -122,7 +130,7 @@ A turn is one opaque subprocess, so there is no boundary inside it at which to r
 - The backend owns workspace checks. Foreign resource IDs raise `TenantIsolationViolationException`; switching workspaces clears cached resources and open event streams.
 - Project file APIs reject traversal, linked paths, sensitive names, private app storage, and overlapping project roots across workspaces. These bound what Frontier itself reads and shows; the agent reaches the folder through its own tools.
 - One turn at a time per conversation. Multiple backend workers on the same database are rejected. A turn interrupted by a restart is closed out, never replayed: its subprocess died with the application, and whatever it had already written to the folder is still there.
-- Your own project checks in the Terminal panel support Python pytest, unittest, compileall, and npm test/build/test/lint/typecheck, with a 120-second timeout and no shell operators. They are separate from the commands an agent runs through its own tool.
+- The Terminal panel in the desktop app is your own shell, running as you with no restriction beyond your account's. In a browser it falls back to the bounded project check runner: Python pytest, unittest, compileall, and npm test/build/test/lint/typecheck, with a 120-second timeout and no shell operators. Both are separate from the commands an agent runs through its own tool.
 - File views are bounded: up to 2,000 tree entries, UTF-8 text under 300 KB, and text-based PDFs up to 5 MB and 100 pages, read as extracted text. A turn takes at most 30 minutes before it is stopped.
 
 Native application state lives under `%LOCALAPPDATA%\dev.frontier.harness`. Managed project folders are stored in the adjacent `Frontier Projects` directory, segregated by workspace. Back up the database and `secret.key` together. Deleting workspace records does not recursively delete user project folders.
@@ -148,6 +156,7 @@ The Python suite exercises workspace boundaries, a turn's file record, agent swi
 | Contracts | `backend/schemas.py` |
 | One message, one agentic turn, the switch, and revert | `backend/agent.py` |
 | Git status, staging, commit, push, checkpoints, worktrees | `backend/gitops.py` |
+| Native terminals (ConPTY) and update, notification, dialog plugins | `src-tauri/src/main.rs` |
 | Launching an agent tool, postures, subscription accounts | `backend/broker.py` |
 | Workspace-scoped persistence and encryption | `backend/store.py` |
 | Project file reading and the user's own checks | `backend/projects.py` |

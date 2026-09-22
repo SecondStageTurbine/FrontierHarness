@@ -307,3 +307,20 @@ first message, and `ProjectFiles.root` routes the agent, file reads, project che
 and git status to it. Four new tests cover status and staging, exact revert in a repository
 (including a binary the fingerprint excluded), revert without a repository, and a worktree
 session end to end through the HTTP API, including the workspace boundary. The suite is at 83.
+
+Version 0.7.0 is the "working alongside the agent" batch. The Terminal panel became a real shell:
+four Tauri commands (`pty_open`, `pty_write`, `pty_resize`, `pty_close`) wrap `portable-pty`, each
+tab is one ConPTY running PowerShell in the conversation's folder, output streams to the page as
+`pty-data` events, and the app's own commands are named in `build.rs` and granted in the
+capability because the page is a remote loopback origin to Tauri. Shells and their xterm elements
+live in a module-level registry so the panel can close and reopen without killing them, and every
+child is killed on exit. Files can be saved through `PUT …/file`, which goes through
+`ProjectFiles.resolve` like every read and refuses PDFs and binary content; the `FileWrite`
+schema deliberately does not strip whitespace so a trailing newline survives. `GET …/search`
+scans every readable text file from the walk for the query, and `GET /search/sessions` scans the
+workspace's conversations for a message containing it. Inline code that looks like a relative
+path with an extension, optionally `:line`, renders as a button that opens the Files panel at
+that line. Two new tests cover editing and search inside the project boundary (including a
+refused `.env` write and the workspace boundary) and message search across sessions. The suite
+is at 85. The terminal itself was verified at runtime by launching the installed build with
+WebView2 remote debugging and driving it over the Chrome DevTools Protocol with Playwright.

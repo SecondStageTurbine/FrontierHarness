@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "desktop",
-  "description": "Frontier's own loopback UI may open the native project folder picker, check for and install updates, restart the app, and post desktop notifications.",
+  "description": "Frontier's own loopback UI may open the native project folder picker, check for and install updates, restart the app, post desktop notifications, and run terminals in the project folder.",
   "windows": [
     "main"
   ],
@@ -15,6 +15,10 @@
     "dialog:allow-open",
     "updater:default",
     "process:default",
-    "notification:default"
+    "notification:default",
+    "allow-pty-open",
+    "allow-pty-write",
+    "allow-pty-resize",
+    "allow-pty-close"
   ]
 }

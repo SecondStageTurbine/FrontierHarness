@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from fastapi import Request, Response, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse
-from .schemas import ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput, GitPaths, CommitInput
+from .schemas import ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput, GitPaths, CommitInput, FileWrite
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
 from . import gitops
@@ -151,6 +151,38 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
     def file(tenant_id:str,project_id:str,path:str,request:Request,session_id:str|None=None):
         scoped(request,tenant_id)
         return files.read(tenant_id,project_id,path,session_id)
+
+    @app.put('/api/t/{tenant_id}/projects/{project_id}/file')
+    def write_file(tenant_id:str,project_id:str,path:str,payload:FileWrite,request:Request,session_id:str|None=None):
+        """The user's own edit. If a turn is running it is attributed to that turn, as any write during it is."""
+        scoped(request,tenant_id)
+        return files.write(tenant_id,project_id,path,payload.content,session_id)
+
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/search')
+    def search_files(tenant_id:str,project_id:str,q:str,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        return files.search(tenant_id,project_id,q,session_id)
+
+    @app.get('/api/t/{tenant_id}/search/sessions')
+    def search_sessions(tenant_id:str,q:str,request:Request):
+        """Conversations in this workspace whose messages mention the query, newest first."""
+        scoped(request,tenant_id)
+        needle=q.strip().lower()
+        if len(needle)<2:
+            raise ValueError('Search for at least two characters.')
+        hits=[]
+        for session in store.list(tenant_id,'sessions'):
+            for message in reversed(session.get('messages') or []):
+                text=message.get('content') or ''
+                at=text.lower().find(needle)
+                if at>=0:
+                    start=max(0,at-60)
+                    hits.append({'session_id':session['id'],'project_id':session['project_id'],'name':session['name'],'archived':bool(session.get('archived')),
+                                 'role':message.get('role'),'snippet':('…' if start else '')+text[start:at+len(needle)+80].replace('\n',' ')+('…' if at+len(needle)+80<len(text) else '')})
+                    break
+            if len(hits)>=50:
+                break
+        return hits
 
     def git_path(path):
         clean=path.replace('\\','/')

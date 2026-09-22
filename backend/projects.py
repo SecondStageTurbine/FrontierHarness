@@ -152,6 +152,44 @@ class ProjectFiles:
                     return result,refused
         return result,refused
 
+    def write(self,tenant_id,project_id,relative,content,session_id=None):
+        """The user's own edit of one text file, through the same boundary the reads go through."""
+        file=self.resolve(tenant_id,project_id,relative,session_id)
+        if not file.is_file():
+            raise ValueError('This file is no longer available.')
+        if file.suffix.lower()=='.pdf' or '\x00' in content:
+            raise ValueError('Only text files can be edited here.')
+        try:
+            file.write_text(content,encoding='utf-8',newline='')
+        except OSError:
+            raise ValueError('This file could not be written. Another program may be holding it.') from None
+        return self.read(tenant_id,project_id,relative,session_id)
+
+    def search(self,tenant_id,project_id,query,session_id=None,limit=200):
+        """Lines containing the query, case-insensitively, across every readable text file.
+
+        ponytail: a linear scan of the walk on each request, bounded by the walker's 2,000-file cap
+        and the reader's size limit. Add an index if a project ever makes this slow.
+        """
+        needle=query.strip().lower()
+        if len(needle)<2:
+            raise ValueError('Search for at least two characters.')
+        hits=[];scanned=0
+        for entry in self.walk(tenant_id,project_id,session_id)[0]:
+            if not entry['text'] or entry['path'].lower().endswith('.pdf'):
+                continue
+            try:
+                text=self.read(tenant_id,project_id,entry['path'],session_id)['content']
+            except ValueError:
+                continue
+            scanned+=1
+            for number,line in enumerate(text.splitlines(),1):
+                if needle in line.lower():
+                    hits.append({'path':entry['path'],'line':number,'text':line.strip()[:240]})
+                    if len(hits)>=limit:
+                        return {'hits':hits,'files':scanned,'truncated':True}
+        return {'hits':hits,'files':scanned,'truncated':False}
+
     def read(self,tenant_id,project_id,relative,session_id=None):
         file=self.resolve(tenant_id,project_id,relative,session_id)
         if not file.is_file():

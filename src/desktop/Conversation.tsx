@@ -6,7 +6,7 @@ import {modeLabels,type Message,type Mode,type Session} from '../types';
 export type InspectorTab='Files'|'Changes'|'Terminal';
 const modeIcon={read:Eye,edit:Pencil,auto:Zap};
 
-export function Conversation({session,onInspect,onUnqueue,onRevert}:{session:Session;onInspect:(tab:InspectorTab,path?:string)=>void;onUnqueue?:(id:string)=>void;onRevert?:(id:string)=>void}){
+export function Conversation({session,onInspect,onUnqueue,onRevert}:{session:Session;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onUnqueue?:(id:string)=>void;onRevert?:(id:string)=>void}){
  const [visible,setVisible]=useState(20);
  const shown=session.messages.slice(-visible);
  const queue=session.queue||[];
@@ -32,7 +32,7 @@ function turnStats(m:Message){
 }
 const compact=(n:number)=>n>=1000?`${(n/1000).toFixed(n>=10000?0:1)}k`:String(n);
 
-function AgentMessage({message,onInspect,onRevert}:{message:Message;onInspect:(tab:InspectorTab,path?:string)=>void;onRevert?:(id:string)=>void}){
+function AgentMessage({message,onInspect,onRevert}:{message:Message;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onRevert?:(id:string)=>void}){
  const running=message.status==='running';
  const ModeIcon=modeIcon[(message.mode||'edit') as Mode];
  const changes=message.changes||[];
@@ -51,7 +51,7 @@ function AgentMessage({message,onInspect,onRevert}:{message:Message;onInspect:(t
   </div>}
   {running
    ?<div className="agent-working-caption">{message.routing?.status==='choosing'?'Adaptive is choosing an agent for this message.':'Reading the project and working in it. The reply appears when the agent finishes.'}</div>
-   :message.content&&<div className="inline-build"><MarkdownOutput text={message.content}/></div>}
+   :message.content&&<div className="inline-build"><MarkdownOutput text={message.content} onFile={(p,l)=>onInspect('Files',p,l)}/></div>}
   {changes.length>0&&<div className={`changed-summary ${message.reverted_at?'reverted':''}`}>
    <button onClick={()=>onInspect('Changes')}><FileCode2 size={14}/>{changes.length} file{changes.length===1?'':'s'} changed<ChevronRight size={13}/></button>
    {message.reverted_at?<span className="reverted-badge"><Undo2 size={12}/>Reverted</span>:onRevert&&!running&&<button className="revert-button" title={message.checkpoint?'Put every file this turn touched back exactly as it was, from the repository checkpoint':'Write back what each changed file held before this turn'} onClick={()=>onRevert(message.id)}><Undo2 size={12}/>Revert this turn</button>}

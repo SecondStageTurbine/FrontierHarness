@@ -108,3 +108,7 @@ class InstructionInput(StrictModel):
 
 class CommandInput(StrictModel):
     command: str = Field(min_length=1, max_length=300)
+
+class FileWrite(BaseModel):
+    model_config = ConfigDict(extra='forbid')  # File content keeps its whitespace, trailing newline included.
+    content: str = Field(max_length=300000)

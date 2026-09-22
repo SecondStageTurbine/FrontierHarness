@@ -1,7 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{net::{TcpListener,TcpStream},path::{Path,PathBuf},process::{Child,Command,Stdio},sync::Mutex,time::Duration};
-use tauri::{Manager,WebviewUrl,WebviewWindowBuilder};
+use std::{collections::HashMap,io::{Read,Write},net::{TcpListener,TcpStream},path::{Path,PathBuf},process::{Child,Command,Stdio},sync::Mutex,time::Duration};
+use tauri::{Emitter,Manager,State,WebviewUrl,WebviewWindowBuilder};
+use portable_pty::{native_pty_system,CommandBuilder,PtySize};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -18,6 +19,64 @@ impl Drop for Backend {
             if let Some(mut child) = child.take() { stop_backend(&mut child); }
         }
     }
+}
+
+// The user's own terminals, one ConPTY each, in the folder the conversation works in. They run
+// with the user's full environment, unlike agent CLIs, because this is the user's shell.
+struct Pty { master: Box<dyn portable_pty::MasterPty + Send>, writer: Box<dyn Write + Send>, child: Box<dyn portable_pty::Child + Send + Sync> }
+struct Ptys(Mutex<HashMap<String,Pty>>);
+#[derive(Clone,serde::Serialize)]
+struct PtyData { id: String, data: String }
+#[derive(Clone,serde::Serialize)]
+struct PtyExit { id: String, code: Option<u32> }
+
+#[tauri::command]
+fn pty_open(app: tauri::AppHandle, ptys: State<Ptys>, cwd: String, cols: u16, rows: u16) -> Result<String,String> {
+    if !Path::new(&cwd).is_dir() { return Err("That folder is not available.".into()); }
+    let pair = native_pty_system().openpty(PtySize{rows,cols,pixel_width:0,pixel_height:0}).map_err(|e|e.to_string())?;
+    let mut cmd = if cfg!(windows) { let mut c=CommandBuilder::new("powershell.exe"); c.arg("-NoLogo"); c }
+                  else { CommandBuilder::new(std::env::var("SHELL").unwrap_or_else(|_|"/bin/bash".into())) };
+    cmd.cwd(&cwd);
+    cmd.env("TERM","xterm-256color");
+    let child = pair.slave.spawn_command(cmd).map_err(|e|e.to_string())?;
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().map_err(|e|e.to_string())?;
+    let writer = pair.master.take_writer().map_err(|e|e.to_string())?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let (emit_id, handle) = (id.clone(), app.clone());
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => { let _ = handle.emit("pty-data", PtyData{id:emit_id.clone(),data:String::from_utf8_lossy(&buf[..n]).into_owned()}); }
+            }
+        }
+        let code = handle.try_state::<Ptys>().and_then(|s| s.0.lock().ok().and_then(|mut m| m.remove(&emit_id).and_then(|mut p| p.child.wait().ok().map(|st| st.exit_code()))));
+        let _ = handle.emit("pty-exit", PtyExit{id:emit_id,code});
+    });
+    ptys.0.lock().map_err(|_|"terminal registry busy")?.insert(id.clone(), Pty{master:pair.master,writer,child});
+    Ok(id)
+}
+#[tauri::command]
+fn pty_write(ptys: State<Ptys>, id: String, data: String) -> Result<(),String> {
+    let mut map = ptys.0.lock().map_err(|_|"terminal registry busy")?;
+    let pty = map.get_mut(&id).ok_or("This terminal has closed.")?;
+    pty.writer.write_all(data.as_bytes()).map_err(|e|e.to_string())
+}
+#[tauri::command]
+fn pty_resize(ptys: State<Ptys>, id: String, cols: u16, rows: u16) -> Result<(),String> {
+    let map = ptys.0.lock().map_err(|_|"terminal registry busy")?;
+    let pty = map.get(&id).ok_or("This terminal has closed.")?;
+    pty.master.resize(PtySize{rows,cols,pixel_width:0,pixel_height:0}).map_err(|e|e.to_string())
+}
+#[tauri::command]
+fn pty_close(ptys: State<Ptys>, id: String) -> Result<(),String> {
+    if let Some(mut pty) = ptys.0.lock().map_err(|_|"terminal registry busy")?.remove(&id) { let _ = pty.child.kill(); }
+    Ok(())
+}
+fn close_ptys(handle: &tauri::AppHandle) {
+    if let Some(state)=handle.try_state::<Ptys>() { if let Ok(mut map)=state.0.lock() { for (_,mut pty) in map.drain() { let _=pty.child.kill(); } } }
 }
 
 fn launch(app: &mut tauri::App, data: &Path) -> Result<(),Box<dyn std::error::Error>> {
@@ -80,6 +139,8 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
+        .manage(Ptys(Mutex::new(HashMap::new())))
+        .invoke_handler(tauri::generate_handler![pty_open,pty_write,pty_resize,pty_close])
         .setup(|app| {
             let data = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&data)?;
@@ -95,6 +156,7 @@ fn main() {
         .expect("Unable to start Frontier");
     app.run(|handle,event| {
         if matches!(event,tauri::RunEvent::Exit) {
+            close_ptys(handle);
             if let Some(state)=handle.try_state::<Backend>() {
                 if let Ok(mut guard)=state.0.lock() { if let Some(mut child)=guard.take() { stop_backend(&mut child); } }
             }
