@@ -38,6 +38,23 @@ def attachment_note(store,tenant_id,project_id,attachment_ids):
     return ('\n\nAttached for context — harness-managed files in your working directory. '
             'Read them as needed; they are not project source and should not be committed:\n'+'\n'.join(lines))
 
+def session_sidebar_state(session,active_sessions):
+    """Small status model for the desktop rail: working, waiting, done, or quiet."""
+    if session.get('id') in active_sessions:
+        return 'working'
+    messages=session.get('messages') or []
+    if not messages:
+        return None
+    last=messages[-1]
+    if last.get('role')=='assistant':
+        status=last.get('status')
+        if status=='running':
+            return 'working'
+        if status in ('failed','cancelled'):
+            return 'waiting'
+        return 'done'
+    return 'waiting'
+
 def install_desktop_routes(app,store,runner,user,scoped,create_session):
     files=ProjectFiles(store)
     ticket_used=False
@@ -73,9 +90,10 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
 
     @app.get('/api/t/{tenant_id}/activity')
     def activity(tenant_id:str,request:Request):
-        """Which conversations still have a turn running, so the sidebar can show it."""
+        """Conversation status for the sidebar, across projects."""
         scoped(request,tenant_id)
         active=[]
+        active_sessions=set()
         for (tid,session_id),task in list(runner.turns.items()):
             if tid!=tenant_id or task.done():
                 continue
@@ -83,8 +101,22 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
                 session=store.get(tenant_id,'sessions',session_id)
             except TenantIsolationViolationException:
                 continue
+            active_sessions.add(session_id)
             active.append({'project_id':session['project_id'],'session_id':session_id})
-        return {'active':active}
+        sessions=[]
+        project_states={}
+        priority={'working':3,'waiting':2,'done':1}
+        for session in store.list(tenant_id,'sessions'):
+            state=session_sidebar_state(session,active_sessions)
+            if not state:
+                continue
+            item={'project_id':session['project_id'],'session_id':session['id'],'state':state}
+            sessions.append(item)
+            current=project_states.get(session['project_id'])
+            if not current or priority[state]>priority[current]:
+                project_states[session['project_id']]=state
+        projects=[{'project_id':project_id,'state':state} for project_id,state in project_states.items()]
+        return {'active':active,'sessions':sessions,'projects':projects}
 
     @app.post('/api/t/{tenant_id}/projects')
     def create_project(tenant_id:str,payload:ProjectInput,request:Request):

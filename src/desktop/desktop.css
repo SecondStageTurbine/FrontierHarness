@@ -7,3 +7,13 @@ html,body,#root{height:100%;overflow:hidden}.desktop-workspace{display:flex;heig
 /* Readable desktop scale, including compact secondary controls. */
 .desktop-workspace{font-size:13px}.desktop-search input,.session-list>button,.project-shortcuts>button,.project-sidebar-footer>button,.project-sidebar-footer select{font-size:11px}.sidebar-section-label{font-size:11px}.session-title>strong{font-size:11px}.agent-model{font-size:11px}.agent-block-state{font-size:10px}.agent-working-caption,.inline-activity,.composer-footnote,.file-tree button,.terminal-help,.inspector-tabs button{font-size:10px}.inline-plan,.inline-review,.inline-build{font-size:12px}.empty-team small{font-size:10px}.composer>textarea{font-size:13px}.code-view,.unified-diff,.terminal-output{font-size:12px}.team-advanced{margin:15px 0}.team-advanced>summary{cursor:pointer;margin-bottom:15px}.team-advanced>div{border-top:1px solid var(--border);padding-top:12px}.execution-settings-nav{display:flex;gap:8px;margin-bottom:20px}.desktop-settings-body .run-stats{grid-template-columns:repeat(2,1fr)}.desktop-settings-body .team-grid{grid-template-columns:repeat(2,1fr)}.desktop-settings-body .workflow-editor-layout{display:block}.project-list>button.working{color:var(--foreground)}.project-working-dot{width:7px;height:7px;border-radius:50%;background:var(--primary);flex-shrink:0;animation:project-pulse 1.6s ease-in-out infinite}
 @keyframes project-pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 color-mix(in srgb,var(--primary) 45%,transparent)}50%{opacity:.55;box-shadow:0 0 0 4px transparent}}
+.project-list>button.has-status,.session-list>button.has-status{color:var(--foreground)}
+.sidebar-status{display:inline-flex;align-items:center;gap:4px;min-width:0;flex-shrink:0;padding:2px 5px;border-radius:999px;border:1px solid color-mix(in srgb,currentColor 28%,transparent);background:color-mix(in srgb,currentColor 8%,transparent);font-size:8px;line-height:1.1;font-weight:600;text-transform:uppercase;letter-spacing:0;color:var(--subtle)}
+.sidebar-status i{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
+.sidebar-status.working{color:var(--primary)}
+.sidebar-status.waiting{color:var(--warning)}
+.sidebar-status.done{color:var(--success)}
+.sidebar-status.working i{animation:project-pulse 1.6s ease-in-out infinite}
+.sidebar-status.compact{padding:3px;min-width:14px;justify-content:center}
+.sidebar-status.compact span{display:none}
+.session-list>button .sidebar-status{margin-left:auto}
