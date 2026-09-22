@@ -16,7 +16,7 @@ import asyncio
 import time
 from pathlib import Path
 
-from . import adaptive, localhealth
+from . import adaptive, gitops, localhealth
 from .adaptive import ADAPTIVE, MAX_ESCALATIONS
 from .broker import CLI_TOOLS, ProviderError
 from .projects import ProjectFiles
@@ -104,7 +104,7 @@ def build_prompt(messages, switched, handoff=None, mode=None):
     return head + '\n\n' + '\n\n'.join(lines)
 
 
-def fingerprint(files, tenant_id, project_id):
+def fingerprint(files, tenant_id, project_id, session_id=None):
     """Every readable file's hash and text, so a turn's edits can be shown afterwards.
 
     An agent writes to the folder itself, so this before-and-after is the only record of what
@@ -113,11 +113,11 @@ def fingerprint(files, tenant_id, project_id):
     ponytail: reads the whole project twice per turn, bounded by the walker's file cap and the
     reader's size limit. Switch to a git diff where the folder is a repository if it ever shows.
     """
-    entries, _ = files.walk(tenant_id, project_id)
+    entries, _ = files.walk(tenant_id, project_id, session_id)
     captured = {}
     for entry in entries:
         try:
-            item = files.read(tenant_id, project_id, entry['path'])
+            item = files.read(tenant_id, project_id, entry['path'], session_id)
         except ValueError:
             continue  # Unreadable before is unreadable after; it cannot produce a diff either way.
         captured[entry['path']] = (item['hash'], item['content'])
@@ -178,7 +178,7 @@ class AgentRunner:
             session.setdefault('queue', []).append({'id': uid(), 'content': content, 'model_id': model_id, 'mode': mode, 'created_at': now()})
             return self.store.put(tenant_id, 'sessions', session)
         project = self.store.get(tenant_id, 'projects', project_id)
-        if not Path(project['root']).is_dir():
+        if not self.files.root(tenant_id, project_id, session_id).is_dir():
             raise FileNotFoundError('This project’s folder is not available. Reconnect the drive or open the project again.')
         adaptive_turn = model_id == ADAPTIVE
         if adaptive_turn:
@@ -294,8 +294,12 @@ class AgentRunner:
         session = self.store.get(tenant_id, 'sessions', session_id)
         message = next(m for m in session['messages'] if m['id'] == message_id)
         adaptive_turn = message['routing']['mode'] == 'adaptive'
+        root = str(self.files.root(tenant_id, project_id, session_id))
         # Read only cannot change the folder, so it is not read twice to prove that.
-        before = fingerprint(self.files, tenant_id, project_id) if mode != 'read' else {}
+        before = fingerprint(self.files, tenant_id, project_id, session_id) if mode != 'read' else {}
+        # In a repository, the whole working tree is also checkpointed as hidden git objects, so a
+        # turn can be put back exactly, binaries included, without touching the user's branch.
+        before_ref = await self.checkpoint(root, f'Frontier: before turn {message_id}') if mode != 'read' else None
         status, error, result = 'complete', None, None
         attempts, tried, handoff_text, ranked = [], set(), None, []
         try:
@@ -312,14 +316,14 @@ class AgentRunner:
                 prompt = build_prompt(session['messages'], bool(message.get('switched_from')), handoff_text, mode)
                 result, error = None, None
                 try:
-                    result = await self.broker.invoke_agent(tenant_id, config, prompt, mode, project['root'])
+                    result = await self.broker.invoke_agent(tenant_id, config, prompt, mode, root)
                 except ProviderError as exc:
                     if exc.exhausted:
                         raise  # Every login for this agent is spent; that is a real failure, not a struggle.
                     error = str(exc)
                 if not adaptive_turn:
                     break
-                changed = changes_between(before, fingerprint(self.files, tenant_id, project_id)) if mode != 'read' else []
+                changed = changes_between(before, fingerprint(self.files, tenant_id, project_id, session_id)) if mode != 'read' else []
                 reason = adaptive.struggled(result.text if result else '', error, mode, changed)
                 following = adaptive.stronger(ranked, tried) if reason else None
                 attempts.append({'id': config['id'], 'name': config['name'], 'outcome': reason or 'completed',
@@ -349,9 +353,17 @@ class AgentRunner:
         finally:
             if result is not None and status == 'complete':
                 error = None
-            self.finish(tenant_id, project_id, session_id, message_id, status, error, result, before, mode, attempts)
+            after_ref = await self.checkpoint(root, f'Frontier: after turn {message_id}') if before_ref else None
+            self.finish(tenant_id, project_id, session_id, message_id, status, error, result, before, mode, attempts,
+                        checkpoint={'before': before_ref, 'after': after_ref} if before_ref and after_ref else None)
 
-    def finish(self, tenant_id, project_id, session_id, message_id, status, error, result, before, mode, attempts=()):
+    async def checkpoint(self, root, label):
+        try:
+            return await gitops.checkpoint(root, label)
+        except (gitops.GitError, OSError, asyncio.CancelledError):
+            return None  # A folder that is not a repository, or a git that cannot run, simply has no checkpoint.
+
+    def finish(self, tenant_id, project_id, session_id, message_id, status, error, result, before, mode, attempts=(), checkpoint=None):
         session = self.store.get(tenant_id, 'sessions', session_id)
         message = next((m for m in session['messages'] if m['id'] == message_id), None)
         if message is None or message['status'] != 'running':
@@ -359,10 +371,10 @@ class AgentRunner:
         changes = []
         if mode != 'read':
             try:
-                changes = changes_between(before, fingerprint(self.files, tenant_id, project_id))
+                changes = changes_between(before, fingerprint(self.files, tenant_id, project_id, session_id))
             except (OSError, ValueError):
                 changes = []  # A folder that vanished mid-turn is already reported by the turn itself.
-        message.update(status=status, error=error, changes=changes, finished_at=now(),
+        message.update(status=status, error=error, changes=changes, finished_at=now(), checkpoint=checkpoint,
                        content=(result.text if result else '') or (error or ''),
                        input_tokens=result.input_tokens if result else None,
                        output_tokens=result.output_tokens if result else None,
@@ -382,6 +394,45 @@ class AgentRunner:
         self.store.event(tenant_id, session_id, f'turn.{status}',
                          error or (summary if mode != 'read' else 'Answered without touching the folder.'),
                          message_id=message_id)
+
+    async def revert(self, tenant_id, project_id, session_id, message_id):
+        """Put every file this turn touched back to how it was before it, and record that.
+
+        With a checkpoint the repository restores the exact bytes, binaries included, and files
+        the turn created are deleted. Without one, the recorded before-text of each change is
+        written back, which covers everything the fingerprint could read.
+        """
+        if self.busy(tenant_id, session_id):
+            raise ValueError('This conversation is still working. Wait for it to finish or stop it.')
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        message = next((m for m in session['messages'] if m['id'] == message_id), None)
+        if message is None or message['role'] != 'assistant':
+            raise ValueError('That turn is not in this conversation.')
+        if message.get('reverted_at'):
+            raise ValueError('This turn was already reverted.')
+        root = self.files.root(tenant_id, project_id, session_id)
+        checkpoint = message.get('checkpoint')
+        if checkpoint:
+            restored = await gitops.restore(root, checkpoint['before'], checkpoint['after'])
+        else:
+            restored = []
+            for change in message.get('changes') or []:
+                target = self.files.resolve(tenant_id, project_id, change['path'], session_id)
+                if change['status'] == 'added':
+                    if target.is_file():
+                        target.unlink()
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(change['before'] or '', encoding='utf-8')
+                restored.append(change['path'])
+        if not restored:
+            raise ValueError('This turn left no file changes to revert.')
+        message['reverted_at'] = now()
+        session['updated_at'] = now()
+        self.store.put(tenant_id, 'sessions', session)
+        self.store.event(tenant_id, session_id, 'turn.reverted',
+                         f'{len(restored)} file{"" if len(restored) == 1 else "s"} put back to before this turn.', message_id=message_id)
+        return session
 
     def cost(self, tenant_id, model_id, result):
         """USD for this turn from the model's own per-million rates, or None when either is unknown."""

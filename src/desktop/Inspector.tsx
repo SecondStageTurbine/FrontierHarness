@@ -4,11 +4,14 @@ import {useResource,useWorkspace,useRefresh} from '../app/context';
 import {api,download} from '../lib/api';
 import type {ProjectFile,Project,Session,FileChange} from '../types';
 import type {InspectorTab} from './Conversation';
+import {GitPanel} from './GitPanel';
 
 export function Inspector({tab,onTab,onClose,project,session,filePath,onFile,busy}:{tab:InspectorTab;onTab:(t:InspectorTab)=>void;onClose:()=>void;project:Project;session?:Session;filePath:string|null;onFile:(s:string)=>void;busy:boolean}){
  const {path}=useWorkspace(),refresh=useRefresh();
- const tree=useResource<ProjectFile[]>(`/projects/${project.id}/files`);
- const fileQ=useResource<{path:string;content:string}>(`/projects/${project.id}/file?path=${encodeURIComponent(filePath||'')}`,!!filePath&&tab==='Files');
+ // A session in its own worktree reads that worktree; the project folder otherwise.
+ const scope=session?.worktree?`session_id=${session.id}`:'';
+ const tree=useResource<ProjectFile[]>(`/projects/${project.id}/files${scope?`?${scope}`:''}`);
+ const fileQ=useResource<{path:string;content:string}>(`/projects/${project.id}/file?path=${encodeURIComponent(filePath||'')}${scope?`&${scope}`:''}`,!!filePath&&tab==='Files');
  const [split,setSplit]=useState(false),[command,setCommand]=useState(''),[running,setRunning]=useState(false),[error,setError]=useState('');
  const [changeId,setChangeId]=useState('');
  // Every turn's edits, newest last, so the panel shows the conversation's whole effect on the
@@ -22,13 +25,15 @@ export function Inspector({tab,onTab,onClose,project,session,filePath,onFile,bus
   <div className="inspector-tabs">{(['Files','Changes','Terminal'] as InspectorTab[]).map(t=><button key={t} className={tab===t?'selected':''} onClick={()=>onTab(t)}>{t}</button>)}<button className="icon-button" title="Close panel" aria-label="Close contextual panel" onClick={onClose}><X size={15}/></button></div>
   <div className="inspector-content">
    {tab==='Files'&&<><div className="file-browser">
-    <div className="file-browser-heading"><Folder size={14}/>{project.name}<small>{tree.data?.length||0} files</small></div>
+    <div className="file-browser-heading"><Folder size={14}/>{project.name}{session?.worktree&&<em className="branch-chip" title={session.worktree.path}>{session.worktree.branch}</em>}<small>{tree.data?.length||0} files</small></div>
     {tree.error?<p className="thread-error">{tree.error.message}</p>:tree.isPending?<p className="inspector-empty">Reading project files…</p>:!tree.data?.length?<p className="inspector-empty">This folder is empty. Files the agent creates appear here.</p>:<FileTree files={tree.data} changes={changes} selected={filePath} onSelect={onFile}/>}
    </div>{filePath&&<div className="file-preview">
     <div className="file-preview-title"><FileCode2 size={14}/><span>{filePath}</span><button className="icon-button" aria-label="Download open file" title="Download file" disabled={!fileQ.data} onClick={()=>fileQ.data&&download(filePath,fileQ.data.content)}><Download size={13}/></button></div>
     {fileQ.error?<p className="thread-error">{fileQ.error.message}</p>:fileQ.data?<CodeView text={fileQ.data.content}/>:<p className="inspector-empty">Opening file…</p>}
    </div>}</>}
+   {tab==='Changes'&&<GitPanel projectId={project.id} sessionId={session?.worktree?session.id:undefined} busy={busy}/>}
    {tab==='Changes'&&(!changes.length?<p className="inspector-empty">Files the agent writes in this conversation appear here, with what they looked like before.</p>:<>
+    <div className="git-section-label turn-changes"><span>Turn changes</span><small>{changes.length}</small></div>
     <div className="change-picker">
      <select aria-label="Changed file" value={selected?.id||''} onChange={e=>setChangeId(e.target.value)}>{changes.map(c=><option key={c.id} value={c.id}>{c.path} · {c.status}</option>)}</select>
      <button className="icon-button" title={split?'Single view':'Before and after'} aria-label="Toggle split view" onClick={()=>setSplit(!split)}>{split?<AlignLeft size={15}/>:<SplitSquareHorizontal size={15}/>}</button>

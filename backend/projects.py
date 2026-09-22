@@ -74,10 +74,25 @@ class ProjectFiles:
                 raise ValueError('This folder is already open as a project, or overlaps an existing project.')
         return self.store.put(tenant_id,'projects',dict(id=project_id,name=name,root=str(location),created_at=now()))
 
-    def resolve(self,tenant_id,project_id,relative):
+    def root(self,tenant_id,project_id,session_id=None):
+        """Where a conversation's files live: its worktree when it has one, otherwise the project folder."""
         project=self.store.get(tenant_id,'projects',project_id)
+        if session_id:
+            session=self.store.get(tenant_id,'sessions',session_id)
+            if session['project_id']!=project_id:
+                raise TenantIsolationViolationException('Session is unavailable in this project.')
+            if session.get('worktree'):
+                return Path(session['worktree']['path'])
+        return Path(project['root'])
+
+    def worktree_location(self,tenant_id,project_id,branch):
+        """Worktrees are siblings of managed projects: beside private app state, never inside it."""
+        project=self.store.get(tenant_id,'projects',project_id)
+        return self.store.directory.parent/'Frontier Worktrees'/tenant_id/(re.sub(r'[^\w -]','',project['name'])[:40]+'-'+project_id[:6])/branch.split('/')[-1]
+
+    def resolve(self,tenant_id,project_id,relative,session_id=None):
         try:
-            root=Path(project['root']).resolve(strict=True)
+            root=self.root(tenant_id,project_id,session_id).resolve(strict=True)
         except OSError:
             raise ValueError('The project folder is unavailable. Reconnect the drive or restore the folder.') from None
         relative=relative.replace('\\','/')
@@ -97,18 +112,17 @@ class ProjectFiles:
             raise TenantIsolationViolationException('File access cannot leave the project root.')
         return target
 
-    def tree(self,tenant_id,project_id):
-        return self.walk(tenant_id,project_id)[0]
+    def tree(self,tenant_id,project_id,session_id=None):
+        return self.walk(tenant_id,project_id,session_id)[0]
 
-    def walk(self,tenant_id,project_id):
+    def walk(self,tenant_id,project_id,session_id=None):
         """List every entry the project exposes, and what the walk itself refused.
 
         The refusals are returned rather than dropped. A folder pruned by name holds a
         user's documents as often as a build output, and a walk that stops at its limit
         looks exactly like a smaller project to everything downstream.
         """
-        project=self.store.get(tenant_id,'projects',project_id)
-        root=Path(project['root'])
+        root=self.root(tenant_id,project_id,session_id)
         if not root.is_dir():
             raise ValueError('The project folder is unavailable. Reconnect the drive or restore the folder.')
         result=[];refused=[]
@@ -127,7 +141,7 @@ class ProjectFiles:
             for name in sorted(files):
                 relative=(Path(directory)/name).relative_to(root).as_posix()
                 try:
-                    file=self.resolve(tenant_id,project_id,relative)
+                    file=self.resolve(tenant_id,project_id,relative,session_id)
                     if file.is_file():
                         result.append({'path':relative,'size':file.stat().st_size,'text':file.suffix in TEXT_EXTENSIONS or name in ('Dockerfile','Makefile','LICENSE')})
                 except (ValueError,OSError) as exc:
@@ -138,8 +152,8 @@ class ProjectFiles:
                     return result,refused
         return result,refused
 
-    def read(self,tenant_id,project_id,relative):
-        file=self.resolve(tenant_id,project_id,relative)
+    def read(self,tenant_id,project_id,relative,session_id=None):
+        file=self.resolve(tenant_id,project_id,relative,session_id)
         if not file.is_file():
             raise ValueError('This file is no longer available.')
         try:
@@ -204,7 +218,7 @@ class ProjectFiles:
         This is the user's own check, run at their request. The agent runs its own commands
         through its tool, under the posture chosen for that turn; the two do not share a path.
         """
-        project=self.store.get(tenant_id,'projects',project_id)
+        root=self.root(tenant_id,project_id,session_id)
         session=self.store.get(tenant_id,'sessions',session_id)
         record={'id':uid(),'command':command,'started_at':now(),'finished_at':None,'status':'running','output':'','exit_code':None}
         session.setdefault('commands',[]).append(record)
@@ -222,9 +236,9 @@ class ProjectFiles:
                 current.setdefault('commands',[]).append(record)
             self.store.put(tenant_id,'sessions',current)
         try:
-            argv=self.command_argv(project['root'],command)
+            argv=self.command_argv(root,command)
             env=child_env(PYTHONUTF8='1',PYTHONIOENCODING='utf-8',CI='true',NO_COLOR='1')
-            proc=await asyncio.create_subprocess_exec(*argv,cwd=project['root'],env=env,stdin=asyncio.subprocess.DEVNULL,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT,**child_flags())
+            proc=await asyncio.create_subprocess_exec(*argv,cwd=str(root),env=env,stdin=asyncio.subprocess.DEVNULL,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT,**child_flags())
             async with asyncio.timeout(120):
                 while True:
                     data=await proc.stdout.read(4096)

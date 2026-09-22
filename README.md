@@ -13,7 +13,7 @@ folder looked like before and after.
 
 ## Install the desktop application
 
-Run `src-tauri/target/release/bundle/nsis/Frontier_0.5.0_x64-setup.exe`. The per-user Windows installer includes Frontier, its Python runtime, backend dependencies, and frontend assets. Launch **Frontier** from the Start menu afterward. It does not need this repository, Python, Rust, Node.js, or a terminal to run. Existing projects, sessions, and encrypted credentials stay in the same application-data directory.
+Run `src-tauri/target/release/bundle/nsis/Frontier_0.6.0_x64-setup.exe`. The per-user Windows installer includes Frontier, its Python runtime, backend dependencies, and frontend assets. Launch **Frontier** from the Start menu afterward. It does not need this repository, Python, Rust, Node.js, or a terminal to run. Existing projects, sessions, and encrypted credentials stay in the same application-data directory.
 
 Frontier checks GitHub releases once at launch. When a newer version is published, a banner offers **Install and restart**; the installer runs for the current user and the app reopens on the new version. **Settings → General → Check for updates** does the same on demand. Feeds are signed: the app only installs a package whose signature matches the public key built into it.
 
@@ -71,10 +71,18 @@ Updates are signed with a minisign key that is not in this repository. Set `TAUR
 1. Create a project or open an existing folder using the native folder picker.
 2. Pick an agent next to the composer, and what it may do this turn.
 3. Type a message and press Enter. Shift+Enter adds a line.
-4. The agent works in the folder. When it finishes, its reply appears with the files it changed, how long it took, its tokens in and out, and its cost when the model has rates; open Files, Changes, or Terminal as needed.
+4. The agent works in the folder. When it finishes, its reply appears with the files it changed, how long it took, its tokens in and out, and its cost when the model has rates; open Files, Changes, or Terminal as needed. **Revert this turn** under the changed files puts every file the turn touched back to how it was before it.
 5. Pick a different agent whenever you like. The next turn goes to it, and it is given this conversation and the same folder.
 
 While a turn is running, Enter queues the next message for the moment it finishes, and Ctrl+Enter stops the turn and sends the new message instead. A turn is one opaque subprocess, so that is what steering means here: what the agent had already written to the folder stays, and the new message is sent with the conversation so far. Queued messages are shown under the conversation and can be removed; stopping a turn drops its queue.
+
+### Git
+
+When the project folder is a git repository, the **Changes** panel opens with the repository: the current branch, what is staged, and the working tree. Tick a change to stage it, open it to read its diff, write a commit message or press **Write message** to have the current agent draft one from the staged diff under Read only, then **Commit** and **Push**. These are your own commits made by Frontier's git, so they need no posture; an agent's commits still need Full auto. Below the repository, the panel keeps the per-turn record it always had.
+
+Before and after every turn that may edit files, Frontier checkpoints the whole working tree as hidden git objects under `refs/frontier/checkpoints`, untracked files included and ignored files excluded. Nothing is committed to your branch and the index is untouched. **Revert this turn** restores every path the turn changed from its checkpoint, exactly and binaries included, and deletes files the turn created; later edits to those same files are undone with it. A folder that is not a repository still records each turn's readable before-and-after, and reverts from that.
+
+A new session can start **On a new branch**: Frontier adds a git worktree beside its managed projects, in `Frontier Worktrees` next to the application data, on a branch named from your first message. The agent, the Files panel, the Changes panel, and your own project checks all work in that worktree, so parallel sessions never write over each other. The branch chip in the session header says where you are. Right-click the session and choose **Remove worktree** to delete the folder; the branch and its commits stay in the repository, and the conversation continues in the project folder.
 
 Right-click a session to rename, pin, or archive it. Pinned sessions stay at the top; archived ones move to an **Archived** list at the bottom of the sidebar. A turn that finishes while Frontier is in the background raises a desktop notification with a short chime; **Settings → General** turns the chime or the notification off.
 
@@ -110,7 +118,7 @@ A turn is one opaque subprocess, so there is no boundary inside it at which to r
 
 - **An agent runs project code as the signed-in operating-system user. This is not an OS or container sandbox.** The postures above are the agent tool's own permission settings. Use Read only for a project you do not trust.
 - Switching agent replays the conversation into the one taking over, and nothing else. Tool calls and file reads belong to the tool that made them; the project folder already holds their result, and the new agent is told to read it rather than trust a summary. A conversation too long to send drops its oldest turns and says so, rather than refusing to continue.
-- A turn's file changes are recorded by reading the folder before and after it, because a project folder need not be a git repository. Anything else that writes to the folder during a turn is attributed to it.
+- A turn's file changes are recorded by reading the folder before and after it, because a project folder need not be a git repository. In a repository the working tree is also checkpointed as hidden refs before and after the turn. Anything else that writes to the folder during a turn is attributed to it.
 - The backend owns workspace checks. Foreign resource IDs raise `TenantIsolationViolationException`; switching workspaces clears cached resources and open event streams.
 - Project file APIs reject traversal, linked paths, sensitive names, private app storage, and overlapping project roots across workspaces. These bound what Frontier itself reads and shows; the agent reaches the folder through its own tools.
 - One turn at a time per conversation. Multiple backend workers on the same database are rejected. A turn interrupted by a restart is closed out, never replayed: its subprocess died with the application, and whatever it had already written to the folder is still there.
@@ -138,7 +146,8 @@ The Python suite exercises workspace boundaries, a turn's file record, agent swi
 | Native startup and backend lifecycle | `src-tauri/src/main.rs`, `backend/desktop.py` |
 | Native launch authentication and project/session API | `backend/desktop_routes.py` |
 | Contracts | `backend/schemas.py` |
-| One message, one agentic turn, and the switch | `backend/agent.py` |
+| One message, one agentic turn, the switch, and revert | `backend/agent.py` |
+| Git status, staging, commit, push, checkpoints, worktrees | `backend/gitops.py` |
 | Launching an agent tool, postures, subscription accounts | `backend/broker.py` |
 | Workspace-scoped persistence and encryption | `backend/store.py` |
 | Project file reading and the user's own checks | `backend/projects.py` |

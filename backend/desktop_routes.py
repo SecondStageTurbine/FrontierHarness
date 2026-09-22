@@ -4,22 +4,25 @@ import base64
 import hmac
 import json
 import os
+import re
 from pathlib import Path
 from fastapi import Request, Response, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse
-from .schemas import ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput
+from .schemas import ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput, GitPaths, CommitInput
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
+from . import gitops
+from .adaptive import ADAPTIVE
+from .broker import CLI_TOOLS
 
-def attachment_note(store,tenant_id,project_id,attachment_ids):
-    """Write each named attachment into the project so the agent can open the actual file.
+def attachment_note(store,tenant_id,root,attachment_ids):
+    """Write each named attachment into the folder the agent works in so it can open the actual file.
 
     They land in .frontier/attachments: a dot directory the tree and change fingerprint ignore,
     so context files never read as project changes."""
     if not attachment_ids:
         return ''
-    project=store.get(tenant_id,'projects',project_id)
-    folder=Path(project['root'])/'.frontier'/'attachments'
+    folder=Path(root)/'.frontier'/'attachments'
     lines=[]
     for aid in dict.fromkeys(attachment_ids):
         attachment=store.get(tenant_id,'attachments',aid)
@@ -34,7 +37,7 @@ def attachment_note(store,tenant_id,project_id,attachment_ids):
         if not target.exists():
             folder.mkdir(parents=True,exist_ok=True)
             target.write_bytes(data)
-        lines.append(f'- {target.relative_to(project["root"]).as_posix()}')
+        lines.append(f'- {target.relative_to(root).as_posix()}')
     return ('\n\nAttached for context — harness-managed files in your working directory. '
             'Read them as needed; they are not project source and should not be committed:\n'+'\n'.join(lines))
 
@@ -140,14 +143,85 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         return {'ok':True}
 
     @app.get('/api/t/{tenant_id}/projects/{project_id}/files')
-    def tree(tenant_id:str,project_id:str,request:Request):
+    def tree(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
         scoped(request,tenant_id)
-        return files.tree(tenant_id,project_id)
+        return files.tree(tenant_id,project_id,session_id)
 
     @app.get('/api/t/{tenant_id}/projects/{project_id}/file')
-    def file(tenant_id:str,project_id:str,path:str,request:Request):
+    def file(tenant_id:str,project_id:str,path:str,request:Request,session_id:str|None=None):
         scoped(request,tenant_id)
-        return files.read(tenant_id,project_id,path)
+        return files.read(tenant_id,project_id,path,session_id)
+
+    def git_path(path):
+        clean=path.replace('\\','/')
+        if not clean or clean.startswith('/') or ':' in clean or any(p in ('..','') for p in clean.split('/')):
+            raise ValueError('Use a relative path inside the project.')
+        return clean
+
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/git')
+    async def git_status(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
+        """The repository as the Changes panel shows it, for the project folder or the session's worktree."""
+        scoped(request,tenant_id)
+        root=files.root(tenant_id,project_id,session_id)
+        result=await gitops.status(root)
+        result['worktree']=store.get(tenant_id,'sessions',session_id).get('worktree') if session_id else None
+        return result
+
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/git/diff')
+    async def git_diff(tenant_id:str,project_id:str,path:str,request:Request,staged:bool=False,session_id:str|None=None):
+        scoped(request,tenant_id)
+        return {'path':path,'staged':staged,'diff':await gitops.diff(files.root(tenant_id,project_id,session_id),git_path(path),staged)}
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/git/stage')
+    async def git_stage(tenant_id:str,project_id:str,payload:GitPaths,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        root=files.root(tenant_id,project_id,session_id)
+        await gitops.stage(root,[git_path(p) for p in payload.paths],payload.staged)
+        return await gitops.status(root)
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/git/commit')
+    async def git_commit(tenant_id:str,project_id:str,payload:CommitInput,request:Request,session_id:str|None=None):
+        """The user's own commit of what they staged. An agent's commits still need Full auto."""
+        scoped(request,tenant_id)
+        root=files.root(tenant_id,project_id,session_id)
+        output=await gitops.commit(root,payload.message)
+        if session_id:
+            store.event(tenant_id,session_id,'git.committed',payload.message.splitlines()[0][:120])
+        return {'output':output,**await gitops.status(root)}
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/git/push')
+    async def git_push(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        root=files.root(tenant_id,project_id,session_id)
+        output=await gitops.push(root)
+        if session_id:
+            store.event(tenant_id,session_id,'git.pushed',output.splitlines()[-1][:120] if output else 'Pushed.')
+        return {'output':output,**await gitops.status(root)}
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/git/message')
+    async def git_message(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
+        """A commit message for what is staged, written by an agent under Read only from the diff alone."""
+        scoped(request,tenant_id)
+        root=files.root(tenant_id,project_id,session_id)
+        diff=await gitops.staged_diff(root)
+        if not diff.strip():
+            raise ValueError('Stage some changes first.')
+        agents=runner.agents(tenant_id)
+        if not agents:
+            raise ValueError('Connect a Claude, Codex or OpenCode agent to write commit messages.')
+        preferred=[]
+        if session_id:
+            preferred+=[m.get('model_id') for m in reversed(store.get(tenant_id,'sessions',session_id)['messages']) if m.get('role')=='assistant']
+        preferred.append(store.get(tenant_id,'projects',project_id).get('last_model_id'))
+        config=next((a for pick in preferred if pick and pick!=ADAPTIVE for a in agents if a['id']==pick),agents[0])
+        prompt=('Write a git commit message for the staged diff below. Reply with the message only: a summary line '
+                'under 72 characters, then optionally a blank line and a short body in plain sentences. No code fences, '
+                'no preamble, and do not run any commands.\n\n'+diff)
+        result=await runner.broker.invoke_agent(tenant_id,config,prompt,'read',str(root))
+        text=re.sub(r'^```[a-z]*\n|```$','',(result.text or '').strip()).strip()
+        if not text:
+            raise ValueError(f'{config["name"]} returned no message.')
+        return {'message':text,'model_name':config['name']}
 
     @app.get('/api/t/{tenant_id}/projects/{project_id}/sessions')
     def sessions(tenant_id:str,project_id:str,request:Request):
@@ -156,10 +230,34 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         return [s for s in store.list(tenant_id,'sessions') if s['project_id']==project_id]
 
     @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions')
-    def new_session(tenant_id:str,project_id:str,payload:SessionInput,request:Request):
+    async def new_session(tenant_id:str,project_id:str,payload:SessionInput,request:Request):
         scoped(request,tenant_id)
-        store.get(tenant_id,'projects',project_id)
-        return store.put(tenant_id,'sessions',{'id':uid(),'project_id':project_id,'name':payload.name,'messages':[],'commands':[],'created_at':now(),'updated_at':now()})
+        project=store.get(tenant_id,'projects',project_id)
+        session={'id':uid(),'project_id':project_id,'name':payload.name,'messages':[],'commands':[],'created_at':now(),'updated_at':now()}
+        if payload.worktree:
+            branch=gitops.branch_name(payload.branch or payload.name,session['id'][:6])
+            location=files.worktree_location(tenant_id,project_id,branch)
+            await gitops.worktree_add(project['root'],location,branch)
+            session['worktree']={'path':str(location),'branch':branch}
+        return store.put(tenant_id,'sessions',session)
+
+    @app.delete('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/worktree')
+    async def drop_worktree(tenant_id:str,project_id:str,session_id:str,request:Request):
+        """Remove the session's worktree folder. Its branch stays; the conversation continues in the project folder."""
+        scoped(request,tenant_id)
+        session=get_session(tenant_id,project_id,session_id)
+        if runner.busy(tenant_id,session_id):
+            raise ValueError('Stop the turn that is still working in this worktree first.')
+        if session.get('worktree'):
+            await gitops.worktree_remove(store.get(tenant_id,'projects',project_id)['root'],session['worktree']['path'])
+            session['worktree']=None
+        return store.put(tenant_id,'sessions',session)
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/messages/{message_id}/revert')
+    async def revert_turn(tenant_id:str,project_id:str,session_id:str,message_id:str,request:Request):
+        scoped(request,tenant_id)
+        get_session(tenant_id,project_id,session_id)
+        return await runner.revert(tenant_id,project_id,session_id,message_id)
 
     def get_session(tenant_id,project_id,session_id):
         store.get(tenant_id,'projects',project_id)
@@ -178,7 +276,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         """One message, one agentic turn. The reply arrives in the session, not in this response."""
         scoped(request,tenant_id)
         get_session(tenant_id,project_id,session_id)
-        content=payload.content+attachment_note(store,tenant_id,project_id,payload.attachment_ids or [])
+        content=payload.content+attachment_note(store,tenant_id,files.root(tenant_id,project_id,session_id),payload.attachment_ids or [])
         if payload.steer and runner.busy(tenant_id,session_id):
             # A turn is one opaque subprocess, so steering means stopping it and sending this instead.
             await runner.cancel(tenant_id,session_id)

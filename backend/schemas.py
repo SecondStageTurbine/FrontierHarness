@@ -79,6 +79,17 @@ class ProjectInput(StrictModel):
 
 class SessionInput(StrictModel):
     name: str = Field(default='New session', min_length=1, max_length=120)
+    # A session can work on its own branch in a git worktree beside the project, so parallel
+    # conversations never write over each other. The branch name is derived, never taken as is.
+    worktree: bool = False
+    branch: str | None = Field(default=None, max_length=120)
+
+class GitPaths(StrictModel):
+    paths: list[str] = Field(min_length=1, max_length=500)
+    staged: bool = True
+
+class CommitInput(StrictModel):
+    message: str = Field(min_length=1, max_length=4000)
 
 class SessionPatch(StrictModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)

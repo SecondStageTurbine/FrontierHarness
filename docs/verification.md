@@ -291,3 +291,19 @@ minisign-signed package in place; the public key is in `tauri.conf.json`, the pr
 outside the repository, and `scripts/write_update_manifest.py` writes the feed. Three new tests
 cover the queue, stop-drops-queue, and cost; the API test covers rename, pin, archive, and their
 workspace boundary. The suite is at 79.
+
+Version 0.6.0 makes sessions git-native. `backend/gitops.py` wraps the git command line with the
+same allow-listed child environment as every other subprocess. The Changes panel now opens with
+the repository: status parsed from `git status --porcelain=v1 -z --branch`, per-path diffs (a
+new file diffs against `/dev/null`, which git resolves on every platform), stage and unstage,
+commit, push with the upstream set on first push, and a commit message drafted by the current
+agent under Read only from the staged diff alone. Before and after each editing turn the working
+tree is checkpointed through a temporary index into `refs/frontier/checkpoints`, so revert
+restores every changed path with `git checkout <before> -- paths` and deletes what the turn
+added, which covers binaries the readable fingerprint never saw; a folder with no repository
+reverts from the recorded before-text instead. A session created with `worktree: true` gets a
+git worktree under `Frontier Worktrees` beside the managed projects, on a branch derived from the
+first message, and `ProjectFiles.root` routes the agent, file reads, project checks, attachments
+and git status to it. Four new tests cover status and staging, exact revert in a repository
+(including a binary the fingerprint excluded), revert without a repository, and a worktree
+session end to end through the HTTP API, including the workspace boundary. The suite is at 83.
