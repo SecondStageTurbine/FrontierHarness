@@ -36,6 +36,7 @@ PROVIDER_PROFILES = {
     'claude_cli':   dict(location='cloud', cost_class='high',   coding=8,  reasoning=10, planning=10, debugging=8, architecture=10, review=10, tool_use=9, repository=9, instruction_following=9, speed=5),
     'codex_cli':    dict(location='cloud', cost_class='medium', coding=10, reasoning=8,  planning=7,  debugging=9, architecture=7,  review=7,  tool_use=9, repository=9, instruction_following=9, speed=6),
     'opencode_cli': dict(location='cloud', cost_class='low',    coding=7,  reasoning=7,  planning=6,  debugging=6, architecture=5,  review=6,  tool_use=8, repository=7, instruction_following=7, speed=7),
+    'gemini_cli':   dict(location='cloud', cost_class='low',    coding=7,  reasoning=8,  planning=7,  debugging=7, architecture=7,  review=7,  tool_use=7, repository=8, instruction_following=8, speed=8),
 }
 # Refinements keyed on the model identifier. Matched by substring, first match wins per key.
 FAMILY_PROFILES = [

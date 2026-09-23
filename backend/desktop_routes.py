@@ -8,10 +8,13 @@ import re
 from pathlib import Path
 from fastapi import Request, Response, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse
-from .schemas import ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput, GitPaths, CommitInput, FileWrite
+from .schemas import (ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput, GitPaths, CommitInput, FileWrite,
+                      McpServerInput, ApprovalDecision, ApprovalRequest, FanoutInput, AutomationInput)
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
-from . import gitops
+from . import gitops, automations
+import secrets
+from datetime import datetime, timedelta, timezone
 from .adaptive import ADAPTIVE
 from .agent import context_usage
 from .broker import CLI_TOOLS
@@ -296,7 +299,177 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
     def session_detail(tenant_id:str,project_id:str,session_id:str,request:Request):
         scoped(request,tenant_id)
         session=get_session(tenant_id,project_id,session_id)
-        return {**session,'context':context_usage(session)}
+        return {**session,'context':context_usage(session),'approvals':runner.pending(tenant_id,session_id)}
+
+    # ── Approvals: a running Claude turn asks through its permission tool, the user answers here ──
+    @app.post('/internal/approvals')
+    def approval_request(payload:ApprovalRequest,request:Request):
+        """Called by the turn's own permission tool over loopback, authenticated by the turn token."""
+        approval_id=runner.request_approval(request.headers.get('x-frontier-turn',''),payload.tool_name,payload.input,payload.tool_use_id)
+        return {'id':approval_id}
+
+    @app.get('/internal/approvals/{approval_id}')
+    async def approval_wait(approval_id:str,request:Request,wait:float=0):
+        token=request.headers.get('x-frontier-turn','')
+        approval=runner.approvals.get(approval_id)
+        if not approval or runner.turn_tokens.get(token,(None,None,None))[2]!=approval['session_id']:
+            raise HTTPException(404,'No such request.')
+        return await runner.approval_state(approval_id,wait)
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/approvals/{approval_id}')
+    def approval_decide(tenant_id:str,project_id:str,session_id:str,approval_id:str,payload:ApprovalDecision,request:Request):
+        scoped(request,tenant_id)
+        get_session(tenant_id,project_id,session_id)
+        runner.decide(tenant_id,session_id,approval_id,payload.allow,payload.message)
+        return {'ok':True}
+
+    # ── MCP servers the workspace hands to every agent that can take them ──
+    @app.get('/api/t/{tenant_id}/mcp')
+    def mcp_list(tenant_id:str,request:Request):
+        scoped(request,tenant_id)
+        return store.list(tenant_id,'mcp_servers')
+
+    @app.post('/api/t/{tenant_id}/mcp')
+    @app.put('/api/t/{tenant_id}/mcp/{server_id}')
+    def mcp_save(tenant_id:str,payload:McpServerInput,request:Request,server_id:str|None=None):
+        scoped(request,tenant_id)
+        existing=store.get(tenant_id,'mcp_servers',server_id) if server_id else {'id':uid(),'created_at':now()}
+        if any(s['name']==payload.name and s['id']!=existing['id'] for s in store.list(tenant_id,'mcp_servers')):
+            raise ValueError('Another server already has that name.')
+        return store.put(tenant_id,'mcp_servers',{**existing,**payload.model_dump()})
+
+    @app.delete('/api/t/{tenant_id}/mcp/{server_id}')
+    def mcp_delete(tenant_id:str,server_id:str,request:Request):
+        scoped(request,tenant_id)
+        store.delete(tenant_id,'mcp_servers',server_id)
+        return {'ok':True}
+
+    # ── Skills and commands the agents discover on their own; listed so the composer can offer them ──
+    def read_skills(root):
+        found=[]
+        def describe(file):
+            try:
+                text=file.read_text(encoding='utf-8',errors='replace')
+            except OSError:
+                return ''
+            m=re.search(r'^description:\s*(.+)$',text,re.M)
+            if m:
+                return m.group(1).strip().strip('"\'')[:200]
+            body=re.sub(r'^---.*?---\s*','',text,flags=re.S)
+            return next((line.strip() for line in body.splitlines() if line.strip() and not line.startswith('#')),'')[:200]
+        for scope,base in [('project',Path(root)),('user',Path.home())]:
+            for provider,folder in [('claude','.claude'),('codex','.codex'),('gemini','.gemini')]:
+                home=base/folder
+                for skill in sorted((home/'skills').glob('*/SKILL.md')) if (home/'skills').is_dir() else []:
+                    found.append({'name':skill.parent.name,'kind':'skill','scope':scope,'provider':provider,'description':describe(skill),'path':str(skill)})
+                for command in sorted((home/'commands').glob('*.md')) if (home/'commands').is_dir() else []:
+                    found.append({'name':command.stem,'kind':'command','scope':scope,'provider':provider,'description':describe(command),'path':str(command)})
+        return found
+
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/skills')
+    def skills(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        return read_skills(files.root(tenant_id,project_id,session_id))
+
+    # ── Usage: what every turn cost, from the sessions themselves ──
+    @app.get('/api/t/{tenant_id}/usage')
+    def usage(tenant_id:str,request:Request,days:int=30):
+        scoped(request,tenant_id)
+        since=datetime.now(timezone.utc)-timedelta(days=max(1,min(days,365)))
+        projects={p['id']:p['name'] for p in store.list(tenant_id,'projects')}
+        by_model,by_day,by_project={},{},{}
+        totals={'turns':0,'input_tokens':0,'output_tokens':0,'cost':0.0,'seconds':0}
+        def bump(bucket,key,label,message,seconds):
+            row=bucket.setdefault(key,{'key':key,'label':label,'turns':0,'input_tokens':0,'output_tokens':0,'cost':0.0,'seconds':0})
+            row['turns']+=1;row['input_tokens']+=message.get('input_tokens') or 0;row['output_tokens']+=message.get('output_tokens') or 0
+            row['cost']+=message.get('cost') or 0.0;row['seconds']+=seconds
+        for session in store.list(tenant_id,'sessions'):
+            for message in session.get('messages') or []:
+                if message.get('role')!='assistant' or not message.get('finished_at'):
+                    continue
+                try:
+                    finished=datetime.fromisoformat(message['finished_at'].replace('Z','+00:00'))
+                    started=datetime.fromisoformat(message['created_at'].replace('Z','+00:00'))
+                except ValueError:
+                    continue
+                if finished.tzinfo is None:
+                    finished=finished.replace(tzinfo=timezone.utc);started=started.replace(tzinfo=timezone.utc)
+                if finished<since:
+                    continue
+                seconds=max(0,int((finished-started).total_seconds()))
+                bump(by_model,message.get('model_id') or 'unknown',message.get('model_name') or 'Unknown',message,seconds)
+                bump(by_day,finished.date().isoformat(),finished.date().isoformat(),message,seconds)
+                bump(by_project,session['project_id'],projects.get(session['project_id'],'Removed project'),message,seconds)
+                totals['turns']+=1;totals['input_tokens']+=message.get('input_tokens') or 0;totals['output_tokens']+=message.get('output_tokens') or 0
+                totals['cost']+=message.get('cost') or 0.0;totals['seconds']+=seconds
+        return {'days':days,'totals':totals,'models':sorted(by_model.values(),key=lambda r:-r['turns']),
+                'projects':sorted(by_project.values(),key=lambda r:-r['turns']),'series':sorted(by_day.values(),key=lambda r:r['key'])}
+
+    # ── Preview: which local dev servers are listening ──
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/ports')
+    async def ports(tenant_id:str,project_id:str,request:Request):
+        scoped(request,tenant_id)
+        store.get(tenant_id,'projects',project_id)
+        candidates=[3000,3001,3333,4000,4200,4321,5000,5173,5174,5500,5555,6006,7860,8000,8080,8081,8501,8787,8888,9000]
+        async def probe(port):
+            try:
+                _,writer=await asyncio.wait_for(asyncio.open_connection('127.0.0.1',port),0.25)
+                writer.close()
+                return port
+            except (OSError,TimeoutError):
+                return None
+        found=await asyncio.gather(*(probe(p) for p in candidates))
+        return {'ports':[p for p in found if p]}
+
+    # ── Fan-out: one message to several agents, each in its own worktree ──
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/fanout')
+    async def fanout(tenant_id:str,project_id:str,payload:FanoutInput,request:Request):
+        scoped(request,tenant_id)
+        return await runner.fanout(tenant_id,project_id,payload.content,payload.model_ids,payload.mode)
+
+    # ── Automations: scheduled or webhook-triggered turns ──
+    @app.get('/api/t/{tenant_id}/automations')
+    def automation_list(tenant_id:str,request:Request):
+        scoped(request,tenant_id)
+        return store.list(tenant_id,'automations')
+
+    @app.post('/api/t/{tenant_id}/automations')
+    @app.put('/api/t/{tenant_id}/automations/{automation_id}')
+    def automation_save(tenant_id:str,payload:AutomationInput,request:Request,automation_id:str|None=None):
+        scoped(request,tenant_id)
+        store.get(tenant_id,'projects',payload.project_id)
+        if payload.model_id!=ADAPTIVE:
+            runner.select(tenant_id,payload.model_id)
+        existing=store.get(tenant_id,'automations',automation_id) if automation_id else {'id':uid(),'created_at':now(),'secret':secrets.token_urlsafe(24),'runs':0}
+        automation={**existing,**payload.model_dump()}
+        automation['next_run_at']=automations.stamp(automations.next_run(automation)) if automation['enabled'] else None
+        return store.put(tenant_id,'automations',automation)
+
+    @app.delete('/api/t/{tenant_id}/automations/{automation_id}')
+    def automation_delete(tenant_id:str,automation_id:str,request:Request):
+        scoped(request,tenant_id)
+        store.delete(tenant_id,'automations',automation_id)
+        return {'ok':True}
+
+    @app.post('/api/t/{tenant_id}/automations/{automation_id}/run')
+    async def automation_run(tenant_id:str,automation_id:str,request:Request):
+        scoped(request,tenant_id)
+        return await automations.run(store,runner,tenant_id,store.get(tenant_id,'automations',automation_id),trigger='manual')
+
+    @app.post('/api/hooks/{automation_id}/{secret}')
+    async def automation_hook(automation_id:str,secret:str):
+        """A webhook: no cookie, the secret in the URL is the whole credential. Same response whether or not it exists."""
+        with store.db() as db:
+            tenants=[row['id'] for row in db.execute('SELECT id FROM tenants').fetchall()]
+        for tenant_id in tenants:
+            try:
+                automation=store.get(tenant_id,'automations',automation_id)
+            except TenantIsolationViolationException:
+                continue
+            if hmac.compare_digest(automation.get('secret',''),secret) and automation.get('enabled'):
+                session=await automations.run(store,runner,tenant_id,automation,trigger='webhook')
+                return {'ok':True,'session_id':session['id']}
+        raise HTTPException(404,'No such hook.')
 
     @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/compact')
     async def compact(tenant_id:str,project_id:str,session_id:str,request:Request):

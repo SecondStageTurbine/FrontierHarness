@@ -11,11 +11,11 @@ class StrictModel(BaseModel):
 # A subscription login runs a local agent command line tool. It is the only kind of model that
 # can take a turn, because an API key reaches a model and not an agent: no tools, no file
 # access, no shell. Keyed providers stay configurable and are used for dictation.
-SUBSCRIPTION_PROVIDERS = ('claude_cli', 'codex_cli', 'opencode_cli')
+SUBSCRIPTION_PROVIDERS = ('claude_cli', 'codex_cli', 'opencode_cli', 'gemini_cli')
 
 class ModelConfig(StrictModel):
     name: str = Field(min_length=1, max_length=100)
-    provider: Literal['anthropic', 'openai', 'custom_openai', 'ollama', 'claude_cli', 'codex_cli', 'opencode_cli', 'typesafe']
+    provider: Literal['anthropic', 'openai', 'custom_openai', 'ollama', 'claude_cli', 'codex_cli', 'opencode_cli', 'gemini_cli', 'typesafe']
     model_name: str = Field(min_length=1, max_length=150)
     api_key: str | None = Field(default=None, max_length=1000)
     base_url: str | None = None
@@ -108,6 +108,60 @@ class InstructionInput(StrictModel):
 
 class CommandInput(StrictModel):
     command: str = Field(min_length=1, max_length=300)
+
+class McpServerInput(StrictModel):
+    name: str = Field(min_length=1, max_length=60, pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]*$')
+    transport: Literal['stdio', 'http'] = 'stdio'
+    command: str | None = Field(default=None, max_length=500)
+    args: list[str] = Field(default_factory=list, max_length=40)
+    env: dict[str, str] = Field(default_factory=dict)
+    url: str | None = Field(default=None, max_length=500)
+    enabled: bool = True
+
+    @model_validator(mode='after')
+    def complete(self):
+        if self.transport == 'http' and not (self.url or '').startswith(('http://', 'https://')):
+            raise ValueError('An HTTP server needs a URL starting with http:// or https://.')
+        if self.transport == 'stdio' and not self.command:
+            raise ValueError('A stdio server needs a command.')
+        return self
+
+class ApprovalDecision(StrictModel):
+    allow: bool
+    message: str | None = Field(default=None, max_length=500)
+
+class ApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+    tool_name: str = Field(default='tool', max_length=200)
+    input: dict = Field(default_factory=dict)
+    tool_use_id: str | None = None
+
+class FanoutInput(StrictModel):
+    content: str = Field(min_length=2, max_length=40000)
+    model_ids: list[str] = Field(min_length=1, max_length=8)
+    mode: Mode = 'edit'
+
+class AutomationInput(StrictModel):
+    name: str = Field(min_length=1, max_length=80)
+    project_id: str = Field(min_length=1)
+    prompt: str = Field(min_length=2, max_length=40000)
+    model_id: str = Field(min_length=1)
+    mode: Mode = 'edit'
+    every: int | None = Field(default=None, ge=1, le=10080)
+    daily_at: str | None = Field(default=None, pattern=r'^([01]\d|2[0-3]):[0-5]\d$')
+    enabled: bool = True
+
+    @model_validator(mode='after')
+    def one_schedule(self):
+        if self.every and self.daily_at:
+            raise ValueError('Choose every N minutes or a daily time, not both.')
+        return self
+
+class RemoteInput(StrictModel):
+    enabled: bool
+
+class PasswordInput(StrictModel):
+    password: str = Field(min_length=12, max_length=200)
 
 class FileWrite(BaseModel):
     model_config = ConfigDict(extra='forbid')  # File content keeps its whitespace, trailing newline included.

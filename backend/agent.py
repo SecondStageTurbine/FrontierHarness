@@ -13,7 +13,10 @@ attempt fails or the agent says it cannot, a stronger one continues the same tur
 handoff. A manual choice is never second-guessed.
 """
 import asyncio
+import os
 import re
+import secrets
+import sys
 import time
 from pathlib import Path
 
@@ -195,10 +198,87 @@ class AgentRunner:
         self.broker = broker or ModelBroker(store)
         self.files = ProjectFiles(store)
         self.turns: dict[tuple[str, str], asyncio.Task] = {}
+        # Permission requests from a running Claude turn, and the per-turn tokens that let the
+        # approval tool speak for exactly one turn. Both are ephemeral: a restart ends the turn.
+        self.turn_tokens: dict[str, tuple] = {}
+        self.approvals: dict[str, dict] = {}
 
     def busy(self, tenant_id, session_id):
         task = self.turns.get((tenant_id, session_id))
         return bool(task and not task.done())
+
+    def busy_anywhere(self, tenant_id, project_id):
+        """Whether any conversation of this project has a turn running."""
+        for (tid, session_id), task in list(self.turns.items()):
+            if tid == tenant_id and not task.done():
+                try:
+                    if self.store.get(tenant_id, 'sessions', session_id)['project_id'] == project_id:
+                        return True
+                except TenantIsolationViolationException:
+                    continue
+        return False
+
+    def extras(self, tenant_id, token, mode):
+        """What this turn carries beyond its posture: the workspace's MCP servers and, when the
+        backend is reachable over loopback, the approval tool that turns a prompt into a card."""
+        servers = [s for s in self.store.list(tenant_id, 'mcp_servers') if s.get('enabled', True)]
+        extras = {'mcp_servers': servers}
+        port = os.environ.get('HARNESS_DESKTOP_PORT')
+        if port and mode == 'edit':
+            if getattr(sys, 'frozen', False):
+                command, env = [sys.executable, '--permission-tool'], {}
+            else:
+                command, env = [sys.executable, '-m', 'backend.desktop', '--permission-tool'], {'PYTHONPATH': str(Path(__file__).resolve().parents[1])}
+            extras['approval'] = {'url': f'http://127.0.0.1:{port}', 'token': token, 'command': command, 'env': env}
+        return extras
+
+    def request_approval(self, token, tool_name, tool_input, tool_use_id=None):
+        """A running turn's tool asks; the conversation shows a card until someone answers."""
+        turn = self.turn_tokens.get(token)
+        if not turn:
+            raise ValueError('This turn is not running.')
+        tenant_id, project_id, session_id, message_id = turn
+        approval = {'id': uid(), 'tenant_id': tenant_id, 'session_id': session_id, 'message_id': message_id, 'tool_name': tool_name,
+                    'input': tool_input, 'tool_use_id': tool_use_id, 'created_at': now(), 'decision': None, 'message': None,
+                    'event': asyncio.Event()}
+        self.approvals[approval['id']] = approval
+        self.store.event(tenant_id, session_id, 'approval.requested', f'{tool_name} needs your permission.', message_id=message_id, approval_id=approval['id'])
+        return approval['id']
+
+    async def approval_state(self, approval_id, wait=0):
+        approval = self.approvals.get(approval_id)
+        if not approval:
+            return {'decision': 'deny', 'message': 'This request is no longer open.'}
+        if wait and approval['decision'] is None:
+            try:
+                await asyncio.wait_for(approval['event'].wait(), min(float(wait), 30))
+            except TimeoutError:
+                pass
+        return {'decision': approval['decision'], 'message': approval['message']}
+
+    def decide(self, tenant_id, session_id, approval_id, allow, message=None):
+        approval = self.approvals.get(approval_id)
+        if not approval or approval['tenant_id'] != tenant_id or approval['session_id'] != session_id:
+            raise TenantIsolationViolationException('This request is unavailable in the current workspace.')
+        if approval['decision'] is not None:
+            raise ValueError('This request was already answered.')
+        approval.update(decision='allow' if allow else 'deny', message=message, decided_at=now())
+        approval['event'].set()
+        self.store.event(tenant_id, session_id, 'approval.decided', f'{approval["tool_name"]} {"allowed" if allow else "denied"}.',
+                         message_id=approval['message_id'], approval_id=approval_id)
+
+    def pending(self, tenant_id, session_id):
+        return [{k: v for k, v in a.items() if k != 'event'} for a in self.approvals.values()
+                if a['tenant_id'] == tenant_id and a['session_id'] == session_id and a['decision'] is None]
+
+    def abandon_approvals(self, session_id):
+        """When a turn ends, whatever it was still asking is answered no and forgotten."""
+        for approval_id, approval in list(self.approvals.items()):
+            if approval['session_id'] == session_id:
+                if approval['decision'] is None:
+                    approval.update(decision='deny', message='The turn ended before this was answered.')
+                    approval['event'].set()
+                self.approvals.pop(approval_id, None)
 
     def select(self, tenant_id, model_id):
         """The agent asked for, or a readable reason it cannot take a turn."""
@@ -346,6 +426,9 @@ class AgentRunner:
         message = next(m for m in session['messages'] if m['id'] == message_id)
         adaptive_turn = message['routing']['mode'] == 'adaptive'
         root = str(self.files.root(tenant_id, project_id, session_id))
+        token = secrets.token_urlsafe(24)
+        self.turn_tokens[token] = (tenant_id, project_id, session_id, message_id)
+        extras = self.extras(tenant_id, token, mode)
         # Read only cannot change the folder, so it is not read twice to prove that.
         before = fingerprint(self.files, tenant_id, project_id, session_id) if mode != 'read' else {}
         # In a repository, the whole working tree is also checkpointed as hidden git objects, so a
@@ -369,7 +452,7 @@ class AgentRunner:
                                       first=sum(1 for m in session['messages'] if m['role'] == 'user') == 1)
                 result, error = None, None
                 try:
-                    result = await self.broker.invoke_agent(tenant_id, config, prompt, mode, root)
+                    result = await self.broker.invoke_agent(tenant_id, config, prompt, mode, root, extras)
                 except ProviderError as exc:
                     if exc.exhausted:
                         raise  # Every login for this agent is spent; that is a real failure, not a struggle.
@@ -404,6 +487,8 @@ class AgentRunner:
             # message has to close, or the conversation stays busy forever.
             status, error = 'failed', 'The turn stopped unexpectedly. Anything the agent had already written to the folder is still there.'
         finally:
+            self.turn_tokens.pop(token, None)
+            self.abandon_approvals(session_id)
             if result is not None and status == 'complete':
                 error = None
             after_ref = await self.checkpoint(root, f'Frontier: after turn {message_id}') if before_ref else None
@@ -451,6 +536,25 @@ class AgentRunner:
         self.store.event(tenant_id, session_id, f'turn.{status}',
                          error or (summary if mode != 'read' else 'Answered without touching the folder.'),
                          message_id=message_id)
+
+    async def fanout(self, tenant_id, project_id, content, model_ids, mode):
+        """The same message to several agents at once, each in its own worktree and session."""
+        project = self.store.get(tenant_id, 'projects', project_id)
+        if not model_ids:
+            raise ValueError('Choose at least one agent.')
+        sessions = []
+        for model_id in dict.fromkeys(model_ids):
+            config = self.select(tenant_id, model_id)
+            session = {'id': uid(), 'project_id': project_id, 'name': f'{content.splitlines()[0][:60]} · {config["name"]}', 'messages': [], 'commands': [],
+                       'created_at': now(), 'updated_at': now(), 'auto_named': False}
+            branch = gitops.branch_name(content.splitlines()[0] + ' ' + config['name'], session['id'][:6])
+            location = self.files.worktree_location(tenant_id, project_id, branch)
+            await gitops.worktree_add(project['root'], location, branch)
+            session['worktree'] = {'path': str(location), 'branch': branch}
+            self.store.put(tenant_id, 'sessions', session)
+            self.send(tenant_id, project_id, session['id'], content, model_id, mode)
+            sessions.append(self.store.get(tenant_id, 'sessions', session['id']))
+        return sessions
 
     def writer(self, tenant_id, session, project):
         """The agent that writes on the conversation's behalf: its last one, the project's, or any."""

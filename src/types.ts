@@ -3,8 +3,8 @@ export const modes:Mode[]=['read','edit','auto'];
 export const modeLabels:Record<Mode,string>={read:'Read only',edit:'Edit files',auto:'Full auto'};
 export const modeHints:Record<Mode,string>={read:'The agent can read the project and answer. It cannot change anything.',edit:'The agent can read and write files in this project.',auto:'The agent can read, write, and run commands in this project as you.'};
 // Only a local agent command line tool can take a turn; an API key reaches a model, not an agent.
-export const agentProviders=['claude_cli','codex_cli','opencode_cli'];
-export const providerNames:Record<string,string>={claude_cli:'Claude',codex_cli:'Codex',opencode_cli:'OpenCode',anthropic:'Anthropic',openai:'OpenAI',custom_openai:'OpenAI Compatible',ollama:'Ollama / local',typesafe:'TypeSafe'};
+export const agentProviders=['claude_cli','codex_cli','opencode_cli','gemini_cli'];
+export const providerNames:Record<string,string>={claude_cli:'Claude',codex_cli:'Codex',opencode_cli:'OpenCode',gemini_cli:'Gemini',anthropic:'Anthropic',openai:'OpenAI',custom_openai:'OpenAI Compatible',ollama:'Ollama / local',typesafe:'TypeSafe'};
 export const ADAPTIVE='adaptive';
 export const ADAPTIVE_HINT='Picks the least expensive agent that can do this message, and hands it to a stronger one if that agent fails.';
 // The capability registry, as far as the interface sees it: what a row may say it is good at.
@@ -18,7 +18,11 @@ export interface Message {id:string; role:'user'|'assistant'; content:string; cr
  model_id?:string; model_name?:string; provider?:string; mode?:Mode; switched_from?:string|null;
  changes?:FileChange[]; input_tokens?:number|null; output_tokens?:number|null; cost?:number|null; routing?:Routing; checkpoint?:{before:string;after:string}|null; reverted_at?:string|null}
 export interface QueuedMessage {id:string; content:string; model_id:string; mode:Mode; created_at:string}
-export interface Session {id:string; project_id:string; name:string; messages:Message[]; commands:CommandResult[]; created_at:string; updated_at:string; pinned?:boolean; archived?:boolean; queue?:QueuedMessage[]; worktree?:{path:string;branch:string}|null; auto_named?:boolean; summary?:{text:string;through:string;created_at:string;model_name:string;count:number}|null; context?:{chars:number;limit:number;dropped:number;compacted:number}}
+export interface Session {id:string; project_id:string; name:string; messages:Message[]; commands:CommandResult[]; created_at:string; updated_at:string; pinned?:boolean; archived?:boolean; queue?:QueuedMessage[]; worktree?:{path:string;branch:string}|null; approvals?:Approval[]; automation_id?:string; auto_named?:boolean; summary?:{text:string;through:string;created_at:string;model_name:string;count:number}|null; context?:{chars:number;limit:number;dropped:number;compacted:number}}
+export interface Approval {id:string; session_id:string; message_id:string; tool_name:string; input:Record<string,unknown>; tool_use_id?:string|null; created_at:string}
+export interface McpServer {id:string; name:string; transport:'stdio'|'http'; command?:string|null; args?:string[]; env?:Record<string,string>; url?:string|null; enabled?:boolean}
+export interface Skill {name:string; kind:'skill'|'command'; scope:'project'|'user'; provider:string; description:string; path:string}
+export interface Automation {id:string; name:string; project_id:string; prompt:string; model_id:string; mode:Mode; every?:number|null; daily_at?:string|null; enabled:boolean; secret:string; next_run_at?:string|null; last_run_at?:string|null; last_outcome?:string; last_trigger?:string; last_session_id?:string; runs?:number}
 export interface GitEntry {path:string; status:string; staged:boolean; unstaged:boolean}
 export interface GitStatus {repo:boolean; available:boolean; root?:string; branch?:string; upstream?:string|null; ahead?:number; behind?:number; entries?:GitEntry[]; has_head?:boolean; worktree?:{path:string;branch:string}|null; output?:string}
 export interface Project {id:string; name:string; root:string; created_at:string; last_session_id?:string; last_model_id?:string; last_mode?:Mode}

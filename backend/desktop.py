@@ -36,10 +36,15 @@ def main():
         sys.argv=[module,*sys.argv[3:]]
         runpy.run_module(module,run_name='__main__',alter_sys=True)
         return
+    if len(sys.argv)>1 and sys.argv[1]=='--permission-tool':
+        from backend.permission_tool import serve
+        serve()
+        return
     import uvicorn
     from backend.app import app
+    from backend.remote import remote_host
     threading.Thread(target=watch_parent,daemon=True).start()
-    uvicorn.run(app,host='127.0.0.1',port=int(os.environ.get('HARNESS_DESKTOP_PORT','8765')),access_log=False)
+    uvicorn.run(app,host=remote_host(os.environ.get('HARNESS_DATA_DIR')),port=int(os.environ.get('HARNESS_DESKTOP_PORT','8765')),access_log=False)
 
 if __name__=='__main__':
     main()

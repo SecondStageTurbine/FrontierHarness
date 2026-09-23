@@ -1,12 +1,12 @@
 import {useState} from 'react';
-import {Check,ChevronRight,LoaderCircle,FileCode2,AlertTriangle,Square,ArrowRightLeft,Eye,Pencil,Zap,Clock,X,Undo2,FoldVertical} from 'lucide-react';
+import {Check,ChevronRight,LoaderCircle,FileCode2,AlertTriangle,Square,ArrowRightLeft,Eye,Pencil,Zap,Clock,X,Undo2,FoldVertical,ShieldQuestion} from 'lucide-react';
 import {MarkdownOutput} from '../components/Markdown';
 import {duration,money} from '../lib/api';
-import {modeLabels,type Message,type Mode,type Session} from '../types';
-export type InspectorTab='Files'|'Changes'|'Terminal';
+import {modeLabels,type Approval,type Message,type Mode,type Session} from '../types';
+export type InspectorTab='Files'|'Changes'|'Terminal'|'Preview';
 const modeIcon={read:Eye,edit:Pencil,auto:Zap};
 
-export function Conversation({session,onInspect,onUnqueue,onRevert}:{session:Session;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onUnqueue?:(id:string)=>void;onRevert?:(id:string)=>void}){
+export function Conversation({session,onInspect,onUnqueue,onRevert,onDecide}:{session:Session;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onUnqueue?:(id:string)=>void;onRevert?:(id:string)=>void;onDecide?:(approval:Approval,allow:boolean)=>void}){
  const [visible,setVisible]=useState(20);
  const shown=session.messages.slice(-visible);
  const queue=session.queue||[];
@@ -16,7 +16,7 @@ export function Conversation({session,onInspect,onUnqueue,onRevert}:{session:Ses
   {session.messages.length>visible&&<button className="history-more" onClick={()=>setVisible(v=>v+20)}>Load earlier messages</button>}
   {shown.map(message=><div key={message.id} className={message.id===boundary?'':undefined}>{message.role==='user'
    ?<section className="conversation-turn"><div className="user-message"><span className="message-author">You</span><p>{message.content}</p></div></section>
-   :<AgentMessage message={message} onInspect={onInspect} onRevert={onRevert}/>}
+   :<AgentMessage message={message} onInspect={onInspect} onRevert={onRevert} approvals={(session.approvals||[]).filter(a=>a.message_id===message.id)} onDecide={onDecide}/>}
    {message.id===boundary&&session.summary&&<div className="compact-note"><button onClick={()=>setShowSummary(v=>!v)}><FoldVertical size={13}/>{session.summary.count} earlier messages compacted by {session.summary.model_name}. The agent now sees this summary instead.<ChevronRight size={12} className={showSummary?'expanded-chevron':''}/></button>{showSummary&&<div className="compact-summary"><MarkdownOutput text={session.summary.text}/></div>}</div>}</div>)}
   {queue.map((q,i)=><section className="conversation-turn queued" key={q.id}><div className="user-message"><span className="message-author"><Clock size={11}/> Queued {i+1} of {queue.length} · {modeLabels[q.mode]}</span><p>{q.content}</p>{onUnqueue&&<button className="icon-button" aria-label="Remove from queue" title="Remove from queue" onClick={()=>onUnqueue(q.id)}><X size={12}/></button>}</div></section>)}
  </div>;
@@ -35,7 +35,9 @@ function turnStats(m:Message){
 }
 const compact=(n:number)=>n>=1000?`${(n/1000).toFixed(n>=10000?0:1)}k`:String(n);
 
-function AgentMessage({message,onInspect,onRevert}:{message:Message;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onRevert?:(id:string)=>void}){
+/** What a tool asked to do, in one line the user can judge: the command, the file, or the arguments. */
+function describeInput(tool:string,input:Record<string,unknown>){const s=(k:string)=>typeof input[k]==='string'?input[k] as string:'';return s('command')||s('file_path')||s('path')||s('url')||s('pattern')||s('query')||(Object.keys(input).length?JSON.stringify(input).slice(0,400):tool)}
+function AgentMessage({message,onInspect,onRevert,approvals=[],onDecide}:{message:Message;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onRevert?:(id:string)=>void;approvals?:Approval[];onDecide?:(approval:Approval,allow:boolean)=>void}){
  const running=message.status==='running';
  const ModeIcon=modeIcon[(message.mode||'edit') as Mode];
  const changes=message.changes||[];
@@ -52,6 +54,7 @@ function AgentMessage({message,onInspect,onRevert}:{message:Message;onInspect:(t
     ?message.routing.attempts.map((a,i)=><span key={a.id+i}>{i>0&&' → '}<strong>{a.name}</strong>{a.outcome!=='completed'&&<em> · {a.outcome}</em>}</span>)
     :<><strong>{message.routing.chosen.name}</strong><em> · {message.routing.chosen.because}</em></>}
   </div>}
+  {running&&approvals.map(a=><div key={a.id} className="approval-card" role="alertdialog" aria-label={`${a.tool_name} needs permission`}><ShieldQuestion size={16}/><div><strong>{message.model_name} wants to run {a.tool_name}</strong><code>{describeInput(a.tool_name,a.input)}</code><small>Allowed once; the turn continues either way. Nothing happens until you answer.</small></div><div className="approval-actions"><button className="primary" onClick={()=>onDecide?.(a,true)}>Allow</button><button onClick={()=>onDecide?.(a,false)}>Deny</button></div></div>)}
   {running
    ?<div className="agent-working-caption">{message.routing?.status==='choosing'?'Adaptive is choosing an agent for this message.':'Reading the project and working in it. The reply appears when the agent finishes.'}</div>
    :message.content&&<div className="inline-build"><MarkdownOutput text={message.content} onFile={(p,l)=>onInspect('Files',p,l)}/></div>}

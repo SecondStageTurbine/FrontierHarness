@@ -17,10 +17,10 @@ class ScriptedAgent:
         self.calls = []
         self.cooldowns = {}  # The runner consults the broker's cooldowns when ranking Adaptive candidates.
 
-    async def invoke_agent(self, tenant_id, config, prompt, mode, root):
+    async def invoke_agent(self, tenant_id, config, prompt, mode, root, extras=None):
         from pathlib import Path
         self.calls.append({'tenant_id': tenant_id, 'model_id': config['id'], 'provider': config['provider'],
-                           'mode': mode, 'root': str(root), 'prompt': prompt})
+                           'mode': mode, 'root': str(root), 'prompt': prompt, 'extras': extras})
         await asyncio.sleep(self.delay)
         if self.respond:
             # A per-agent script, for tests where which agent answers is the point.

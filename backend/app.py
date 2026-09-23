@@ -18,7 +18,8 @@ from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
-from .schemas import LoginInput, TenantInput, ModelConfig, SUBSCRIPTION_PROVIDERS
+from .schemas import LoginInput, TenantInput, ModelConfig, SUBSCRIPTION_PROVIDERS, PasswordInput, RemoteInput
+from . import automations, remote
 from .store import Store, TenantIsolationViolationException, uid, now, public_model
 from .agent import AgentRunner
 from . import localhealth
@@ -51,9 +52,13 @@ def create_app(directory=None, broker=None):
             import fcntl
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         runner.recover()
+        stop = asyncio.Event()
+        clock = asyncio.create_task(automations.scheduler(store, runner, stop))
         try:
             yield
         finally:
+            stop.set()
+            await asyncio.gather(clock, return_exceptions=True)
             tasks = list(runner.turns.values())
             for task in tasks:
                 task.cancel()
@@ -62,6 +67,8 @@ def create_app(directory=None, broker=None):
 
     app = FastAPI(title='Frontier Harness', version='1.0.0', lifespan=lifespan)
     app.state.store, app.state.runner = store, runner
+    # What this process actually bound at start; the flag may already say otherwise for the next start.
+    app.state.bound_remote = remote.enabled(store.directory) and os.environ.get('HARNESS_DATA_DIR') is not None
 
     @app.middleware('http')
     async def security(request, call_next):
@@ -170,6 +177,30 @@ def create_app(directory=None, broker=None):
         session(response,current['id'])
         attempts.pop(address,None)
         return current
+
+    @app.post('/api/password')
+    def set_password(payload:PasswordInput, request:Request):
+        """Give the signed-in user a password, which is what a browser on another device signs in with."""
+        current = user(request)
+        with store.db() as db:
+            db.execute('UPDATE users SET password=? WHERE id=?', (password_hash(payload.password), current['id']))
+        return {'ok':True}
+
+    @app.get('/api/remote')
+    def remote_status(request:Request):
+        current = user(request)
+        with store.db() as db:
+            row = db.execute('SELECT password FROM users WHERE id=?', (current['id'],)).fetchone()
+        wanted = remote.enabled(store.directory)
+        return {'enabled': wanted, 'listening': remote.remote_host(str(store.directory)) == '0.0.0.0' and os.environ.get('HARNESS_DESKTOP_PORT') is not None and app.state.bound_remote,
+                'addresses': remote.addresses(), 'port': int(os.environ.get('HARNESS_DESKTOP_PORT') or 0) or None,
+                'has_password': bool(row and ':' in (row['password'] or '')), 'username': current['username']}
+
+    @app.put('/api/remote')
+    def remote_set(payload:RemoteInput, request:Request):
+        user(request)
+        remote.set_enabled(store.directory, payload.enabled)
+        return {'enabled': payload.enabled, 'restart_required': payload.enabled != app.state.bound_remote}
 
     @app.post('/api/logout')
     def logout(request:Request,response:Response):

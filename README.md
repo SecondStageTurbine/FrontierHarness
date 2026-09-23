@@ -1,7 +1,7 @@
 # Frontier
 
 Frontier is a harness. You hold one conversation about one project folder, and you choose which
-agent answers each turn — Claude, Codex, or OpenCode, including a local model through OpenCode.
+agent answers each turn — Claude, Codex, Gemini CLI, or OpenCode, including a local model through OpenCode.
 Switching agent mid-conversation costs nothing: the conversation lives here, not inside any
 tool's own session, and the agent taking over is given it along with the folder the previous one
 was working in.
@@ -13,7 +13,7 @@ folder looked like before and after.
 
 ## Install the desktop application
 
-Run `src-tauri/target/release/bundle/nsis/Frontier_0.8.0_x64-setup.exe`. The per-user Windows installer includes Frontier, its Python runtime, backend dependencies, and frontend assets. Launch **Frontier** from the Start menu afterward. It does not need this repository, Python, Rust, Node.js, or a terminal to run. Existing projects, sessions, and encrypted credentials stay in the same application-data directory.
+Run `src-tauri/target/release/bundle/nsis/Frontier_0.9.0_x64-setup.exe`. The per-user Windows installer includes Frontier, its Python runtime, backend dependencies, and frontend assets. Launch **Frontier** from the Start menu afterward. It does not need this repository, Python, Rust, Node.js, or a terminal to run. Existing projects, sessions, and encrypted credentials stay in the same application-data directory.
 
 Frontier checks GitHub releases once at launch. When a newer version is published, a banner offers **Install and restart**; the installer runs for the current user and the app reopens on the new version. **Settings → General → Check for updates** does the same on demand. Feeds are signed: the app only installs a package whose signature matches the public key built into it.
 
@@ -76,6 +76,38 @@ Updates are signed with a minisign key that is not in this repository. Set `TAUR
 
 While a turn is running, Enter queues the next message for the moment it finishes, and Ctrl+Enter stops the turn and sends the new message instead. A turn is one opaque subprocess, so that is what steering means here: what the agent had already written to the folder stays, and the new message is sent with the conversation so far. Queued messages are shown under the conversation and can be removed; stopping a turn drops its queue.
 
+### Approval cards
+
+Under Edit files, Claude may only edit; a shell command it wants to run used to be refused outright. Now it asks: the turn pauses, a card appears in the conversation naming the tool and the command, and **Allow** or **Deny** answers it. The mechanism is Claude Code's permission prompt tool: every Edit-files turn is given a small MCP server that Frontier ships inside its own backend, and Claude calls it instead of refusing. A request nobody answers in fifteen minutes is denied and the turn continues; stopping the turn denies whatever it was asking. Codex and OpenCode run without a way to ask, so their postures stay as they were. Read only and Full auto never ask.
+
+### MCP servers and skills
+
+**Settings → MCP & Skills** lists the Model Context Protocol servers this workspace hands to its agents on every turn: a command spoken to over stdio, or an HTTP endpoint. Claude receives them through `--mcp-config`, Codex through `-c mcp_servers.*` overrides, and OpenCode through `OPENCODE_CONFIG_CONTENT`; Gemini CLI reads its own settings file and is not configured from here. The same page lists the skills and slash commands the agents already discover in the project and your home folder (`.claude`, `.codex`, `.gemini`). Type `/` at the start of the composer to pick a command.
+
+### Usage
+
+**Settings → Usage** adds up every finished turn in the workspace: tokens in and out, agent time, and cost per agent, per project, and per day, over the last week, month, quarter or year.
+
+### Preview
+
+The **Preview** panel shows a dev server the project is running. Frontier probes the usual local ports and lists the ones answering; pick one or type any URL. The page loads in a frame beside the conversation with a reload button and a way to open it in your browser.
+
+### Fan-out
+
+With more than one agent connected and a git repository open, the split icon beside the composer sends the same message to several agents at once. Each gets its own session on its own branch in its own worktree, named from the message and the agent, so the results sit side by side in the sidebar and their diffs in the Changes panel.
+
+### Remote access
+
+**Settings → Remote access** lets a browser on another device on your network or tailnet use this Frontier. Turn it on, set a password for your user, restart Frontier, and open one of the listed addresses. The connection is plain HTTP, so use it on a network you trust or over Tailscale. In a browser the terminal, updater and desktop notifications are unavailable; everything else works.
+
+### Automations
+
+**Settings → Automations** runs a prompt on its own: daily at a time, every N minutes, or when a webhook is called. Each run opens a session in the chosen project and sends the prompt as one turn under the posture you set, so the result reads like any other conversation. Schedules fire only while Frontier is open; a run missed while it was closed happens once at the next start. The webhook is a POST to the URL shown on the card, whose secret is the whole credential.
+
+### Themes
+
+**Settings → General** offers Dark, Midnight, Warm and Light, and an accent colour that recolours buttons, links and highlights in any of them.
+
 ### The composer
 
 A session is named by its first reply: the agent is asked to put a one-line title at the top of its first answer, Frontier takes it off the reply and onto the session, and a name you set yourself is never replaced. ArrowUp in an empty composer walks back through your earlier messages in the session and ArrowDown returns. Ctrl+Shift+S stashes the draft aside; a **Stash** chip below the composer lists stashed drafts per project and puts one back.
@@ -108,11 +140,11 @@ Ctrl+N starts a session, Ctrl+K finds a session, and Escape closes the contextua
 
 Chosen per turn, and translated into each tool's own setting:
 
-| Posture | Claude Code | Codex | OpenCode |
-|---|---|---|---|
-| Read only | `--permission-mode dontAsk --disallowedTools Bash Edit Write MultiEdit NotebookEdit` | `--sandbox read-only` | `--agent plan` |
-| Edit files | `--permission-mode acceptEdits` | `--sandbox workspace-write` | `--agent build` |
-| Full auto | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | `--agent build --auto` |
+| Posture | Claude Code | Codex | OpenCode | Gemini CLI |
+|---|---|---|---|---|
+| Read only | `--permission-mode dontAsk --disallowedTools Bash Edit Write MultiEdit NotebookEdit` | `--sandbox read-only` | `--agent plan` | `--approval-mode plan` |
+| Edit files | `--permission-mode acceptEdits --permission-prompt-tool mcp__frontier__approve` | `--sandbox workspace-write` | `--agent build` | `--approval-mode auto_edit` |
+| Full auto | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | `--agent build --auto` | `--approval-mode yolo` |
 
 A commit or push needs **Full auto**. Under Edit files, Codex's sandbox keeps `.git` read-only and blocks the network, and Claude has no one to approve a shell command; the agent is told this on every turn so it asks for Full auto rather than asking you to run git by hand.
 
@@ -164,6 +196,9 @@ The Python suite exercises workspace boundaries, a turn's file record, agent swi
 | Contracts | `backend/schemas.py` |
 | One message, one agentic turn, the switch, and revert | `backend/agent.py` |
 | Git status, staging, commit, push, checkpoints, worktrees | `backend/gitops.py` |
+| The approval MCP server Claude calls during a turn | `backend/permission_tool.py` |
+| Scheduled and webhook turns | `backend/automations.py` |
+| Remote access flag and addresses | `backend/remote.py` |
 | Native terminals (ConPTY) and update, notification, dialog plugins | `src-tauri/src/main.rs` |
 | Launching an agent tool, postures, subscription accounts | `backend/broker.py` |
 | Workspace-scoped persistence and encryption | `backend/store.py` |

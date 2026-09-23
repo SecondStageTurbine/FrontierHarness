@@ -2,6 +2,7 @@ import {useState,useEffect,useRef,useDeferredValue} from 'react';
 import {X,FileCode2,Folder,ChevronRight,Download,Terminal,SplitSquareHorizontal,AlignLeft,Play,Save,Search} from 'lucide-react';
 import {isTauri} from '@tauri-apps/api/core';
 import {Term} from './Term';
+import {Preview} from './Preview';
 import {useResource,useWorkspace,useRefresh} from '../app/context';
 import {api,download} from '../lib/api';
 import type {ProjectFile,Project,Session,FileChange} from '../types';
@@ -26,7 +27,7 @@ export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,o
  useEffect(()=>{void tree.refetch()},[changes.length]);
  const selected=changes.find(c=>c.id===changeId)||[...changes].reverse().find(c=>c.path===filePath)||changes.at(-1);
  return <aside className="context-inspector">
-  <div className="inspector-tabs">{(['Files','Changes','Terminal'] as InspectorTab[]).map(t=><button key={t} className={tab===t?'selected':''} onClick={()=>onTab(t)}>{t}</button>)}<button className="icon-button" title="Close panel" aria-label="Close contextual panel" onClick={onClose}><X size={15}/></button></div>
+  <div className="inspector-tabs">{(['Files','Changes','Terminal','Preview'] as InspectorTab[]).map(t=><button key={t} className={tab===t?'selected':''} onClick={()=>onTab(t)}>{t}</button>)}<button className="icon-button" title="Close panel" aria-label="Close contextual panel" onClick={onClose}><X size={15}/></button></div>
   <div className="inspector-content">
    {tab==='Files'&&<><div className="file-browser">
     <div className="file-browser-heading"><Folder size={14}/>{project.name}{session?.worktree&&<em className="branch-chip" title={session.worktree.path}>{session.worktree.branch}</em>}<small>{tree.data?.length||0} files</small></div>
@@ -48,6 +49,7 @@ export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,o
     {split&&selected.before!==null?<div className="split-diff"><div><span>Before</span><CodeView text={selected.before}/></div><div><span>After</span><CodeView text={selected.after||''}/></div></div>
      :<CodeView text={selected.after??selected.before??''}/>}</>}
    </>)}
+   {tab==='Preview'&&<Preview projectId={project.id}/>}
    {tab==='Terminal'&&isTauri()&&<Term cwd={session?.worktree?.path||project.root}/>}
    {tab==='Terminal'&&!isTauri()&&<>
     <div className="terminal-output">{!commands.length&&<p>Your own project checks and their actual output appear here.<br/>The agent runs its own commands through its tool.</p>}
