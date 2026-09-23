@@ -29,7 +29,8 @@ PLAN_ASK = (
     '"agent" may name one of the connected agents listed below to insist on it, else null. Tasks with "parallel": true '
     'and no dependencies run at the same time in separate copies of the folder, so give them disjoint files. Put shared '
     'groundwork first with "parallel": false. Every task must be doable by an agent that has not read this conversation, '
-    'so its instructions must stand alone.'
+    'so its instructions must stand alone. A review task is always given to a different model family from you and from '
+    'the agents whose work it checks, and you review again at the end, so the work gets two independent reviews.'
 )
 REVIEW_ASK = (
     'You are the lead. Your workers have finished; their reports and the resulting diff of the project are below. '
@@ -80,13 +81,31 @@ def normalise_plan(plan):
     return {'summary': (plan or {}).get('summary') or '', 'tasks': tasks}
 
 
-def assign(task, agents, lead, in_cooldown=lambda model_id: False):
-    """The agent for one task: the lead's explicit pick if it is connected, else the cheapest that covers the needs."""
+REVIEW_WORDS = re.compile(r'(review|audit|verify|verification|integrat\w*|final gate|check)', re.I)
+
+
+def is_review(task):
+    return 'review' in (task.get('needs') or []) or bool(REVIEW_WORDS.search(task.get('title') or ''))
+
+
+def assign(task, agents, lead, in_cooldown=lambda model_id: False, authors=()):
+    """The agent for one task: the lead's explicit pick if it is connected, else the cheapest that covers the needs.
+
+    A review task goes to a different model family from the lead and, where one is connected, from
+    the agents whose work it reviews, so the lead's own review is a second, independent pair of eyes.
+    """
     wanted = (task.get('agent') or '').strip().lower()
+    candidates = agents
+    if is_review(task):
+        other = {lead['provider'], *authors}
+        fresh = [a for a in agents if a['provider'] not in other]
+        not_lead = [a for a in agents if a['provider'] != lead['provider']]
+        candidates = fresh or not_lead or agents
     if wanted:
-        for agent in agents:
+        for agent in candidates:
             if agent['name'].lower() == wanted or agent.get('model_name', '').lower() == wanted:
                 return agent
+    agents = candidates
     needs = {c: 5 for c in CAPABILITIES if c != 'speed'}
     for need in task.get('needs') or []:
         needs[need] = 8
@@ -162,9 +181,12 @@ class Team:
         session, message = self.state()
         team = message['team']
         team.update(status='working', summary=plan['summary'], tasks=plan['tasks'])
-        for task in team['tasks']:
-            agent = assign(task, agents, self.lead, lambda mid: self.runner.broker.cooldowns.get((self.tenant_id, mid), 0) > __import__('time').monotonic())
-            task.update(model_id=agent['id'], model_name=agent['name'])
+        cooling = lambda mid: self.runner.broker.cooldowns.get((self.tenant_id, mid), 0) > __import__('time').monotonic()
+        # Work first, then reviews, so a review knows which model families wrote what it checks.
+        for task in sorted(team['tasks'], key=is_review):
+            authors = {a['provider'] for t in team['tasks'] if t.get('model_id') and not is_review(t) for a in agents if a['id'] == t['model_id']}
+            agent = assign(task, agents, self.lead, cooling, authors)
+            task.update(model_id=agent['id'], model_name=agent['name'], cross_review=is_review(task))
         self.save(message, session, f'Planned {len(team["tasks"])} tasks.')
         repo = await gitops.toplevel(self.root)
         for batch in waves(team['tasks']):

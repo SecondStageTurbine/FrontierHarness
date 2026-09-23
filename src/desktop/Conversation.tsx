@@ -51,7 +51,7 @@ function TeamCard({team,onOpenSession}:{team:TeamState;onOpenSession?:(id:string
   {team.summary&&<p>{team.summary}</p>}
   {team.tasks.length>0&&<ol className="team-tasks">{team.tasks.map(t=><li key={t.id} className={t.status}>
    <span className={`team-status ${t.status}`}>{t.status==='working'||t.status==='fixing'?<LoaderCircle size={11} className="spin"/>:t.status==='done'?<Check size={11}/>:t.status==='failed'?<AlertTriangle size={11}/>:<Clock size={11}/>}</span>
-   <div><strong>{t.title}</strong><small>{t.model_name||'unassigned'}{t.merge?` · ${t.merge.startsWith('conflict')?'conflict on merge':t.merge}`:''}{t.changed?.length?` · ${t.changed.length} file${t.changed.length===1?'':'s'}`:''}</small>{t.report&&t.status!=='working'&&<p>{t.report.slice(0,240)}{t.report.length>240?'…':''}</p>}</div>
+   <div><strong>{t.title}</strong><small>{t.model_name||'unassigned'}{t.cross_review?' · cross-model review':''}{t.merge?` · ${t.merge.startsWith('conflict')?'conflict on merge':t.merge}`:''}{t.changed?.length?` · ${t.changed.length} file${t.changed.length===1?'':'s'}`:''}</small>{t.report&&t.status!=='working'&&<p>{t.report.slice(0,240)}{t.report.length>240?'…':''}</p>}</div>
    {t.session_id&&onOpenSession&&<button className="icon-button" title="Open this worker's session" aria-label="Open worker session" onClick={()=>onOpenSession(t.session_id!)}><ExternalLink size={12}/></button>}
   </li>)}</ol>}
  </div>;

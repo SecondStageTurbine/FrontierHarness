@@ -435,3 +435,5 @@ The cause of the user's failed turns was found by rebuilding the lead's prompt f
 Version 0.12.3 fixes the team card's worker link, which looked up the worker in the sidebar's session list and did nothing when that list predated the worker; it now selects the session by id and refreshes the list.
 
 The in-app updater was exercised for real on 2026-09-23: a running 0.12.1 found 0.12.3 through Settings → General → Check for updates, downloaded the signed package, verified it against the built-in key, ran the installer and reopened on 0.12.3. This is the first update Frontier performed on itself outside a test.
+
+Version 0.12.4: `team.assign` gives review tasks (needs `review`, or a title naming review, audit, verification, integration or the final gate) to a model family other than the lead's and the authors' where one is connected, falling back to one other than the lead's; tasks are assigned work-first so a review knows its authors. The planning prompt tells the lead so. The footer during a team turn names the running workers and says the lead is waiting, which matches the process table: the lead's CLI only runs for its planning and review calls.

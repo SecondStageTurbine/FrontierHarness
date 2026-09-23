@@ -314,3 +314,16 @@ def test_binary_attachments_are_kept_as_files_and_copied_into_the_project(tmp_pa
         assert c.post(route+'/instructions', json={'content': 'Look at the clip.', 'model_id': a, 'mode': 'read', 'attachment_ids': ids}).status_code == 200
         detail = wait_done(c, route)
         assert '.frontier/attachments/clip.mp4' in detail['messages'][0]['content'] and (root/'.frontier'/'attachments'/'clip.mp4').stat().st_size == 112
+
+
+def test_review_tasks_go_to_a_different_model_family_from_the_lead_and_the_authors():
+    agents = [{'id': 'claude_cli', 'name': 'Claude', 'provider': 'claude_cli', 'model_name': 'sonnet'},
+              {'id': 'codex_cli', 'name': 'Codex', 'provider': 'codex_cli', 'model_name': 'gpt'},
+              {'id': 'opencode_cli', 'name': 'OpenCode', 'provider': 'opencode_cli', 'model_name': 'x'}]
+    review = {'id': 'r', 'title': 'Review and integrate the fixes', 'needs': ['review'], 'agent': 'Claude'}
+    assert team.is_review(review)
+    # The lead is Claude and Codex wrote the work: the review goes to neither, even when the plan named Claude.
+    assert team.assign(review, agents, agents[0], authors={'codex_cli'})['provider'] == 'opencode_cli'
+    # With only the lead's family left besides the authors, it still avoids the lead.
+    assert team.assign(review, agents[:2], agents[0], authors={'codex_cli'})['provider'] == 'codex_cli'
+    assert not team.is_review({'title': 'Fix the shader warning', 'needs': ['coding']})

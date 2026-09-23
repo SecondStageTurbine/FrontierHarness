@@ -15,7 +15,7 @@ export interface Routing {mode:'adaptive'|'manual'; status?:string; classified_b
 export interface FileChange {id:string; path:string; status:'added'|'modified'|'removed'; before:string|null; after:string|null}
 export interface CommandResult {id:string; command:string; started_at:string; finished_at:string|null; status:string; output:string; exit_code:number|null}
 export interface ContextChip {kind:'file'|'terminal'|'diff'|'selection'; path?:string|null; start?:number|null; end?:number|null; text?:string|null; label?:string|null}
-export interface TeamTask {id:string; title:string; instructions:string; needs:string[]; agent?:string|null; parallel:boolean; depends_on:string[]; status:'pending'|'working'|'fixing'|'done'|'failed'; session_id?:string|null; model_id?:string|null; model_name?:string|null; report:string; merge?:string|null; changed?:string[]}
+export interface TeamTask {id:string; title:string; instructions:string; needs:string[]; agent?:string|null; parallel:boolean; depends_on:string[]; status:'pending'|'working'|'fixing'|'done'|'failed'; session_id?:string|null; model_id?:string|null; model_name?:string|null; report:string; merge?:string|null; changed?:string[]; cross_review?:boolean}
 export interface Team {status:'planning'|'working'|'reviewing'|'fixing'|'done'; lead:string; summary:string; tasks:TeamTask[]; agents?:string[]}
 export interface Message {id:string; role:'user'|'assistant'; content:string; created_at:string; context?:ContextChip[]; team?:Team;
  status?:'running'|'complete'|'failed'|'cancelled'; error?:string|null; finished_at?:string|null;
