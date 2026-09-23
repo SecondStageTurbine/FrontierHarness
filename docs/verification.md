@@ -370,3 +370,28 @@ faint patch in one corner that a flood fill left behind, so the tile is now cut 
 rectangle fitted to its own glow ring before the corners are cleared. The desktop and Start menu
 shortcuts point at the executable with icon index 0, so they take the embedded icon; after
 installing, the icon was extracted from the installed executable and compared by eye.
+
+Version 0.11.0 carries the twelve items chosen from the remaining gap list. Team mode
+(`backend/team.py`) runs inside an ordinary turn: the lead answers a planning prompt with JSON,
+`normalise_plan` bounds it to six tasks, `assign` honours the lead's named agent or asks Adaptive's
+`choose` with a requirements vector built from the task's needs, `waves` orders tasks by
+dependency and parallelism, and each task is a worker session, in a worktree when the project is
+a repository, whose checkpointed diff is applied three-way to the lead's folder under a lock and
+left unstaged. Parallel workers update their own task on a fresh read of the session so nothing is
+lost. The lead reviews reports plus the diff and may send one fix round. Pull requests go through
+`gh` (`backend/pullrequests.py`): status, create with push, review comments, and a prompt that asks
+the agent to address them. Rewind (`AgentRunner.rewind`) drops messages from one of the user's
+onward and rolls the folder back with `gitops.rollback` or the recorded before-text. Context chips
+are typed references rendered into the prompt by `context_note` and kept on the user message.
+Worktree creation copies the project's named ignored files (`gitops.hydrate`) and runs its setup
+command through the shell. The dev server manager (`backend/devserver.py`) keeps one shell-run
+server per folder with a port sniffed from its output. Housekeeping on the automation tick wakes
+snoozed sessions and archives idle ones, remembering them first when the workspace asks. `.env`
+files are listed by variable name only and, when the project asks, denied to Claude through
+`--disallowedTools Read(...)`. Project memory and workspace rules are injected at the top of every
+prompt. Tool versions come from `--version` against `npm view`, with `npm install -g` for updates;
+Claude and Codex histories are read from their own JSONL layouts and imported once per
+conversation. Attachments allow 100 per message, images to 10 MB, and other files to 50 MB kept on
+disk. Fifteen new tests cover all of it, including a full team run with two workers in worktrees.
+The suite is at 114. Per the user's instruction the installer was not built or installed; the
+source was verified by the suite, the frontend build, and a browser run against a source backend.

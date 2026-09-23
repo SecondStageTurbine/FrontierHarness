@@ -54,6 +54,42 @@ async def run(store, runner, tenant_id, automation, trigger='schedule'):
     return session
 
 
+async def housekeeping(store, runner, tenant_id):
+    """Wake snoozed sessions whose time has come, and archive ones idle past the workspace's limit."""
+    tenant = store.tenant_internal(tenant_id) or {}
+    limit = tenant.get('auto_archive_days')
+    moment = datetime.now().astimezone()
+    for session in store.list(tenant_id, 'sessions'):
+        changed = False
+        until = session.get('snoozed_until')
+        if until:
+            try:
+                if datetime.fromisoformat(until.replace('Z', '+00:00')) <= moment:
+                    session.pop('snoozed_until', None)
+                    changed = True
+            except ValueError:
+                session.pop('snoozed_until', None)
+                changed = True
+        if limit and not session.get('archived') and not session.get('pinned') and session.get('messages') and not runner.busy(tenant_id, session['id']):
+            try:
+                updated = datetime.fromisoformat(session['updated_at'].replace('Z', '+00:00'))
+            except (ValueError, KeyError):
+                updated = None
+            if updated and updated.tzinfo is None:
+                updated = updated.replace(tzinfo=moment.tzinfo)
+            if updated and updated < moment - timedelta(days=int(limit)):
+                if tenant.get('memory_auto') and len(session['messages']) >= 2:
+                    try:
+                        await runner.remember(tenant_id, session['project_id'], session['id'])
+                    except Exception:
+                        pass  # Memory is a nicety; archiving is the point.
+                session['archived'] = True
+                session['archived_reason'] = f'idle for {limit} days'
+                changed = True
+        if changed:
+            store.put(tenant_id, 'sessions', session)
+
+
 async def scheduler(store, runner, stop):
     """The background loop; `stop` is an asyncio.Event the app sets on shutdown."""
     while not stop.is_set():
@@ -61,6 +97,7 @@ async def scheduler(store, runner, stop):
             with store.db() as db:
                 tenants = [row['id'] for row in db.execute('SELECT id FROM tenants').fetchall()]
             for tenant_id in tenants:
+                await housekeeping(store, runner, tenant_id)
                 for automation in store.list(tenant_id, 'automations'):
                     if due(automation) and not runner.busy_anywhere(tenant_id, automation['project_id']):
                         await run(store, runner, tenant_id, automation)

@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import adaptive, gitops, localhealth
+from . import adaptive, gitops, localhealth, team as teamwork
 from .adaptive import ADAPTIVE, MAX_ESCALATIONS
 from .broker import CLI_TOOLS, ProviderError
 from .projects import ProjectFiles
@@ -120,7 +120,7 @@ def context_usage(session):
     return {'chars': chars, 'limit': TRANSCRIPT_LIMIT, 'dropped': dropped, 'compacted': compacted}
 
 
-def build_prompt(messages, switched, handoff=None, mode=None, summary=None, first=False):
+def build_prompt(messages, switched, handoff=None, mode=None, summary=None, first=False, rules=None, memory=None):
     """Instructions, then as much of the conversation as fits, ending at the new message.
 
     A handoff, when present, is what a previous agent left behind on this same turn; it goes
@@ -141,6 +141,10 @@ def build_prompt(messages, switched, handoff=None, mode=None, summary=None, firs
         head += f' The first {dropped} messages of this conversation were dropped to fit; say so if one is needed.'
     if handoff:
         head += '\n\n' + handoff
+    if rules and rules.strip():
+        head += '\n\nWORKSPACE RULES (set by the user; follow them in every turn):\n' + rules.strip()[:8000]
+    if memory and memory.strip():
+        head += '\n\nPROJECT NOTES (kept by the user and earlier conversations about this project):\n' + memory.strip()[:20000]
     if summary:
         head += '\n\nEarlier messages of this conversation were compacted into this summary:\n' + summary
     return head + '\n\n' + '\n\n'.join(lines)
@@ -218,11 +222,12 @@ class AgentRunner:
                     continue
         return False
 
-    def extras(self, tenant_id, token, mode):
-        """What this turn carries beyond its posture: the workspace's MCP servers and, when the
-        backend is reachable over loopback, the approval tool that turns a prompt into a card."""
+    def extras(self, tenant_id, token, mode, project=None):
+        """What this turn carries beyond its posture: the workspace's MCP servers, whether the
+        project's .env files are off limits, and, when the backend is reachable over loopback, the
+        approval tool that turns a prompt into a card."""
         servers = [s for s in self.store.list(tenant_id, 'mcp_servers') if s.get('enabled', True)]
-        extras = {'mcp_servers': servers}
+        extras = {'mcp_servers': servers, 'protect_env': bool((project or {}).get('protect_env', True))}
         port = os.environ.get('HARNESS_DESKTOP_PORT')
         if port and mode == 'edit':
             if getattr(sys, 'frozen', False):
@@ -290,7 +295,7 @@ class AgentRunner:
     def agents(self, tenant_id):
         return agentic_providers(self.store.list(tenant_id, 'models'))
 
-    def send(self, tenant_id, project_id, session_id, content, model_id, mode, queue=False):
+    def send(self, tenant_id, project_id, session_id, content, model_id, mode, queue=False, team=False, context=None):
         """Record the message, start the turn, and answer immediately.
 
         The reply is written into a message that already exists and is marked running, so the
@@ -305,24 +310,28 @@ class AgentRunner:
         if self.busy(tenant_id, session_id):
             if not queue:
                 raise ValueError('This conversation is still working. Wait for it to finish or stop it.')
-            session.setdefault('queue', []).append({'id': uid(), 'content': content, 'model_id': model_id, 'mode': mode, 'created_at': now()})
+            session.setdefault('queue', []).append({'id': uid(), 'content': content, 'model_id': model_id, 'mode': mode, 'created_at': now(), 'team': team, 'context': context or []})
             return self.store.put(tenant_id, 'sessions', session)
         project = self.store.get(tenant_id, 'projects', project_id)
         if not self.files.root(tenant_id, project_id, session_id).is_dir():
             raise FileNotFoundError('This project’s folder is not available. Reconnect the drive or open the project again.')
         adaptive_turn = model_id == ADAPTIVE
         if adaptive_turn:
+            if team:
+                raise ValueError('Team mode needs a specific agent as the lead. Pick one in the selector.')
             if not self.agents(tenant_id):
                 raise ValueError('Adaptive needs at least one Claude, Codex or OpenCode agent connected.')
             config = None
         else:
             config = self.select(tenant_id, model_id)
+        if team and mode == 'read':
+            raise ValueError('A team needs Edit files or Full auto to do its work.')
         # The switch is decided against the last agent that actually answered, not against the
         # selector, so reselecting the same agent never costs a handover preamble. An Adaptive
         # turn decides this once it has chosen.
         previous = self.previous_agent(session, None)
         switched_from = previous['model_name'] if previous and not adaptive_turn and previous['model_id'] != model_id else None
-        session['messages'].append({'id': uid(), 'role': 'user', 'content': content, 'created_at': now()})
+        session['messages'].append({'id': uid(), 'role': 'user', 'content': content, 'created_at': now(), 'context': [c for c in (context or []) if c]})
         reply = {'id': uid(), 'role': 'assistant', 'content': '', 'status': 'running', 'error': None,
                  'model_id': None if adaptive_turn else model_id,
                  'model_name': 'Adaptive' if adaptive_turn else config['name'],
@@ -331,6 +340,8 @@ class AgentRunner:
                  'routing': {'mode': 'adaptive', 'status': 'choosing'} if adaptive_turn else {'mode': 'manual'},
                  'changes': [], 'input_tokens': None, 'output_tokens': None,
                  'created_at': now(), 'finished_at': None}
+        if team:
+            reply['team'] = {'status': 'planning', 'lead': config['name'], 'tasks': [], 'summary': ''}
         session['messages'].append(reply)
         if len(session['messages']) == 2 and session.get('name') in (None, '', 'New session'):
             session['name'] = content.splitlines()[0][:80]
@@ -361,7 +372,7 @@ class AgentRunner:
         item, session['queue'] = queued[0], queued[1:]
         self.store.put(tenant_id, 'sessions', session)
         try:
-            self.send(tenant_id, project_id, session_id, item['content'], item['model_id'], item['mode'])
+            self.send(tenant_id, project_id, session_id, item['content'], item['model_id'], item['mode'], team=item.get('team', False), context=item.get('context'))
         except (ValueError, FileNotFoundError, TenantIsolationViolationException) as exc:
             self.store.event(tenant_id, session_id, 'queue.dropped', f'A queued message could not start: {exc}')
 
@@ -428,7 +439,9 @@ class AgentRunner:
         root = str(self.files.root(tenant_id, project_id, session_id))
         token = secrets.token_urlsafe(24)
         self.turn_tokens[token] = (tenant_id, project_id, session_id, message_id)
-        extras = self.extras(tenant_id, token, mode)
+        extras = self.extras(tenant_id, token, mode, project)
+        rules = (self.store.tenant_internal(tenant_id) or {}).get('rules')
+        memory = project.get('memory')
         # Read only cannot change the folder, so it is not read twice to prove that.
         before = fingerprint(self.files, tenant_id, project_id, session_id) if mode != 'read' else {}
         # In a repository, the whole working tree is also checkpointed as hidden git objects, so a
@@ -445,11 +458,19 @@ class AgentRunner:
             elif (await localhealth.availability([config])).get(config['id']) is False:
                 # Fail in a second with the address, rather than in a minute with the tool's error.
                 raise ProviderError(f'{config["name"]} is not running: nothing at {localhealth.where(config)} is serving it. Start that server, or pick another agent.')
-            for _ in range(1 + (MAX_ESCALATIONS if adaptive_turn else 0)):
+            if message.get('team'):
+                # The lead plans and reviews under Read only; its workers take the real posture.
+                message['team']['checkpoint'] = before_ref
+                self.store.put(tenant_id, 'sessions', session)
+                visible, summary = conversation(session)
+                objective = next(m['content'] for m in reversed(session['messages']) if m['role'] == 'user')
+                lead_prompt = build_prompt(visible, False, None, 'read', summary, rules=rules, memory=memory)
+                result = await teamwork.Team(self, tenant_id, project_id, session_id, message_id, config, mode, root).run(lead_prompt, objective)
+            for _ in (range(1 + (MAX_ESCALATIONS if adaptive_turn else 0)) if not message.get('team') else ()):
                 tried.add(config['id'])
                 visible, summary = conversation(session)
                 prompt = build_prompt(visible, bool(message.get('switched_from')), handoff_text, mode, summary,
-                                      first=sum(1 for m in session['messages'] if m['role'] == 'user') == 1)
+                                      first=sum(1 for m in session['messages'] if m['role'] == 'user') == 1, rules=rules, memory=memory)
                 result, error = None, None
                 try:
                     result = await self.broker.invoke_agent(tenant_id, config, prompt, mode, root, extras)
@@ -537,6 +558,68 @@ class AgentRunner:
                          error or (summary if mode != 'read' else 'Answered without touching the folder.'),
                          message_id=message_id)
 
+    async def rewind(self, tenant_id, project_id, session_id, message_id, restore_files=True):
+        """Cut the conversation back to before one of the user's messages, and optionally put the
+        folder back to how it was then, so that message can be edited and sent again."""
+        if self.busy(tenant_id, session_id):
+            raise ValueError('This conversation is still working. Wait for it to finish or stop it.')
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        index = next((i for i, m in enumerate(session['messages']) if m['id'] == message_id and m['role'] == 'user'), None)
+        if index is None:
+            raise ValueError('Pick one of your own messages to edit from.')
+        dropped = session['messages'][index:]
+        restored = []
+        if restore_files:
+            root = self.files.root(tenant_id, project_id, session_id)
+            replies = [m for m in dropped if m['role'] == 'assistant' and m.get('status') != 'running']
+            first_checkpoint = next((m['checkpoint']['before'] for m in replies if m.get('checkpoint')), None)
+            if first_checkpoint:
+                restored = await gitops.rollback(root, first_checkpoint)
+            else:
+                for reply in reversed(replies):
+                    for change in reply.get('changes') or []:
+                        target = self.files.resolve(tenant_id, project_id, change['path'], session_id)
+                        if change['status'] == 'added':
+                            if target.is_file():
+                                target.unlink()
+                        else:
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            target.write_text(change['before'] or '', encoding='utf-8')
+                        restored.append(change['path'])
+        session['messages'] = session['messages'][:index]
+        session['queue'] = []
+        if session.get('summary') and not any(m['id'] == session['summary']['through'] for m in session['messages']):
+            session['summary'] = None
+        session['updated_at'] = now()
+        self.store.put(tenant_id, 'sessions', session)
+        self.store.event(tenant_id, session_id, 'session.rewound', f'Rewound {len(dropped)} messages' + (f' and put back {len(set(restored))} files.' if restored else '.'))
+        return {'session': session, 'content': dropped[0]['content'], 'restored': sorted(set(restored))}
+
+    async def remember(self, tenant_id, project_id, session_id):
+        """Ask the conversation's agent what this session taught about the project, and keep it on the project."""
+        if self.busy(tenant_id, session_id):
+            raise ValueError('This conversation is still working. Wait for it to finish or stop it.')
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        project = self.store.get(tenant_id, 'projects', project_id)
+        visible, summary = conversation(session)
+        if len([m for m in visible if m.get('content')]) < 2 and not summary:
+            raise ValueError('There is nothing to remember yet.')
+        config = self.writer(tenant_id, session, project)
+        prompt = ('From the conversation below, list 3 to 8 facts about this project worth remembering in future conversations: '
+                  'conventions, decisions and their reasons, where things live, commands that work, gotchas. Plain bullets, each under '
+                  '30 words, nothing about this conversation itself. Reply with the bullets only.\n\n'
+                  + (('Summary of earlier messages:\n' + summary + '\n\n') if summary else '') + '\n\n'.join(transcript(visible)))
+        result = await self.broker.invoke_agent(tenant_id, config, prompt, 'read', str(self.files.root(tenant_id, project_id, session_id)))
+        bullets = [line.strip() for line in (result.text or '').splitlines() if line.strip().startswith(('-', '*', '•'))]
+        if not bullets:
+            raise ValueError(f'{config["name"]} returned nothing to remember.')
+        project = self.store.get(tenant_id, 'projects', project_id)
+        stamp = now()[:10]
+        project['memory'] = ((project.get('memory') or '').rstrip() + f'\n\n{stamp} · {session["name"]}\n' + '\n'.join(bullets)).strip()[-20000:]
+        self.store.put(tenant_id, 'projects', project)
+        self.store.event(tenant_id, session_id, 'project.remembered', f'{config["name"]} added {len(bullets)} notes to the project memory.')
+        return project
+
     async def fanout(self, tenant_id, project_id, content, model_ids, mode):
         """The same message to several agents at once, each in its own worktree and session."""
         project = self.store.get(tenant_id, 'projects', project_id)
@@ -549,7 +632,7 @@ class AgentRunner:
                        'created_at': now(), 'updated_at': now(), 'auto_named': False}
             branch = gitops.branch_name(content.splitlines()[0] + ' ' + config['name'], session['id'][:6])
             location = self.files.worktree_location(tenant_id, project_id, branch)
-            await gitops.worktree_add(project['root'], location, branch)
+            await gitops.worktree_add(project['root'], location, branch, copy=project.get('worktree_copy') or [])
             session['worktree'] = {'path': str(location), 'branch': branch}
             self.store.put(tenant_id, 'sessions', session)
             self.send(tenant_id, project_id, session['id'], content, model_id, mode)

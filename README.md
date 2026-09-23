@@ -28,6 +28,8 @@ looked like before and after so any turn can be reverted.
 | **Queue, steer, compact** | Enter queues the next message while a turn runs, Ctrl+Enter stops it and sends instead, and a context meter offers to compact the conversation into a summary before the oldest turns fall off. |
 | **Automations and remote access** | Prompts that run daily, every N minutes or by webhook, each as an ordinary session. A browser on another device on your network or tailnet can use the same Frontier. |
 | **MCP servers and skills** | Servers the workspace hands to every agent on every turn, and the skills and slash commands the agents already find, offered with `/` in the composer. |
+| **Team mode** | Pick a lead; it plans the work as tasks, Frontier hands each task to the agent whose profile fits (or the one the lead names), workers run in parallel worktrees, their changes are folded back, and the lead reviews and replies. |
+| **Pull requests** | Open a PR from the session's branch through the GitHub CLI, watch checks and review state, and hand review comments to the agent. |
 | **Quiet desktop manners** | Tray icon and close-to-tray, one instance at a time, desktop notifications when a turn finishes in the background, signed auto-updates, usage per agent and project, four themes and an accent colour. |
 
 ## Install the desktop application
@@ -118,9 +120,29 @@ A new session can start **On a new branch**: Frontier adds a git worktree in `Fr
 
 **Fan-out.** With more than one agent connected and a repository open, the split icon beside the composer sends the same message to several agents at once. Each gets its own session on its own branch in its own worktree, named from the message and the agent, so the results sit side by side in the sidebar and their diffs in the Changes panel.
 
+### Team mode
+
+With more than one agent connected, the people icon beside the composer turns on team mode for the next message. The agent in the selector becomes the lead: it takes a Read-only turn and answers with a plan of one to six tasks, each with instructions that stand alone, what it demands most (coding, debugging, review and so on), an optional agent it insists on, and whether it can run beside the others. Frontier assigns each task, the lead's named agent or the cheapest connected one whose capability profile covers the need, and opens a session per task. In a repository each worker gets its own worktree and independent tasks run at the same time; the worker's checkpointed changes are then applied to the lead's folder as a three-way patch, unstaged, so unrelated local edits stay put. The lead reviews every report and the resulting diff under Read only, may send one round of fixes back to the workers, and writes the final reply. The card in the conversation shows the plan, who has each task, its status, and a link to every worker session; worker sessions are listed under **Team sessions** in the sidebar. Adaptive cannot lead, and a team needs Edit files or Full auto.
+
+### Pull requests
+
+With the GitHub CLI installed and signed in, the Changes panel shows the branch's pull request: number, title, checks, review state, and the size of the change. Without one, **Create pull request** pushes the branch and opens it; **Write description** has the current agent draft the title and body from the branch's commits and diff. **Address review comments** collects the review comments and puts a prompt in the composer that asks the agent to act on them.
+
+### Editing a message from earlier
+
+Hover one of your own messages and choose **Edit from here**. That message and everything after it leave the conversation, the folder is put back to how it was before that turn (from the checkpoint in a repository, from the recorded before-text otherwise), and the text lands in the composer to change and resend.
+
+### Referencing what you are looking at
+
+The panels can put typed references beside your next message instead of pasted text. The Files panel's **Reference** button adds the open file, or the selected lines from the editor; the terminal's adds the selected output; the diff view's adds the diff. They appear as chips under the composer, and the message shows them as chips afterwards. A paste longer than 4,000 characters is attached as a text file instead of filling the composer. Up to 100 attachments go with a message; images up to 10 MB, other files up to 50 MB, kept beside the database and copied into the project for the agent.
+
+### Project settings
+
+Right-click a project for **Project settings**: the default agent and posture for new sessions; a **setup command** to run in every new worktree and the ignored files, such as `.env`, to **copy into worktrees** so a fresh branch runs at once; the **dev server command** the Preview panel starts, stops and restarts, with its output and a way to free a stuck port; whether `.env` files are kept away from Claude under every posture; the **project memory** every agent is given; and a one-time **import** of the conversations Claude Code and Codex kept about this folder.
+
 ### Sessions, notifications, the tray
 
-Right-click a session to rename, pin, or archive it. Pinned sessions stay at the top; archived ones move to an **Archived** list at the bottom of the sidebar. A turn that finishes while Frontier is in the background raises a desktop notification with a short chime; **Settings → General** turns the chime or the notification off.
+Right-click a session to rename, pin, archive, or snooze it for an hour or until tomorrow morning; **Remember this session** asks the agent for a few facts worth keeping and adds them to the project memory. Pinned sessions stay at the top; archived and snoozed ones move to their own lists at the bottom of the sidebar. **Settings → General → Workspace** can archive sessions idle for a number of days on its own, optionally remembering them first, and holds the **rules** every agent in the workspace is given at the top of every turn. A turn that finishes while Frontier is in the background raises a desktop notification with a short chime; **Settings → General** turns the chime or the notification off.
 
 Closing the window keeps Frontier running in the system tray: automations keep firing, finished turns still notify you, and the tray icon's menu offers **Open Frontier** and **Quit Frontier**. A left click on the icon reopens the window. **Settings → General → Window** turns this off, after which closing the window quits. Launching Frontier while it is already running brings the existing window to the front instead of starting a second copy.
 
@@ -131,6 +153,10 @@ Closing the window keeps Frontier running in the system tray: automations keep f
 ### Remote access
 
 **Settings → Remote access** lets a browser on another device on your network or tailnet use this Frontier. Turn it on, set a password for your user, restart Frontier, and open one of the listed addresses. The connection is plain HTTP, so use it on a network you trust or over Tailscale. In a browser the terminal, updater and desktop notifications are unavailable; everything else works.
+
+### Agent tools
+
+**Settings → Agents & Providers** shows each installed agent tool's version against the latest on npm, with a one-click update for tools installed through npm.
 
 ### MCP servers and skills
 
@@ -203,7 +229,11 @@ The Python suite exercises workspace boundaries, a turn's file record, agent swi
 | Adaptive routing and capability profiles | `backend/adaptive.py` |
 | Git status, staging, commit, push, checkpoints, worktrees | `backend/gitops.py` |
 | The approval MCP server Claude calls during a turn | `backend/permission_tool.py` |
-| Scheduled and webhook turns | `backend/automations.py` |
+| Team mode: plan, delegate, apply, review | `backend/team.py` |
+| Pull requests through the GitHub CLI | `backend/pullrequests.py` |
+| The project's dev server | `backend/devserver.py` |
+| Tool versions and updates, history import | `backend/maintenance.py` |
+| Scheduled and webhook turns, idle archiving | `backend/automations.py` |
 | Remote access and tray flags | `backend/remote.py` |
 | Workspace-scoped persistence and encryption | `backend/store.py` |
 | Project file reading, writing, search and the user's own checks | `backend/projects.py` |

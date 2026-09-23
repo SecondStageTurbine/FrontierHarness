@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from .schemas import LoginInput, TenantInput, ModelConfig, SUBSCRIPTION_PROVIDERS, PasswordInput, RemoteInput
-from . import automations, remote
+from . import automations, remote, devserver
 from .store import Store, TenantIsolationViolationException, uid, now, public_model
 from .agent import AgentRunner
 from . import localhealth
@@ -66,6 +66,7 @@ def create_app(directory=None, broker=None):
         finally:
             stop.set()
             await asyncio.gather(clock, return_exceptions=True)
+            await devserver.stop_all()
             tasks = list(runner.turns.values())
             for task in tasks:
                 task.cancel()
@@ -74,6 +75,7 @@ def create_app(directory=None, broker=None):
 
     app = FastAPI(title='Frontier Harness', version='1.0.0', lifespan=lifespan)
     app.state.store, app.state.runner = store, runner
+    BINARY_ATTACHMENTS = {'.mp4','.mov','.webm','.mkv','.avi','.mp3','.wav','.m4a','.ogg','.zip','.tar','.gz','.7z','.sqlite','.db','.parquet'}
     # What this process actually bound at start; the flag may already say otherwise for the next start.
     app.state.bound_remote = remote.enabled(store.directory) and os.environ.get('HARNESS_DATA_DIR') is not None
 
@@ -87,8 +89,8 @@ def create_app(directory=None, broker=None):
             if request.headers.get('sec-fetch-site') == 'cross-site':
                 return JSONResponse({'detail':'Cross-site API access is blocked.'},status_code=403)
             length = request.headers.get('content-length')
-            if length and int(length) > 6_000_000:
-                return JSONResponse({'detail':'Upload is too large. Maximum 5 MB.'},status_code=413)
+            if length and int(length) > 52_000_000:
+                return JSONResponse({'detail':'Upload is too large. Maximum 50 MB.'},status_code=413)
         response = await call_next(request)
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'same-origin'
@@ -377,16 +379,27 @@ def create_app(directory=None, broker=None):
     @app.post('/api/t/{tenant_id}/attachments')
     async def upload(tenant_id:str,request:Request,file:UploadFile=File(...)):
         scoped(request,tenant_id)
-        raw = await file.read(5_000_001)
-        if len(raw)>5_000_000:
-            raise ValueError('Files must be smaller than 5 MB.')
+        raw = await file.read(50_000_001)
+        if len(raw)>50_000_000:
+            raise ValueError('Files must be smaller than 50 MB.')
         filename = Path(file.filename or 'attachment.txt').name
         # Screenshots and pasted images are stored as data URLs; the instruct route writes them
         # back to disk in the project so an agent can open the actual file.
         mime = IMAGE_MIME.get(Path(filename).suffix.lower())
         if mime:
+            if len(raw)>10_000_000:
+                raise ValueError('Images must be smaller than 10 MB.')
             result = store.put(tenant_id,'attachments',dict(id=uid(),name=filename,kind='image',content=f'data:{mime};base64,'+base64.b64encode(raw).decode('ascii'),size=len(raw),created_at=now()))
             return {k:v for k,v in result.items() if k!='content'}
+        if Path(filename).suffix.lower() in BINARY_ATTACHMENTS:
+            # Video, audio and archives are kept as files beside the database, never in it, and
+            # the instruct route copies them into the project for the agent's own tools.
+            folder = store.directory/'attachments'
+            folder.mkdir(exist_ok=True)
+            attachment_id = uid()
+            (folder/(attachment_id+Path(filename).suffix.lower())).write_bytes(raw)
+            result = store.put(tenant_id,'attachments',dict(id=attachment_id,name=filename,kind='file',path=str(folder/(attachment_id+Path(filename).suffix.lower())),size=len(raw),created_at=now()))
+            return {k:v for k,v in result.items() if k!='path'}
         # Decided by format, not by whether the bytes happen to survive a UTF-8 decode:
         # a small office file that decodes would otherwise reach the model as gibberish.
         if filename.lower().endswith(('.doc','.docx','.xls','.xlsx','.ppt','.pptx','.odt','.ods','.odp','.rtf','.pages','.numbers','.key')):

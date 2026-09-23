@@ -4,7 +4,8 @@ import {listen} from '@tauri-apps/api/event';
 import {Terminal} from '@xterm/xterm';
 import {FitAddon} from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import {Plus,X} from 'lucide-react';
+import {Plus,X,MessageSquarePlus} from 'lucide-react';
+import type {ContextChip} from '../types';
 
 /** The user's own shells, one ConPTY each in the folder this conversation works in.
  *
@@ -30,7 +31,7 @@ async function open(cwd:string):Promise<Shell>{
  return {id,term,fit,element,title:`Shell ${(shells.get(cwd)?.length||0)+1}`};
 }
 
-export function Term({cwd}:{cwd:string}){
+export function Term({cwd,onChip}:{cwd:string;onChip?:(chip:ContextChip)=>void}){
  const host=useRef<HTMLDivElement>(null);
  const [list,setList]=useState<Shell[]>(()=>shells.get(cwd)||[]);
  const [active,setActive]=useState<string>(list[0]?.id||'');
@@ -48,7 +49,7 @@ export function Term({cwd}:{cwd:string}){
  },[active,list]);
  if(!isTauri())return <p className="terminal-help">A terminal needs the desktop app. In the browser, run your own checks with the project check runner below.</p>;
  return <div className="term-panel">
-  <div className="term-tabs">{list.map(s=><button key={s.id} className={s.id===active?'selected':''} onClick={()=>setActive(s.id)}><span>{s.title}{s.exited!=null?' · exited':''}</span><X size={11} aria-label={`Close ${s.title}`} onClick={e=>{e.stopPropagation();close(s.id)}}/></button>)}<button className="icon-button" title="New terminal" aria-label="New terminal" onClick={add}><Plus size={13}/></button></div>
+  <div className="term-tabs">{list.map(s=><button key={s.id} className={s.id===active?'selected':''} onClick={()=>setActive(s.id)}><span>{s.title}{s.exited!=null?' · exited':''}</span><X size={11} aria-label={`Close ${s.title}`} onClick={e=>{e.stopPropagation();close(s.id)}}/></button>)}<button className="icon-button" title="New terminal" aria-label="New terminal" onClick={add}><Plus size={13}/></button>{onChip&&<button className="icon-button" title="Send the selected terminal text to the prompt" aria-label="Reference terminal selection in the prompt" onClick={()=>{const s=list.find(x=>x.id===active);const text=s?.term.getSelection().trim();if(!text){setError('Select some terminal output first.');return}setError('');onChip({kind:'terminal',text:text.slice(0,20000),label:`${s!.title} output`})}}><MessageSquarePlus size={13}/></button>}</div>
   {error&&<p className="thread-error">{error}</p>}
   <div className="term-view" ref={host}/>
  </div>;

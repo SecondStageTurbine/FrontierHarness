@@ -153,16 +153,18 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
     extras = extras or {}
     servers = extras.get('mcp_servers') or []
     if provider == 'claude_cli':
-        if mode == 'read':
-            # Not `plan` mode: that makes Claude act as a planner — it writes a plan file into
-            # its own home and answers about that file — which is a side effect outside the
-            # project and the wrong voice for a question. Read only is the ordinary agent with
-            # its writing and shell tools removed, refusing anything else rather than asking.
-            argv = [*launch, '-p', '--output-format', 'json', '--model', model_name, '--permission-mode', 'dontAsk',
-                    '--disallowedTools', 'Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']
-        else:
-            argv = [*launch, '-p', '--output-format', 'json', '--model', model_name,
-                    '--permission-mode', {'edit': 'acceptEdits', 'auto': 'bypassPermissions'}[mode]]
+        # Not `plan` mode for Read only: that makes Claude act as a planner — it writes a plan
+        # file into its own home and answers about that file — which is a side effect outside
+        # the project and the wrong voice for a question. Read only is the ordinary agent with
+        # its writing and shell tools removed, refusing anything else rather than asking.
+        disallowed = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'] if mode == 'read' else []
+        if extras.get('protect_env'):
+            # The project keeps its secrets: Claude may not open .env files under any posture.
+            disallowed += ['Read(./.env)', 'Read(./.env.*)', 'Read(**/.env)', 'Read(**/.env.*)']
+        argv = [*launch, '-p', '--output-format', 'json', '--model', model_name,
+                '--permission-mode', {'read': 'dontAsk', 'edit': 'acceptEdits', 'auto': 'bypassPermissions'}[mode]]
+        if disallowed:
+            argv += ['--disallowedTools', *disallowed]
         if extras.get('mcp_config'):
             argv += ['--mcp-config', str(extras['mcp_config'])]
             if mode == 'edit' and extras.get('approval'):

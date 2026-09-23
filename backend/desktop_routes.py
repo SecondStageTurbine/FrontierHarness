@@ -9,10 +9,11 @@ from pathlib import Path
 from fastapi import Request, Response, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse
 from .schemas import (ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput, GitPaths, CommitInput, FileWrite,
-                      McpServerInput, ApprovalDecision, ApprovalRequest, FanoutInput, AutomationInput)
+                      McpServerInput, ApprovalDecision, ApprovalRequest, FanoutInput, AutomationInput, ProjectSettings, PrCreateInput,
+                      DevServerInput, RewindInput, ImportInput)
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
-from . import gitops, automations
+from . import gitops, automations, pullrequests, devserver, maintenance
 import secrets
 from datetime import datetime, timedelta, timezone
 from .adaptive import ADAPTIVE
@@ -32,7 +33,13 @@ def attachment_note(store,tenant_id,root,attachment_ids):
         attachment=store.get(tenant_id,'attachments',aid)
         name=Path(attachment['name']).name or 'attachment.txt'
         content=attachment.get('content') or ''
-        data=base64.b64decode(content.split(';base64,',1)[1]) if content.startswith('data:') and ';base64,' in content else content.encode('utf-8')
+        if attachment.get('kind')=='file' and attachment.get('path'):
+            try:
+                data=Path(attachment['path']).read_bytes()
+            except OSError:
+                continue
+        else:
+            data=base64.b64decode(content.split(';base64,',1)[1]) if content.startswith('data:') and ';base64,' in content else content.encode('utf-8')
         target=folder/name
         n=2
         while target.exists() and target.read_bytes()!=data:
@@ -44,6 +51,32 @@ def attachment_note(store,tenant_id,root,attachment_ids):
         lines.append(f'- {target.relative_to(root).as_posix()}')
     return ('\n\nAttached for context — harness-managed files in your working directory. '
             'Read them as needed; they are not project source and should not be committed:\n'+'\n'.join(lines))
+
+def context_note(files,tenant_id,project_id,session_id,chips):
+    """Typed references from the panels, written out beside the message so the agent sees exactly what the user pointed at."""
+    if not chips:
+        return ''
+    parts=[]
+    for chip in chips:
+        if chip.kind=='file' and chip.path:
+            try:
+                text=files.read(tenant_id,project_id,chip.path,session_id)['content']
+            except (ValueError,TenantIsolationViolationException):
+                parts.append(f'File {chip.path} (could not be read here; open it yourself).')
+                continue
+            lines=text.splitlines()
+            if chip.start:
+                start,end=max(1,chip.start),min(len(lines),chip.end or chip.start)
+                excerpt='\n'.join(lines[start-1:end])
+                parts.append(f'File {chip.path}, lines {start}-{end}:\n```\n{excerpt[:12000]}\n```')
+            else:
+                parts.append(f'File {chip.path}' + (f' (first 200 of {len(lines)} lines):' if len(lines)>200 else ':') + '\n```\n' + '\n'.join(lines[:200])[:12000] + '\n```')
+        elif chip.text:
+            label={'terminal':'Terminal output','diff':'Diff','selection':'Selected text'}.get(chip.kind,'Context')
+            if chip.path:
+                label+=f' from {chip.path}'
+            parts.append(f'{label}:\n```\n{chip.text[:12000]}\n```')
+    return ('\n\nREFERENCED CONTEXT (the user pointed at these while writing the message):\n'+'\n\n'.join(parts)) if parts else ''
 
 def session_sidebar_state(session,active_sessions):
     """Small status model for the desktop rail: working, waiting, done, or quiet."""
@@ -266,8 +299,10 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         if payload.worktree:
             branch=gitops.branch_name(payload.branch or payload.name,session['id'][:6])
             location=files.worktree_location(tenant_id,project_id,branch)
-            await gitops.worktree_add(project['root'],location,branch)
-            session['worktree']={'path':str(location),'branch':branch}
+            copied=await gitops.worktree_add(project['root'],location,branch,copy=project.get('worktree_copy') or [])
+            session['worktree']={'path':str(location),'branch':branch,'copied':copied}
+            if project.get('worktree_setup'):
+                session['setup']=await files.run_setup(location,project['worktree_setup'])
         return store.put(tenant_id,'sessions',session)
 
     @app.delete('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/worktree')
@@ -482,17 +517,167 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         """One message, one agentic turn. The reply arrives in the session, not in this response."""
         scoped(request,tenant_id)
         get_session(tenant_id,project_id,session_id)
-        content=payload.content+attachment_note(store,tenant_id,files.root(tenant_id,project_id,session_id),payload.attachment_ids or [])
+        content=payload.content+context_note(files,tenant_id,project_id,session_id,payload.context)+attachment_note(store,tenant_id,files.root(tenant_id,project_id,session_id),payload.attachment_ids or [])
         if payload.steer and runner.busy(tenant_id,session_id):
             # A turn is one opaque subprocess, so steering means stopping it and sending this instead.
             await runner.cancel(tenant_id,session_id)
-        return runner.send(tenant_id,project_id,session_id,content,payload.model_id,payload.mode,queue=payload.queue)
+        chips=[{'kind':c.kind,'path':c.path,'start':c.start,'end':c.end,'label':c.label or c.path or c.kind} for c in payload.context]
+        return runner.send(tenant_id,project_id,session_id,content,payload.model_id,payload.mode,queue=payload.queue,team=payload.team,context=chips)
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/messages/{message_id}/rewind')
+    async def rewind(tenant_id:str,project_id:str,session_id:str,message_id:str,payload:RewindInput,request:Request):
+        scoped(request,tenant_id)
+        get_session(tenant_id,project_id,session_id)
+        return await runner.rewind(tenant_id,project_id,session_id,message_id,payload.restore_files)
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/remember')
+    async def remember(tenant_id:str,project_id:str,session_id:str,request:Request):
+        scoped(request,tenant_id)
+        get_session(tenant_id,project_id,session_id)
+        return await runner.remember(tenant_id,project_id,session_id)
+
+    # ── Project settings, credentials, import ──
+    @app.put('/api/t/{tenant_id}/projects/{project_id}/settings')
+    def project_settings(tenant_id:str,project_id:str,payload:ProjectSettings,request:Request):
+        scoped(request,tenant_id)
+        project=store.get(tenant_id,'projects',project_id)
+        if payload.default_model_id and payload.default_model_id!=ADAPTIVE:
+            runner.select(tenant_id,payload.default_model_id)
+        project.update(payload.model_dump())
+        return store.put(tenant_id,'projects',project)
+
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/credentials')
+    def credentials(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        return files.credentials(tenant_id,project_id,session_id)
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/import')
+    def import_history(tenant_id:str,project_id:str,payload:ImportInput,request:Request):
+        scoped(request,tenant_id)
+        return maintenance.import_history(store,tenant_id,store.get(tenant_id,'projects',project_id),payload.sources)
+
+    @app.get('/api/t/{tenant_id}/providers/versions')
+    async def provider_versions(tenant_id:str,request:Request):
+        scoped(request,tenant_id)
+        return await maintenance.versions()
+
+    @app.post('/api/t/{tenant_id}/providers/{provider}/update')
+    async def provider_update(tenant_id:str,provider:str,request:Request):
+        scoped(request,tenant_id)
+        return {'version':await maintenance.update(provider)}
+
+    # ── Pull requests through gh ──
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/pr')
+    async def pr_status(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        root=files.root(tenant_id,project_id,session_id)
+        if not pullrequests.available():
+            return {'available':False,'pr':None}
+        try:
+            pr=await pullrequests.current(root)
+        except gitops.GitError as exc:
+            return {'available':True,'pr':None,'error':str(exc)}
+        if session_id and pr:
+            session=store.get(tenant_id,'sessions',session_id)
+            if (session.get('pull_request') or {}).get('number')!=pr['number'] or session['pull_request'].get('state')!=pr['state']:
+                session['pull_request']={'number':pr['number'],'url':pr['url'],'state':pr['state'],'title':pr['title']}
+                store.put(tenant_id,'sessions',session)
+        return {'available':True,'pr':pr}
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/pr')
+    async def pr_create(tenant_id:str,project_id:str,payload:PrCreateInput,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        root=files.root(tenant_id,project_id,session_id)
+        pr=await pullrequests.create(root,payload.title,payload.body,payload.base,payload.draft)
+        if session_id and pr:
+            session=store.get(tenant_id,'sessions',session_id)
+            session['pull_request']={'number':pr['number'],'url':pr['url'],'state':pr['state'],'title':pr['title']}
+            store.put(tenant_id,'sessions',session)
+            store.event(tenant_id,session_id,'pr.opened',f'Opened pull request #{pr["number"]}.')
+        return {'available':True,'pr':pr}
+
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/pr/comments')
+    async def pr_comments(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        root=files.root(tenant_id,project_id,session_id)
+        pr=await pullrequests.current(root)
+        if not pr:
+            raise ValueError('This branch has no pull request.')
+        feedback=await pullrequests.review_comments(root,pr['number'])
+        return {**feedback,'pr':pr,'prompt':pullrequests.address_prompt(pr,feedback)}
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/pr/description')
+    async def pr_description(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
+        """A title and body for the pull request, drafted by the conversation's agent from the branch's commits and diff."""
+        scoped(request,tenant_id)
+        root=files.root(tenant_id,project_id,session_id)
+        current=await gitops.status(root)
+        base=None
+        for candidate in ('origin/main','origin/master','main','master'):
+            try:
+                await gitops.run(root,'rev-parse','--verify','-q',candidate)
+                base=candidate
+                break
+            except gitops.GitError:
+                continue
+        if not base:
+            raise ValueError('No main or master branch to compare against.')
+        log=await gitops.run(root,'log','--oneline',f'{base}..HEAD')
+        stat=await gitops.run(root,'diff','--stat',f'{base}...HEAD')
+        body=await gitops.run(root,'diff',f'{base}...HEAD')
+        if not (log.strip() or stat.strip()):
+            raise ValueError('This branch has no commits beyond the base yet. Commit first.')
+        config=runner.writer(tenant_id,store.get(tenant_id,'sessions',session_id) if session_id else {'messages':[]},store.get(tenant_id,'projects',project_id))
+        prompt=('Write a pull request title and description for the branch changes below. Reply with the title on the first line, then a blank line, '
+                'then a description in markdown: what changed and why, how it was tested, anything reviewers should look at. No code fences, no preamble, do not run commands.'
+                f'\n\nCOMMITS:\n{log[:4000]}\n\nFILES:\n{stat[:4000]}\n\nDIFF:\n{body[:24000]}')
+        result=await runner.broker.invoke_agent(tenant_id,config,prompt,'read',str(root))
+        text=(result.text or '').strip()
+        title,_,rest=text.partition('\n')
+        return {'title':title.strip().lstrip('#').strip()[:200] or current.get('branch'),'body':rest.strip()[:20000],'model_name':config['name']}
+
+    # ── The project's dev server ──
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/devserver')
+    def devserver_status(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        root=files.root(tenant_id,project_id,session_id)
+        server=devserver.get(root)
+        return server.status() if server else {'root':str(root),'running':False,'command':store.get(tenant_id,'projects',project_id).get('dev_command')}
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/devserver')
+    async def devserver_control(tenant_id:str,project_id:str,payload:DevServerInput,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        root=files.root(tenant_id,project_id,session_id)
+        project=store.get(tenant_id,'projects',project_id)
+        if payload.action=='kill_port':
+            if not payload.port:
+                raise ValueError('Say which port to free.')
+            return {'killed':await devserver.kill_port(payload.port)}
+        if payload.action=='stop':
+            server=await devserver.stop(root)
+            return server.status() if server else {'root':str(root),'running':False}
+        command=payload.command or project.get('dev_command')
+        if not command:
+            raise ValueError('Set the dev server command in the project settings first, such as npm run dev.')
+        if payload.command and payload.command!=project.get('dev_command'):
+            project['dev_command']=payload.command
+            store.put(tenant_id,'projects',project)
+        if payload.action=='restart':
+            await devserver.stop(root)
+        server=await devserver.start(root,command)
+        return server.status()
 
     @app.patch('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}')
     def update_session(tenant_id:str,project_id:str,session_id:str,payload:SessionPatch,request:Request):
         scoped(request,tenant_id)
         session=get_session(tenant_id,project_id,session_id)
-        session.update({k:v for k,v in payload.model_dump().items() if v is not None})
+        session.update({k:v for k,v in payload.model_dump().items() if v is not None and k!='snoozed_until'})
+        if payload.snoozed_until is not None:
+            if payload.snoozed_until=='':
+                session.pop('snoozed_until',None)
+            else:
+                datetime.fromisoformat(payload.snoozed_until.replace('Z','+00:00'))  # Must parse, or it never wakes.
+                session['snoozed_until']=payload.snoozed_until
         if payload.name is not None:
             session['auto_named']=False  # A name the user chose is never replaced by the agent's.
         return store.put(tenant_id,'sessions',session)

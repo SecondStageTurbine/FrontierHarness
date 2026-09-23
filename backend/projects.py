@@ -190,6 +190,42 @@ class ProjectFiles:
                         return {'hits':hits,'files':scanned,'truncated':True}
         return {'hits':hits,'files':scanned,'truncated':False}
 
+    async def run_setup(self,root,command):
+        """The project's own worktree setup command, such as `npm ci`, run once in a fresh worktree.
+
+        The command is the user's configuration for this project, never text from an agent, so
+        it runs through the shell with the user's environment, bounded by five minutes.
+        """
+        proc=await asyncio.create_subprocess_shell(command,cwd=str(root),env={**os.environ,'CI':'true','NO_COLOR':'1'},stdin=asyncio.subprocess.DEVNULL,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT,**child_flags())
+        try:
+            async with asyncio.timeout(300):
+                out,_=await proc.communicate()
+        except TimeoutError:
+            await terminate(proc)
+            return {'command':command,'exit_code':None,'output':'Setup exceeded its five-minute limit and was stopped.'}
+        return {'command':command,'exit_code':proc.returncode,'output':out.decode('utf-8','replace')[-8000:]}
+
+    def credentials(self,tenant_id,project_id,session_id=None):
+        """The names of variables in the project's .env files, never their values."""
+        root=self.root(tenant_id,project_id,session_id)
+        found=[]
+        for file in sorted(root.glob('.env*')):
+            if not file.is_file() or file.is_symlink():
+                continue
+            names=[]
+            try:
+                for line in file.read_text(encoding='utf-8',errors='replace').splitlines():
+                    line=line.strip()
+                    if not line or line.startswith('#') or '=' not in line:
+                        continue
+                    name=line.split('=',1)[0].strip().removeprefix('export ').strip()
+                    if re.match(r'^[A-Za-z_][A-Za-z0-9_]*$',name):
+                        names.append(name)
+            except OSError:
+                continue
+            found.append({'file':file.name,'names':names})
+        return found
+
     def read(self,tenant_id,project_id,relative,session_id=None):
         file=self.resolve(tenant_id,project_id,relative,session_id)
         if not file.is_file():

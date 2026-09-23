@@ -65,6 +65,10 @@ class TenantInput(StrictModel):
     # compatible or Anthropic model, a local Ollama model being the intended case. Empty means
     # deterministic heuristics only, which is the fallback whenever the classifier fails anyway.
     router_model_id: str | None = None
+    # Rules every agent in this workspace is given at the top of every turn, and housekeeping.
+    rules: str | None = Field(default=None, max_length=8000)
+    auto_archive_days: int | None = Field(default=None, ge=1, le=365)
+    memory_auto: bool = False
 
 class TenantContext(TenantInput):
     tenant_id: str
@@ -95,16 +99,55 @@ class SessionPatch(StrictModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     pinned: bool | None = None
     archived: bool | None = None
+    snoozed_until: str | None = Field(default=None, max_length=40)  # ISO time; '' wakes it now.
+
+class ContextChip(StrictModel):
+    kind: Literal['file', 'terminal', 'diff', 'selection']
+    path: str | None = Field(default=None, max_length=500)
+    start: int | None = Field(default=None, ge=1)
+    end: int | None = Field(default=None, ge=1)
+    text: str | None = Field(default=None, max_length=20000)
+    label: str | None = Field(default=None, max_length=200)
+
+class ProjectSettings(StrictModel):
+    default_mode: Mode | None = None
+    default_model_id: str | None = Field(default=None, max_length=80)
+    worktree_setup: str | None = Field(default=None, max_length=500)
+    worktree_copy: list[str] = Field(default_factory=list, max_length=20)
+    protect_env: bool = True
+    dev_command: str | None = Field(default=None, max_length=300)
+    memory: str | None = Field(default=None, max_length=20000)
+
+class PrCreateInput(StrictModel):
+    title: str = Field(min_length=1, max_length=200)
+    body: str = Field(default='', max_length=20000)
+    base: str | None = Field(default=None, max_length=120)
+    draft: bool = False
+
+class DevServerInput(StrictModel):
+    action: Literal['start', 'stop', 'restart', 'kill_port']
+    command: str | None = Field(default=None, max_length=300)
+    port: int | None = Field(default=None, ge=1, le=65535)
+
+class RewindInput(StrictModel):
+    restore_files: bool = True
+
+class ImportInput(StrictModel):
+    sources: list[Literal['claude', 'codex']] = Field(default_factory=lambda: ['claude', 'codex'], min_length=1)
 
 class InstructionInput(StrictModel):
     content: str = Field(min_length=2, max_length=40000)
     model_id: str = Field(min_length=1)
     mode: Mode = 'edit'
     # Attachments named here are written into the project before the turn so the agent can read them.
-    attachment_ids: list[str] = Field(default_factory=list, max_length=8)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=100)
     # While a turn is running: queue waits for it to finish; steer stops it and sends this instead.
     queue: bool = False
     steer: bool = False
+    # Team mode: the chosen agent leads, plans the work, and other agents carry it out.
+    team: bool = False
+    # Typed references from the panels, rendered into the prompt beside the message.
+    context: list[ContextChip] = Field(default_factory=list, max_length=20)
 
 class CommandInput(StrictModel):
     command: str = Field(min_length=1, max_length=300)

@@ -196,14 +196,65 @@ def branch_name(text, suffix):
     return f'frontier/{slug}-{suffix}'
 
 
-async def worktree_add(root, path, branch):
-    """A new worktree on a new branch from the current HEAD, or on the branch if it already exists."""
+async def worktree_add(root, path, branch, copy=()):
+    """A new worktree on a new branch from the current HEAD, or on the branch if it already exists.
+
+    `copy` names ignored files, such as .env, that the user chose to carry into every worktree so
+    a fresh branch runs at once. Only files inside the project are copied, never followed links.
+    """
     if not await has_head(root):
         raise GitError('Make a first commit in this repository before working in a branch.')
     exists = (await run(root, 'branch', '--list', branch)).strip() != ''
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     args = ['worktree', 'add', str(path), branch] if exists else ['worktree', 'add', '-b', branch, str(path)]
     await run(root, *args)
+    return hydrate(root, path, copy)
+
+
+def hydrate(root, path, names):
+    """Copy the named ignored files from the project into a worktree; returns what was copied."""
+    copied = []
+    for name in names or []:
+        relative = str(name).replace(chr(92), '/').strip('/')
+        if not relative or '..' in relative.split('/'):
+            continue
+        source, target = Path(root)/relative, Path(path)/relative
+        if source.is_symlink() or not source.exists() or Path(root).resolve() not in source.resolve().parents:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, target, dirs_exist_ok=True, symlinks=False)
+        else:
+            shutil.copy2(source, target)
+        copied.append(relative)
+    return copied
+
+
+async def apply_between(root, before, after):
+    """Bring the changes between two checkpoints into another working tree of the same repository.
+
+    Used by team mode to fold a worker's edits back into the lead's folder without commits or a
+    clean tree: the diff is applied three-way, so unrelated local changes stay put.
+    """
+    patch = await run(root, 'diff', '--binary', before, after)
+    if not patch.strip():
+        return False
+    proc = await asyncio.create_subprocess_exec('git', 'apply', '--3way', '--whitespace=nowarn', cwd=str(root), env=child_env(GIT_TERMINAL_PROMPT='0'),
+                                                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **child_flags())
+    out, err = await proc.communicate(patch.encode('utf-8', 'surrogateescape'))
+    if proc.returncode != 0:
+        raise GitError((err.decode('utf-8', 'replace').strip() or out.decode('utf-8', 'replace').strip() or 'git apply failed')[:1500])
+    # A three-way apply stages what it lands; the user should see plain working-tree changes and commit deliberately.
+    await stage(root, [path for _, path in await changed_between(root, before, after)], staged=False)
+    return True
+
+
+async def rollback(root, before):
+    """Put the whole working tree back to a checkpoint: what a turn and everything after it changed."""
+    current = await checkpoint(root, 'Frontier: before rewind')
+    if not current:
+        raise GitError('This folder is not a repository.')
+    return await restore(root, before, current)
 
 
 async def worktree_remove(root, path):

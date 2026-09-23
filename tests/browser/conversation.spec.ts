@@ -1,6 +1,6 @@
 import {test,expect} from '@playwright/test';
 
-test('one conversation, any agent: selection, switching and persistence',async({page})=>{
+test('one conversation, any agent: selection, switching, team mode, rewind, snooze, project settings',async({page})=>{
  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
  const request=page.request;
  await request.post('/api/auth/setup',{data:{username:'desktop-tester',password:'desktop-test-password-2026'}});
@@ -16,40 +16,83 @@ test('one conversation, any agent: selection, switching and persistence',async({
  await page.getByRole('button',{name:'Create project',exact:true}).click();
  await expect(page.getByRole('heading',{name:'What are we working on?'})).toBeVisible();
 
- // The agent selector offers agents only: an API key reaches a model, not an agent.
+ // The agent selector offers agents only: an API key reaches a model, not an agent. Adaptive is the default.
  const agent=page.getByLabel('Agent',{exact:true});
  await expect(agent).toBeVisible();
- const options=await agent.locator('option').allTextContents();
- // Adaptive is a selection like any other, offered first; the agents follow, grouped by
- // provider so a model named after its provider is not printed twice.
- expect(options).toEqual(['Adaptive','Claude','Codex']);
+ expect(await agent.locator('option').allTextContents()).toEqual(['Adaptive','Claude','Codex']);
  expect(await agent.locator('optgroup').allInnerTexts()).toHaveLength(2);
+ await expect(agent).toHaveValue('adaptive');
+ await expect(page.locator('.composer-footnote')).toContainText('least expensive agent');
 
  // What the agent may do is chosen per turn and defaults to editing files, not running commands.
  const mode=page.getByLabel('What the agent may do',{exact:true});
  await expect(mode).toHaveValue('edit');
+ await agent.selectOption({label:'Claude'});
  await mode.selectOption('read');
  await expect(page.locator('.composer-footnote')).toContainText('cannot change anything');
+ await mode.selectOption('edit');
 
- // With Adaptive selected the footnote says what it will do instead of what the agent may do.
+ // Team mode: Adaptive cannot lead; a chosen agent can, and the footnote says what it will do.
+ const team=page.getByRole('button',{name:'Toggle team mode',exact:true});
  await agent.selectOption('adaptive');
- await expect(page.locator('.composer-footnote')).toContainText('least expensive agent');
-
- // Selecting a different agent says, before anything is sent, what the next turn costs.
- await agent.selectOption({label:'Codex'});
- await page.getByLabel('Ask Frontier',{exact:true}).fill('Explain this project.');
- await expect(page.getByRole('button',{name:'Send',exact:true})).toBeEnabled();
+ await team.click();
+ await expect(page.locator('.composer-error')).toContainText('Adaptive cannot lead');
+ await page.getByRole('button',{name:'Dismiss error',exact:true}).click();
+ await agent.selectOption({label:'Claude'});
+ await team.click();
+ await expect(team).toHaveAttribute('aria-pressed','true');
+ await expect(page.locator('.composer-footnote')).toContainText('Claude will lead');
+ await team.click();
+ await expect(team).toHaveAttribute('aria-pressed','false');
 
  // The composer draft survives a reload, and the conversation is empty until a turn is sent.
+ await page.getByLabel('Ask Frontier',{exact:true}).fill('Explain this project.');
  await page.reload();
  await expect(page.getByLabel('Ask Frontier',{exact:true})).toHaveValue('Explain this project.');
  await expect(page.getByRole('heading',{name:'What are we working on?'})).toBeVisible();
 
- // Settings hold agents and workspaces; the workflow engine's pages are gone.
+ // One turn with the scripted agent, then Edit from here rewinds the conversation into the composer.
+ await page.getByLabel('Agent',{exact:true}).selectOption({label:'Claude'});
+ await page.getByRole('button',{name:'Send',exact:true}).click();
+ await expect(page.locator('.agent-turn')).toContainText('Done.',{timeout:15000});
+ await page.locator('.user-message').hover();
+ await page.getByRole('button',{name:'Edit from here',exact:true}).click();
+ await page.getByRole('button',{name:'Confirm',exact:true}).click();
+ await expect(page.getByLabel('Ask Frontier',{exact:true})).toHaveValue('Explain this project.');
+ await expect(page.getByRole('heading',{name:'What are we working on?'})).toBeVisible();
+
+ // Another turn, then the session menu: snooze hides the session under its own list.
+ await page.getByRole('button',{name:'Send',exact:true}).click();
+ await expect(page.locator('.agent-turn')).toContainText('Done.',{timeout:15000});
+ const row=page.locator('.session-list>button').first();
+ await row.click({button:'right'});
+ const menu=page.getByRole('menu');
+ await expect(menu.getByRole('menuitem',{name:'Remember this session'})).toBeVisible();
+ await menu.getByRole('menuitem',{name:'Snooze 1 hour'}).click();
+ await expect(page.locator('.archived-toggle',{hasText:'Snoozed (1)'})).toBeVisible();
+ await page.locator('.archived-toggle',{hasText:'Snoozed (1)'}).click();
+ await expect(page.locator('.session-list>button').first()).toBeVisible();
+
+ // Project settings from the project's own menu: memory saved and read back.
+ await page.locator('.project-list>button').first().click({button:'right'});
+ await page.getByRole('menuitem',{name:'Project settings…'}).click();
+ await page.getByLabel('Notes every agent is given',{exact:true}).fill('- Uses tabs.');
+ await page.getByRole('button',{name:'Save settings',exact:true}).click();
+ await expect(page.locator('.toast')).toContainText('Project settings saved');
+ await page.locator('.project-list>button').first().click({button:'right'});
+ await page.getByRole('menuitem',{name:'Project settings…'}).click();
+ await expect(page.getByLabel('Notes every agent is given',{exact:true})).toHaveValue('- Uses tabs.');
+ await page.keyboard.press('Escape');
+
+ // Settings: every page is there, the workspace rules save, and the tools table renders.
  await page.getByRole('button',{name:'Settings',exact:true}).click();
  const tabs=await page.locator('.desktop-settings nav button').allTextContents();
- expect(tabs).toEqual(['General','Agents & Providers','Workspaces','Security','Developer']);
+ expect(tabs).toEqual(['General','Agents & Providers','MCP & Skills','Automations','Usage','Remote access','Workspaces','Security','Developer']);
+ await page.getByLabel('Rules for every agent',{exact:true}).fill('Always write tests.');
+ await page.getByRole('button',{name:'Save workspace settings',exact:true}).click();
+ await expect.poll(async()=>(await (await request.get('/api/tenants')).json())[0].rules).toBe('Always write tests.');
  await page.locator('.desktop-settings nav button',{hasText:'Agents & Providers'}).click();
  await expect(page.getByRole('heading',{name:'Agents & providers'})).toBeVisible();
+ await expect(page.locator('.tool-versions, .error-text').first()).toBeVisible({timeout:20000});
  expect(errors).toEqual([]);
 });

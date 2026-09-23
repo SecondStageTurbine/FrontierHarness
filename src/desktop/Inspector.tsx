@@ -1,15 +1,15 @@
 import {useState,useEffect,useRef,useDeferredValue} from 'react';
-import {X,FileCode2,Folder,ChevronRight,Download,Terminal,SplitSquareHorizontal,AlignLeft,Play,Save,Search} from 'lucide-react';
+import {X,FileCode2,Folder,ChevronRight,Download,Terminal,SplitSquareHorizontal,AlignLeft,Play,Save,Search,MessageSquarePlus} from 'lucide-react';
 import {isTauri} from '@tauri-apps/api/core';
 import {Term} from './Term';
 import {Preview} from './Preview';
 import {useResource,useWorkspace,useRefresh} from '../app/context';
 import {api,download} from '../lib/api';
-import type {ProjectFile,Project,Session,FileChange} from '../types';
+import type {ProjectFile,Project,Session,FileChange,ContextChip} from '../types';
 import type {InspectorTab} from './Conversation';
 import {GitPanel} from './GitPanel';
 
-export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,onFile,busy}:{tab:InspectorTab;onTab:(t:InspectorTab)=>void;onClose:()=>void;project:Project;session?:Session;filePath:string|null;fileLine?:number;onFile:(s:string,line?:number)=>void;busy:boolean}){
+export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,onFile,busy,onChip,onCompose}:{tab:InspectorTab;onTab:(t:InspectorTab)=>void;onClose:()=>void;project:Project;session?:Session;filePath:string|null;fileLine?:number;onFile:(s:string,line?:number)=>void;busy:boolean;onChip?:(chip:ContextChip)=>void;onCompose?:(text:string)=>void}){
  const {path,notify}=useWorkspace(),refresh=useRefresh();
  const [query,setQuery]=useState('');const deferred=useDeferredValue(query.trim());
  // A session in its own worktree reads that worktree; the project folder otherwise.
@@ -35,10 +35,10 @@ export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,o
     {deferred.length>=2?(found.isPending?<p className="inspector-empty">Searching…</p>:found.error?<p className="thread-error">{found.error.message}</p>:!found.data?.hits.length?<p className="inspector-empty">Nothing in {found.data?.files||0} files mentions “{deferred}”.</p>:<div className="search-hits">{found.data.hits.map((h,i)=><button key={i} onClick={()=>onFile(h.path,h.line)} title={`${h.path}:${h.line}`}><span>{h.path}<em>:{h.line}</em></span><code>{h.text}</code></button>)}{found.data.truncated&&<p>Showing the first {found.data.hits.length} matches.</p>}</div>):
     tree.error?<p className="thread-error">{tree.error.message}</p>:tree.isPending?<p className="inspector-empty">Reading project files…</p>:!tree.data?.length?<p className="inspector-empty">This folder is empty. Files the agent creates appear here.</p>:<FileTree files={tree.data} changes={changes} selected={filePath} onSelect={onFile}/>}
    </div>{filePath&&<div className="file-preview">
-    <div className="file-preview-title"><FileCode2 size={14}/><span>{filePath}</span><button className="icon-button" aria-label="Download open file" title="Download file" disabled={!fileQ.data} onClick={()=>fileQ.data&&download(filePath,fileQ.data.content)}><Download size={13}/></button></div>
-    {fileQ.error?<p className="thread-error">{fileQ.error.message}</p>:fileQ.data?<Editor key={filePath} text={fileQ.data.content} line={fileLine} onSave={async content=>{await api.put(path(`/projects/${project.id}/file?path=${encodeURIComponent(filePath)}${scope?`&${scope}`:''}`),{content});await fileQ.refetch();notify('Saved')}}/>:<p className="inspector-empty">Opening file…</p>}
+    <div className="file-preview-title"><FileCode2 size={14}/><span>{filePath}</span>{onChip&&<button className="icon-button" aria-label="Reference this file in the prompt" title="Reference this file in the prompt" onClick={()=>onChip({kind:'file',path:filePath,label:filePath})}><MessageSquarePlus size={13}/></button>}<button className="icon-button" aria-label="Download open file" title="Download file" disabled={!fileQ.data} onClick={()=>fileQ.data&&download(filePath,fileQ.data.content)}><Download size={13}/></button></div>
+    {fileQ.error?<p className="thread-error">{fileQ.error.message}</p>:fileQ.data?<Editor key={filePath} text={fileQ.data.content} line={fileLine} onReference={onChip?(start,end)=>onChip({kind:'file',path:filePath,start,end,label:filePath}):undefined} onSave={async content=>{await api.put(path(`/projects/${project.id}/file?path=${encodeURIComponent(filePath)}${scope?`&${scope}`:''}`),{content});await fileQ.refetch();notify('Saved')}}/>:<p className="inspector-empty">Opening file…</p>}
    </div>}</>}
-   {tab==='Changes'&&<GitPanel projectId={project.id} sessionId={session?.worktree?session.id:undefined} busy={busy}/>}
+   {tab==='Changes'&&<GitPanel projectId={project.id} sessionId={session?.worktree?session.id:undefined} busy={busy} onChip={onChip} onCompose={onCompose}/>}
    {tab==='Changes'&&(!changes.length?<p className="inspector-empty">Files the agent writes in this conversation appear here, with what they looked like before.</p>:<>
     <div className="git-section-label turn-changes"><span>Turn changes</span><small>{changes.length}</small></div>
     <div className="change-picker">
@@ -49,8 +49,8 @@ export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,o
     {split&&selected.before!==null?<div className="split-diff"><div><span>Before</span><CodeView text={selected.before}/></div><div><span>After</span><CodeView text={selected.after||''}/></div></div>
      :<CodeView text={selected.after??selected.before??''}/>}</>}
    </>)}
-   {tab==='Preview'&&<Preview projectId={project.id}/>}
-   {tab==='Terminal'&&isTauri()&&<Term cwd={session?.worktree?.path||project.root}/>}
+   {tab==='Preview'&&<Preview projectId={project.id} sessionId={session?.worktree?session.id:undefined} devCommand={project.dev_command||''}/>}
+   {tab==='Terminal'&&isTauri()&&<Term cwd={session?.worktree?.path||project.root} onChip={onChip}/>}
    {tab==='Terminal'&&!isTauri()&&<>
     <div className="terminal-output">{!commands.length&&<p>Your own project checks and their actual output appear here.<br/>The agent runs its own commands through its tool.</p>}
      {commands.map(c=><div className="terminal-command" key={c.id}><strong><span>❯</span> {c.command}</strong><pre>{c.output||'Process started…'}</pre><small className={c.exit_code===0?'file-added':c.status==='running'?'muted':'file-modified'}>{c.status==='running'?'Running…':c.status==='completed'?`Process exited with code ${c.exit_code}`:`${c.status} · exit ${c.exit_code??'unavailable'}`}</small></div>)}
@@ -68,7 +68,7 @@ export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,o
 }
 
 /** A plain text editor over one project file: type, Ctrl+S or Save. Nothing fancier until it is missed. */
-function Editor({text,line,onSave}:{text:string;line?:number;onSave:(content:string)=>Promise<void>}){
+function Editor({text,line,onSave,onReference}:{text:string;line?:number;onSave:(content:string)=>Promise<void>;onReference?:(start:number,end:number)=>void}){
  const [draft,setDraft]=useState(text),[saving,setSaving]=useState(false),[error,setError]=useState('');
  const area=useRef<HTMLTextAreaElement>(null);
  const dirty=draft!==text;
@@ -77,7 +77,7 @@ function Editor({text,line,onSave}:{text:string;line?:number;onSave:(content:str
  async function save(){if(!dirty||saving)return;setSaving(true);setError('');try{await onSave(draft)}catch(e){setError((e as Error).message)}finally{setSaving(false)}}
  return <div className="file-editor">
   <textarea ref={area} spellCheck={false} aria-label="File contents" value={draft} onChange={e=>setDraft(e.target.value)} onKeyDown={e=>{if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();void save()}if(e.key==='Tab'){e.preventDefault();const el=e.currentTarget,s=el.selectionStart,end=el.selectionEnd;setDraft(draft.slice(0,s)+'  '+draft.slice(end));requestAnimationFrame(()=>el.setSelectionRange(s+2,s+2))}}}/>
-  <div className="file-editor-bar">{error?<span className="thread-error">{error}</span>:<span>{dirty?'Unsaved changes':`${draft.split('\n').length} lines`}</span>}<button className={dirty?'primary':''} disabled={!dirty||saving} onClick={save}><Save size={12}/>{saving?'Saving…':'Save'}<kbd>Ctrl S</kbd></button></div>
+  <div className="file-editor-bar">{error?<span className="thread-error">{error}</span>:<span>{dirty?'Unsaved changes':`${draft.split('\n').length} lines`}</span>}<span className="editor-actions">{onReference&&<button type="button" title="Reference the selected lines in the prompt" onClick={()=>{const el=area.current;if(!el)return;const before=draft.slice(0,el.selectionStart);const start=before.split('\n').length;const end=draft.slice(0,Math.max(el.selectionEnd,el.selectionStart)).split('\n').length;onReference(start,end)}}><MessageSquarePlus size={12}/>Reference</button>}<button className={dirty?'primary':''} disabled={!dirty||saving} onClick={save}><Save size={12}/>{saving?'Saving…':'Save'}<kbd>Ctrl S</kbd></button></span></div>
  </div>;
 }
 function CodeView({text}:{text:string}){return <div className="code-view">{text.split('\n').map((line,i)=><div key={i}><span>{i+1}</span><code>{line||' '}</code></div>)}</div>}
