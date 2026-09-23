@@ -146,6 +146,36 @@ def locate(provider):
     return None
 
 
+def package_bin(root, entry, name):
+    """The program an npm package names for `name` in its package.json, resolved inside the package.
+
+    `entry` is the legacy path of the tool's script under `root`; its first three segments locate the
+    package folder (node_modules/<scope>/<pkg>, or two for an unscoped package).
+    """
+    parts = Path(entry).parts
+    depth = 3 if len(parts) > 2 and parts[1].startswith('@') else 2
+    package = Path(root, *parts[:depth])
+    manifest = package/'package.json'
+    if not manifest.is_file():
+        return None
+    try:
+        bins = json.loads(manifest.read_text(encoding='utf-8')).get('bin')
+    except (OSError, ValueError):
+        return None
+    target = bins if isinstance(bins, str) else (bins or {}).get(name) if isinstance(bins, dict) else None
+    if not target:
+        return None
+    program = (package/target).resolve()
+    for candidate in (program, program.with_suffix('.exe')) if os.name == 'nt' and not program.suffix else (program,):
+        if candidate.is_file():
+            return [str(candidate)]
+    return None
+
+
+def _need_node(label):
+    raise ProviderError(f'{label} is installed through npm, so Node.js is required to run it, and node was not found on the path.')
+
+
 def resolve_cli(provider):
     name, entry, label = CLI_TOOLS[provider]
     found = locate(provider)
@@ -157,7 +187,12 @@ def resolve_cli(provider):
             return [found]
     node = shutil.which('node')
     roots = ([Path(found).parent] if found else []) + ([Path(os.environ['APPDATA'])/'npm'] if os.environ.get('APPDATA') else [])
-    for root in roots:
+    for root in dict.fromkeys(roots):
+        # What the installed package itself declares as its program comes first: newer Claude Code
+        # releases ship a native bin/claude.exe in the npm package instead of the old cli.js.
+        declared = package_bin(root, entry, name)
+        if declared:
+            return declared if declared[-1].lower().endswith('.exe') or not declared[-1].lower().endswith(('.js', '.mjs', '.cjs')) else ([node, declared[-1]] if node else _need_node(label))
         for script in ([root/entry] if entry.endswith('.js') else [root/(entry+'.exe'), root/entry]):
             if not script.is_file():
                 continue

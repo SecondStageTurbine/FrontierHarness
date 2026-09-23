@@ -256,3 +256,44 @@ def test_a_tool_outside_the_path_is_found_in_its_installers_folder(tmp_path, mon
     with pytest.raises(broker.ProviderError) as missing:
         broker.resolve_cli('claude_cli')
     assert 'not on the PATH' in str(missing.value) and 'install.ps1' in str(missing.value)
+
+
+def _npm_root(tmp_path, bin_decl, files):
+    import json
+    root = tmp_path/'npm'
+    pkg = root/'node_modules'/'@anthropic-ai'/'claude-code'
+    for relative, data in files.items():
+        (pkg/relative).parent.mkdir(parents=True, exist_ok=True)
+        (pkg/relative).write_bytes(data)
+    (pkg/'package.json').write_text(json.dumps({'name': '@anthropic-ai/claude-code', 'bin': bin_decl}), encoding='utf-8')
+    (root/'claude.cmd').write_text('@echo off', encoding='utf-8')  # The npm shim, found first on PATH.
+    return root
+
+
+def test_the_native_npm_layout_runs_its_exe_directly(tmp_path, monkeypatch):
+    from backend import broker
+    root = _npm_root(tmp_path, {'claude': 'bin/claude.exe'}, {'bin/claude.exe': b'MZ'})
+    monkeypatch.setattr(broker, 'locate', lambda provider: str(root/'claude.cmd'))
+    monkeypatch.setenv('APPDATA', str(tmp_path/'elsewhere'))
+    argv = broker.resolve_cli('claude_cli')
+    assert argv == [str((root/'node_modules'/'@anthropic-ai'/'claude-code'/'bin'/'claude.exe').resolve())]
+
+
+def test_the_native_npm_layout_is_found_under_appdata_with_nothing_on_path(tmp_path, monkeypatch):
+    from backend import broker
+    appdata = tmp_path/'Roaming'
+    root = _npm_root(tmp_path, {'claude': 'bin/claude.exe'}, {'bin/claude.exe': b'MZ'})
+    (appdata).mkdir(); root.rename(appdata/'npm')
+    monkeypatch.setattr(broker, 'locate', lambda provider: None)
+    monkeypatch.setenv('APPDATA', str(appdata))
+    assert broker.resolve_cli('claude_cli')[0].endswith('claude.exe')
+
+
+def test_the_older_javascript_layout_still_runs_through_node(tmp_path, monkeypatch):
+    import shutil
+    from backend import broker
+    root = _npm_root(tmp_path, {'claude': 'cli.js'}, {'cli.js': b'// cli'})
+    monkeypatch.setattr(broker, 'locate', lambda provider: str(root/'claude.cmd'))
+    monkeypatch.setattr(shutil, 'which', lambda name: r'C:\node\node.exe' if name == 'node' else None)
+    argv = broker.resolve_cli('claude_cli')
+    assert argv[0] == r'C:\node\node.exe' and argv[1].endswith('cli.js')
