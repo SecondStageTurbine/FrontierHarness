@@ -138,6 +138,24 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Keep the machine from sleeping while a turn or an automation runs. A thread pings the system
+/// idle timer while the flag is set, which is the pattern that survives thread pool hopping.
+static AWAKE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static AWAKE_THREAD: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+#[tauri::command]
+fn keep_awake(on: bool) {
+    AWAKE.store(on, std::sync::atomic::Ordering::Relaxed);
+    AWAKE_THREAD.get_or_init(|| {
+        std::thread::spawn(|| loop {
+            if AWAKE.load(std::sync::atomic::Ordering::Relaxed) {
+                #[cfg(windows)]
+                unsafe { windows_sys::Win32::System::Power::SetThreadExecutionState(windows_sys::Win32::System::Power::ES_SYSTEM_REQUIRED); }
+            }
+            std::thread::sleep(Duration::from_secs(30));
+        });
+    });
+}
+
 fn close_ptys(handle: &tauri::AppHandle) {
     if let Some(state)=handle.try_state::<Ptys>() { if let Ok(mut map)=state.0.lock() { for (_,mut pty) in map.drain() { let _=pty.child.kill(); } } }
 }
@@ -209,7 +227,7 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .manage(Ptys(Mutex::new(HashMap::new())))
-        .invoke_handler(tauri::generate_handler![pty_open,pty_write,pty_resize,pty_close,open_with])
+        .invoke_handler(tauri::generate_handler![pty_open,pty_write,pty_resize,pty_close,open_with,keep_awake])
         .setup(|app| {
             let data = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&data)?;

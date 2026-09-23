@@ -10,7 +10,7 @@ from fastapi import Request, Response, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse
 from .schemas import (ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput, GitPaths, CommitInput, FileWrite,
                       McpServerInput, ApprovalDecision, ApprovalRequest, FanoutInput, AutomationInput, ProjectSettings, PrCreateInput,
-                      DevServerInput, RewindInput, ImportInput)
+                      DevServerInput, RewindInput, ImportInput, CloneInput)
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
 from . import gitops, automations, pullrequests, devserver, maintenance
@@ -546,6 +546,17 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         project.update(payload.model_dump())
         return store.put(tenant_id,'projects',project)
 
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/environment')
+    def environment(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        return files.python_env(files.root(tenant_id,project_id,session_id)) or {'kind':None}
+
+    @app.post('/api/t/{tenant_id}/projects/clone')
+    async def clone_project(tenant_id:str,payload:CloneInput,request:Request):
+        """A repository URL becomes a managed project folder with the clone in it."""
+        scoped(request,tenant_id)
+        return await files.clone(tenant_id,payload.url.strip(),payload.name)
+
     @app.get('/api/t/{tenant_id}/projects/{project_id}/credentials')
     def credentials(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
         scoped(request,tenant_id)
@@ -579,8 +590,15 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
             return {'available':True,'pr':None,'error':str(exc)}
         if session_id and pr:
             session=store.get(tenant_id,'sessions',session_id)
-            if (session.get('pull_request') or {}).get('number')!=pr['number'] or session['pull_request'].get('state')!=pr['state']:
+            changed=(session.get('pull_request') or {}).get('number')!=pr['number'] or session['pull_request'].get('state')!=pr['state']
+            if changed:
                 session['pull_request']={'number':pr['number'],'url':pr['url'],'state':pr['state'],'title':pr['title']}
+            if pr['state']=='merged' and not session.get('archived') and not session.get('pinned') and not runner.busy(tenant_id,session_id):
+                # Its branch is in; the conversation settles on its own, as a merged thread would in T3.
+                session['archived']=True
+                session['archived_reason']=f'pull request #{pr["number"]} merged'
+                changed=True
+            if changed:
                 store.put(tenant_id,'sessions',session)
         return {'available':True,'pr':pr}
 

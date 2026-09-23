@@ -120,7 +120,7 @@ def context_usage(session):
     return {'chars': chars, 'limit': TRANSCRIPT_LIMIT, 'dropped': dropped, 'compacted': compacted}
 
 
-def build_prompt(messages, switched, handoff=None, mode=None, summary=None, first=False, rules=None, memory=None):
+def build_prompt(messages, switched, handoff=None, mode=None, summary=None, first=False, rules=None, memory=None, environment=None):
     """Instructions, then as much of the conversation as fits, ending at the new message.
 
     A handoff, when present, is what a previous agent left behind on this same turn; it goes
@@ -145,6 +145,8 @@ def build_prompt(messages, switched, handoff=None, mode=None, summary=None, firs
         head += '\n\nWORKSPACE RULES (set by the user; follow them in every turn):\n' + rules.strip()[:8000]
     if memory and memory.strip():
         head += '\n\nPROJECT NOTES (kept by the user and earlier conversations about this project):\n' + memory.strip()[:20000]
+    if environment:
+        head += '\n\nPROJECT ENVIRONMENT: ' + environment
     if summary:
         head += '\n\nEarlier messages of this conversation were compacted into this summary:\n' + summary
     return head + '\n\n' + '\n\n'.join(lines)
@@ -210,6 +212,16 @@ class AgentRunner:
     def busy(self, tenant_id, session_id):
         task = self.turns.get((tenant_id, session_id))
         return bool(task and not task.done())
+
+    def fallback(self, tenant_id, tried):
+        """An agent to continue a turn whose agent ran out of usage: connected, enabled, online as far as we know, not yet tried, and not cooling down."""
+        for agent in self.agents(tenant_id):
+            if agent['id'] in tried or agent.get('enabled') is False or agent.get('online') is False:
+                continue
+            if self.broker.cooldowns.get((tenant_id, agent['id']), 0) > time.monotonic():
+                continue
+            return agent
+        return None
 
     def busy_anywhere(self, tenant_id, project_id):
         """Whether any conversation of this project has a turn running."""
@@ -442,6 +454,7 @@ class AgentRunner:
         extras = self.extras(tenant_id, token, mode, project)
         rules = (self.store.tenant_internal(tenant_id) or {}).get('rules')
         memory = project.get('memory')
+        environment = (self.files.python_env(root) or {}).get('note')
         # Read only cannot change the folder, so it is not read twice to prove that.
         before = fingerprint(self.files, tenant_id, project_id, session_id) if mode != 'read' else {}
         # In a repository, the whole working tree is also checkpointed as hidden git objects, so a
@@ -464,20 +477,38 @@ class AgentRunner:
                 self.store.put(tenant_id, 'sessions', session)
                 visible, summary = conversation(session)
                 objective = next(m['content'] for m in reversed(session['messages']) if m['role'] == 'user')
-                lead_prompt = build_prompt(visible, False, None, 'read', summary, rules=rules, memory=memory)
+                lead_prompt = build_prompt(visible, False, None, 'read', summary, rules=rules, memory=memory, environment=environment)
                 result = await teamwork.Team(self, tenant_id, project_id, session_id, message_id, config, mode, root).run(lead_prompt, objective)
-            for _ in (range(1 + (MAX_ESCALATIONS if adaptive_turn else 0)) if not message.get('team') else ()):
+            rounds = 0 if message.get('team') else 1 + (MAX_ESCALATIONS if adaptive_turn else 0)
+            spare = 2  # How many times a spent agent may hand this turn to another agent.
+            while rounds > 0:
+                rounds -= 1
                 tried.add(config['id'])
                 visible, summary = conversation(session)
                 prompt = build_prompt(visible, bool(message.get('switched_from')), handoff_text, mode, summary,
-                                      first=sum(1 for m in session['messages'] if m['role'] == 'user') == 1, rules=rules, memory=memory)
+                                      first=sum(1 for m in session['messages'] if m['role'] == 'user') == 1, rules=rules, memory=memory, environment=environment)
                 result, error = None, None
                 try:
                     result = await self.broker.invoke_agent(tenant_id, config, prompt, mode, root, extras)
                 except ProviderError as exc:
-                    if exc.exhausted:
-                        raise  # Every login for this agent is spent; that is a real failure, not a struggle.
-                    error = str(exc)
+                    if not exc.exhausted:
+                        error = str(exc)
+                    else:
+                        # Every login for this agent is spent. Another connected agent continues the same
+                        # turn with a handoff, as an Adaptive escalation would; with none left, it fails.
+                        following = self.fallback(tenant_id, tried) if spare else None
+                        if following is None:
+                            raise
+                        spare -= 1
+                        rounds += 1
+                        attempts.append({'id': config['id'], 'name': config['name'], 'outcome': 'out of usage', 'reply': ''})
+                        message['routing'].update(attempts=attempts, fallbacks=message['routing'].get('fallbacks', 0) + 1)
+                        self.store.put(tenant_id, 'sessions', session)
+                        handoff_text = adaptive.render_handoff(adaptive.handoff(session, message, attempts))
+                        spent = config['name']
+                        config = following
+                        session, message = self.bind(tenant_id, session_id, message_id, config, f'{spent} is out of usage; {config["name"]} continues this turn.')
+                        continue
                 if not adaptive_turn:
                     break
                 changed = changes_between(before, fingerprint(self.files, tenant_id, project_id, session_id)) if mode != 'read' else []

@@ -69,6 +69,7 @@ class TenantInput(StrictModel):
     rules: str | None = Field(default=None, max_length=8000)
     auto_archive_days: int | None = Field(default=None, ge=1, le=365)
     memory_auto: bool = False
+    worktree_cleanup_days: int | None = Field(default=None, ge=0, le=365)  # Remove archived sessions' worktrees after this many days.
 
 class TenantContext(TenantInput):
     tenant_id: str
@@ -80,6 +81,17 @@ class LoginInput(StrictModel):
 class ProjectInput(StrictModel):
     name: str = Field(min_length=1, max_length=100)
     root: str | None = Field(default=None, max_length=1000)
+
+class CloneInput(StrictModel):
+    url: str = Field(min_length=8, max_length=500)
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+
+    @model_validator(mode='after')
+    def looks_like_a_repository(self):
+        u = self.url.strip()
+        if not (u.startswith(('https://', 'http://', 'ssh://', 'git@')) and not any(c in u for c in ' \n\r\t"\'')):
+            raise ValueError('Give a repository URL such as https://github.com/owner/repo or git@github.com:owner/repo.git.')
+        return self
 
 class SessionInput(StrictModel):
     name: str = Field(default='New session', min_length=1, max_length=120)

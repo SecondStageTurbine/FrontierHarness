@@ -27,7 +27,7 @@ looked like before and after so any turn can be reverted.
 | **Work alongside the agent** | A real terminal in the project folder, a file editor, project and conversation search, clickable `file:line` links, and a preview panel for the project's dev server. |
 | **Queue, steer, compact** | Enter queues the next message while a turn runs, Ctrl+Enter stops it and sends instead, and a context meter offers to compact the conversation into a summary before the oldest turns fall off. |
 | **Automations and remote access** | Prompts that run daily, every N minutes or by webhook, each as an ordinary session. A browser on another device on your network or tailnet can use the same Frontier. |
-| **MCP servers and skills** | Servers the workspace hands to every agent on every turn, and the skills and slash commands the agents already find, offered with `/` in the composer. |
+| **MCP servers and skills** | Servers the workspace hands to every agent on every turn, with a catalog of common ones, and the skills and slash commands the agents already find, offered with `/` in the composer. |
 | **Team mode** | Pick a lead; it plans the work as tasks, Frontier hands each task to the agent whose profile fits (or the one the lead names), workers run in parallel worktrees, their changes are folded back, and the lead reviews and replies. |
 | **Pull requests** | Open a PR from the session's branch through the GitHub CLI, watch checks and review state, and hand review comments to the agent. |
 | **Quiet desktop manners** | Tray icon and close-to-tray, one instance at a time, desktop notifications when a turn finishes in the background, signed auto-updates, usage per agent and project, four themes and an accent colour. |
@@ -52,7 +52,7 @@ An API key is not an agent. A model reached with a key has no tool loop, no file
 
 A subscription login can carry a **subscription account** name, such as `work` or `personal`. Each name gets its own credential directory inside the workspace, so a second Claude, Codex or OpenCode subscription is connected beside the first instead of replacing it. **Sign in** on the model card prints the two lines that sign that account in: the command line tool writes its credential into that directory and reads it back from there, and Frontier never sees it. Leave the account name empty to keep using the sign-in already on this machine.
 
-Connect a second subscription by adding a second model with the same provider and the same model identifier under a different account name. When one of them answers that its usage window is spent, the run moves to the next connected account and continues; the message records the login that actually answered, and the spent one is skipped for an hour before it is tried again. A login that is simply not signed in is reported rather than switched away from.
+Connect a second subscription by adding a second model with the same provider and the same model identifier under a different account name. When one of them answers that its usage window is spent, the run moves to the next connected account and continues; the message records the login that actually answered, and the spent one is skipped for an hour before it is tried again. When every login for an agent is spent, the turn hands over to another connected agent with the same handoff an Adaptive escalation writes, up to twice, and the message records who was out of usage and who continued. A login that is simply not signed in is reported rather than switched away from.
 
 ### Dictation
 
@@ -60,7 +60,7 @@ A **Dictate** button in the composer records from the microphone and types the t
 
 ## Everyday use
 
-1. Create a project or open an existing folder using the native folder picker.
+1. Create a project, open an existing folder using the native folder picker, or paste a repository URL to clone it into a new managed folder.
 2. The agent selector opens on **Adaptive**, which picks an agent per message. Choose a specific agent next to the composer to override it for as long as the project stays open, and choose what the agent may do this turn.
 3. Type a message and press Enter. Shift+Enter adds a line.
 4. The agent works in the folder. When it finishes, its reply appears with the files it changed, how long it took, its tokens in and out, and its cost when the model has rates. Open Files, Changes, Terminal or Preview as needed. **Revert this turn** under the changed files puts every file the turn touched back to how it was before it.
@@ -104,9 +104,9 @@ The meter below the composer shows how much of the transcript limit the conversa
 
 ### Working alongside the agent
 
-The **Terminal** panel is a real shell: PowerShell on Windows, your login shell elsewhere, one ConPTY per tab, opened in the folder the conversation works in, worktree included. It runs with your full environment as your own terminal would, unlike agent tools, whose environment is stripped of provider keys. Shells outlive the panel: close and reopen it and the same sessions are still there. Closing Frontier ends them.
+The **Terminal** panel is a real shell: PowerShell on Windows, your login shell elsewhere, one ConPTY per tab, opened in the folder the conversation works in, worktree included. It runs with your full environment as your own terminal would, unlike agent tools, whose environment is stripped of provider keys. Shells outlive the panel: close and reopen it and the same sessions are still there. Closing Frontier ends them. A project with a virtual environment, uv, Poetry, conda or Pipenv has it activated in new terminals and named to every agent at the top of the turn. The robot button runs an agent's own command line tool interactively in the terminal, for the times the tool's own interface is the right one.
 
-The **Files** panel edits: open a text file, type, and press **Save** or Ctrl+S. The write goes through the same path boundary as every read, so credentials, linked paths, and anything outside the project stay untouchable. The search box above the tree finds lines in every readable text file; each hit opens the file at that line. The sidebar search filters sessions by name and also searches their messages across every project in the workspace, listing matches under **In messages**. A path the agent writes in inline code, such as `src/app.py:42`, is a link that opens the file at that line.
+The **Files** panel edits: open a text file, type, and press **Save** or Ctrl+S. The write goes through the same path boundary as every read, so credentials, linked paths, and anything outside the project stay untouchable. The search box above the tree finds lines in every readable text file; each hit opens the file at that line. The sidebar search filters sessions by name and also searches their messages across every project in the workspace, listing matches under **In messages**. A path the agent writes in inline code, such as `src/app.py:42`, is a link that opens the file at that line. Select text in a reply and **Cite in composer** adds it as a chip beside your next message.
 
 The **Preview** panel shows a dev server the project is running. Frontier probes the usual local ports and lists the ones answering; pick one or type any URL. Right-click a project for **Open in VS Code**, **Open in Cursor**, or **Show in Explorer**; a session with a worktree offers the same for that worktree.
 
@@ -142,7 +142,7 @@ Right-click a project for **Project settings**: the default agent and posture fo
 
 ### Sessions, notifications, the tray
 
-Right-click a session to rename, pin, archive, or snooze it for an hour or until tomorrow morning; **Remember this session** asks the agent for a few facts worth keeping and adds them to the project memory. Pinned sessions stay at the top; archived and snoozed ones move to their own lists at the bottom of the sidebar. **Settings → General → Workspace** can archive sessions idle for a number of days on its own, optionally remembering them first, and holds the **rules** every agent in the workspace is given at the top of every turn. A turn that finishes while Frontier is in the background raises a desktop notification with a short chime; **Settings → General** turns the chime or the notification off.
+Right-click a session to rename, pin, archive, or snooze it for an hour or until tomorrow morning; **Remember this session** asks the agent for a few facts worth keeping and adds them to the project memory. Pinned sessions stay at the top; archived and snoozed ones move to their own lists at the bottom of the sidebar. **Settings → General → Workspace** can archive sessions idle for a number of days on its own, optionally remembering them first, remove the worktrees of archived sessions after a number of days while keeping their branches, and holds the **rules** every agent in the workspace is given at the top of every turn. A session whose pull request merges archives itself the next time the Changes panel looks. **Settings → General** also sets the interface size, spellcheck in the composer, and whether the computer is kept awake while an agent or automation works. A turn that finishes while Frontier is in the background raises a desktop notification with a short chime; **Settings → General** turns the chime or the notification off.
 
 Closing the window keeps Frontier running in the system tray: automations keep firing, finished turns still notify you, and the tray icon's menu offers **Open Frontier** and **Quit Frontier**. A left click on the icon reopens the window. **Settings → General → Window** turns this off, after which closing the window quits. Launching Frontier while it is already running brings the existing window to the front instead of starting a second copy.
 
@@ -160,7 +160,7 @@ Closing the window keeps Frontier running in the system tray: automations keep f
 
 ### MCP servers and skills
 
-**Settings → MCP & Skills** lists the Model Context Protocol servers this workspace hands to its agents on every turn: a command spoken to over stdio, or an HTTP endpoint. Claude receives them through `--mcp-config`, Codex through `-c mcp_servers.*` overrides, and OpenCode through `OPENCODE_CONFIG_CONTENT`; Gemini CLI reads its own settings file and is not configured from here. The same page lists the skills and slash commands the agents already discover in the project and your home folder (`.claude`, `.codex`, `.gemini`).
+**Settings → MCP & Skills** lists the Model Context Protocol servers this workspace hands to its agents on every turn: a command spoken to over stdio, or an HTTP endpoint. **Catalog** fills the form for common ones, GitHub, a filesystem, Postgres, a Playwright browser, Slack, fetch, memory, sequential thinking and Context7, leaving the token, path or connection string for you. Claude receives them through `--mcp-config`, Codex through `-c mcp_servers.*` overrides, and OpenCode through `OPENCODE_CONFIG_CONTENT`; Gemini CLI reads its own settings file and is not configured from here. The same page lists the skills and slash commands the agents already discover in the project and your home folder (`.claude`, `.codex`, `.gemini`).
 
 ### Usage and themes
 

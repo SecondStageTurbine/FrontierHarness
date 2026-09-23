@@ -1,5 +1,5 @@
 import {useState} from 'react';
-import {Check,ChevronRight,LoaderCircle,FileCode2,AlertTriangle,Square,ArrowRightLeft,Eye,Pencil,Zap,Clock,X,Undo2,FoldVertical,ShieldQuestion,Users,FileText,Terminal,GitCompareArrows,ExternalLink} from 'lucide-react';
+import {Check,ChevronRight,LoaderCircle,FileCode2,AlertTriangle,Square,ArrowRightLeft,Eye,Pencil,Zap,Clock,X,Undo2,FoldVertical,ShieldQuestion,Users,FileText,Terminal,GitCompareArrows,ExternalLink,MessageSquare} from 'lucide-react';
 import {MarkdownOutput} from '../components/Markdown';
 import {duration,money} from '../lib/api';
 import {working} from '../types';
@@ -7,14 +7,18 @@ import {modeLabels,type Approval,type Message,type Mode,type Session,type Team a
 export type InspectorTab='Files'|'Changes'|'Terminal'|'Preview';
 const modeIcon={read:Eye,edit:Pencil,auto:Zap};
 
-export function Conversation({session,onInspect,onUnqueue,onRevert,onDecide,onRewind,onOpenSession}:{session:Session;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onUnqueue?:(id:string)=>void;onRevert?:(id:string)=>void;onDecide?:(approval:Approval,allow:boolean)=>void;onRewind?:(id:string)=>void;onOpenSession?:(id:string)=>void}){
+export function Conversation({session,onInspect,onUnqueue,onRevert,onDecide,onRewind,onOpenSession,onCite}:{session:Session;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onUnqueue?:(id:string)=>void;onRevert?:(id:string)=>void;onDecide?:(approval:Approval,allow:boolean)=>void;onRewind?:(id:string)=>void;onOpenSession?:(id:string)=>void;onCite?:(text:string,from:string)=>void}){
  const busy=working(session.messages.at(-1));
+ const [cite,setCite]=useState<{text:string;from:string;x:number;y:number}|null>(null);
+ // Selecting text inside a reply offers to cite it in the composer as a typed reference.
+ function onSelect(e:React.MouseEvent){if(!onCite)return;const sel=window.getSelection();const text=sel?.toString().trim()||'';if(!text||!sel||sel.rangeCount===0){setCite(null);return}const node=sel.anchorNode instanceof Element?sel.anchorNode:sel.anchorNode?.parentElement;const turn=node?.closest('.agent-turn');if(!turn){setCite(null);return}const rect=sel.getRangeAt(0).getBoundingClientRect();const host=(e.currentTarget as HTMLElement).getBoundingClientRect();setCite({text:text.slice(0,20000),from:turn.querySelector('.frontier-author strong')?.textContent||'the agent',x:rect.left-host.left,y:rect.top-host.top})}
  const [visible,setVisible]=useState(20);
  const shown=session.messages.slice(-visible);
  const queue=session.queue||[];
  const [showSummary,setShowSummary]=useState(false);
  const boundary=session.summary?.through;
- return <div className="conversation-thread">
+ return <div className="conversation-thread" onMouseUp={onSelect} style={{position:'relative'}}>
+  {cite&&<button type="button" className="cite-button" style={{left:Math.max(0,cite.x),top:Math.max(0,cite.y-30)}} onMouseDown={e=>e.preventDefault()} onClick={()=>{onCite?.(cite.text,cite.from);setCite(null);window.getSelection()?.removeAllRanges()}}><MessageSquare size={11}/>Cite in composer</button>}
   {session.messages.length>visible&&<button className="history-more" onClick={()=>setVisible(v=>v+20)}>Load earlier messages</button>}
   {shown.map(message=><div key={message.id} className={message.id===boundary?'':undefined}>{message.role==='user'
    ?<section className="conversation-turn"><div className="user-message"><span className="message-author">You</span>{onRewind&&!busy&&<button className="rewind-button" title="Edit this message and resend it; later messages are removed and the folder is put back to how it was before it" onClick={()=>onRewind(message.id)}><Pencil size={11}/>Edit from here</button>}<p>{message.content.split('\n\nREFERENCED CONTEXT')[0].split('\n\nAttached for context')[0]}</p>{!!message.context?.length&&<div className="context-chips read">{message.context.map((c,i)=><span key={i}>{c.kind==='file'?<FileText size={10}/>:c.kind==='terminal'?<Terminal size={10}/>:<GitCompareArrows size={10}/>}{c.label||c.path||c.kind}{c.start?`:${c.start}${c.end&&c.end!==c.start?`-${c.end}`:''}`:''}</span>)}</div>}</div></section>

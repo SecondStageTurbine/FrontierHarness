@@ -5,6 +5,7 @@ export const modeHints:Record<Mode,string>={read:'The agent can read the project
 // Only a local agent command line tool can take a turn; an API key reaches a model, not an agent.
 export const agentProviders=['claude_cli','codex_cli','opencode_cli','gemini_cli'];
 export const providerNames:Record<string,string>={claude_cli:'Claude',codex_cli:'Codex',opencode_cli:'OpenCode',gemini_cli:'Gemini',anthropic:'Anthropic',openai:'OpenAI',custom_openai:'OpenAI Compatible',ollama:'Ollama / local',typesafe:'TypeSafe'};
+export const CLI_NAMES:Record<string,string>={claude_cli:'claude',codex_cli:'codex',opencode_cli:'opencode',gemini_cli:'gemini'};
 export const ADAPTIVE='adaptive';
 export const ADAPTIVE_HINT='Picks the least expensive agent that can do this message, and hands it to a stronger one if that agent fails.';
 // The capability registry, as far as the interface sees it: what a row may say it is good at.
@@ -31,6 +32,6 @@ export interface GitStatus {repo:boolean; available:boolean; root?:string; branc
 export interface Project {id:string; name:string; root:string; created_at:string; last_session_id?:string; last_model_id?:string; last_mode?:Mode; default_mode?:Mode|null; default_model_id?:string|null; worktree_setup?:string|null; worktree_copy?:string[]; protect_env?:boolean; dev_command?:string|null; memory?:string|null}
 export interface ProjectFile {path:string; size:number; text:boolean}
 export interface SessionEvent {seq:number; type:string; message:string; time:string; message_id?:string}
-export interface Tenant {id:string; name:string; environment:string; created_at:string; router_model_id?:string|null; rules?:string|null; auto_archive_days?:number|null; memory_auto?:boolean}
+export interface Tenant {id:string; name:string; environment:string; created_at:string; router_model_id?:string|null; rules?:string|null; auto_archive_days?:number|null; memory_auto?:boolean; worktree_cleanup_days?:number|null}
 export interface PullRequest {number:number; title:string; url:string; state:string; draft:boolean; review?:string|null; base?:string; head?:string; checks:{success:number;failure:number;pending:number}; additions?:number; deletions?:number; author?:string}
 export const working=(m?:Message)=>m?.role==='assistant'&&m.status==='running';

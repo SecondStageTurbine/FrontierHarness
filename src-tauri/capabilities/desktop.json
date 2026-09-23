@@ -20,6 +20,7 @@
     "allow-pty-write",
     "allow-pty-resize",
     "allow-pty-close",
-    "allow-open-with"
+    "allow-open-with",
+    "allow-keep-awake"
   ]
 }

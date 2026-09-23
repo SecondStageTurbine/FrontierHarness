@@ -395,3 +395,20 @@ conversation. Attachments allow 100 per message, images to 10 MB, and other file
 disk. Fifteen new tests cover all of it, including a full team run with two workers in worktrees.
 The suite is at 114. Per the user's instruction the installer was not built or installed; the
 source was verified by the suite, the frontend build, and a browser run against a source backend.
+
+Version 0.12.0 is ten small items. A spent subscription with no login left now hands the turn to
+another connected agent (`AgentRunner.fallback`, up to twice, with the Adaptive handoff and an
+`out of usage` attempt on the message) instead of failing it; the attempt loop became a counted
+`while` so a fallback adds a round without widening Adaptive's escalation budget. A merged pull
+request archives its session when the PR panel next reads it. Housekeeping removes the worktrees
+of archived sessions after the workspace's `worktree_cleanup_days`, keeping the branch. A sixth
+native command, `keep_awake`, pings the Windows idle timer from a thread while the page reports a
+running turn. `POST /projects/clone` clones a URL into a managed folder and registers it, removing
+both on failure. The terminal runs an agent's CLI on request and activates a detected venv;
+`ProjectFiles.python_env` also names the environment to every agent at the top of the prompt.
+Selecting text in a reply offers Cite in composer, which becomes a selection chip. Interface size
+applies as body zoom and spellcheck as the composer's attribute, both per device. The MCP catalog
+fills the add-server form for nine common servers. Six new tests cover fallback with and without
+another agent, the environment note, clone validation and a failed clone leaving nothing behind,
+worktree cleanup, and archive on merge; the browser suite checks the clone field, citation chips,
+interface size, and the catalog. The suite is at 120. Built and installed only on request.

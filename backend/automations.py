@@ -86,6 +86,24 @@ async def housekeeping(store, runner, tenant_id):
                 session['archived'] = True
                 session['archived_reason'] = f'idle for {limit} days'
                 changed = True
+        cleanup = tenant.get('worktree_cleanup_days')
+        if cleanup is not None and session.get('archived') and session.get('worktree') and not runner.busy(tenant_id, session['id']):
+            try:
+                archived_at = datetime.fromisoformat(session['updated_at'].replace('Z', '+00:00'))
+                if archived_at.tzinfo is None:
+                    archived_at = archived_at.replace(tzinfo=moment.tzinfo)
+            except (ValueError, KeyError):
+                archived_at = None
+            if archived_at and archived_at <= moment - timedelta(days=int(cleanup)):
+                from . import gitops
+                try:
+                    project = store.get(tenant_id, 'projects', session['project_id'])
+                    await gitops.worktree_remove(project['root'], session['worktree']['path'])
+                    session['worktree_removed'] = session['worktree']['branch']
+                    session['worktree'] = None
+                    changed = True
+                except Exception:
+                    pass  # A missing project or a locked folder is tried again next tick.
         if changed:
             store.put(tenant_id, 'sessions', session)
 

@@ -9,7 +9,7 @@ import type {ProjectFile,Project,Session,FileChange,ContextChip} from '../types'
 import type {InspectorTab} from './Conversation';
 import {GitPanel} from './GitPanel';
 
-export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,onFile,busy,onChip,onCompose}:{tab:InspectorTab;onTab:(t:InspectorTab)=>void;onClose:()=>void;project:Project;session?:Session;filePath:string|null;fileLine?:number;onFile:(s:string,line?:number)=>void;busy:boolean;onChip?:(chip:ContextChip)=>void;onCompose?:(text:string)=>void}){
+export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,onFile,busy,onChip,onCompose,agents=[]}:{tab:InspectorTab;onTab:(t:InspectorTab)=>void;onClose:()=>void;project:Project;session?:Session;filePath:string|null;fileLine?:number;onFile:(s:string,line?:number)=>void;busy:boolean;onChip?:(chip:ContextChip)=>void;onCompose?:(text:string)=>void;agents?:{provider:string;name:string}[]}){
  const {path,notify}=useWorkspace(),refresh=useRefresh();
  const [query,setQuery]=useState('');const deferred=useDeferredValue(query.trim());
  // A session in its own worktree reads that worktree; the project folder otherwise.
@@ -50,7 +50,7 @@ export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,o
      :<CodeView text={selected.after??selected.before??''}/>}</>}
    </>)}
    {tab==='Preview'&&<Preview projectId={project.id} sessionId={session?.worktree?session.id:undefined} devCommand={project.dev_command||''}/>}
-   {tab==='Terminal'&&isTauri()&&<Term cwd={session?.worktree?.path||project.root} onChip={onChip}/>}
+   {tab==='Terminal'&&isTauri()&&<Term cwd={session?.worktree?.path||project.root} onChip={onChip} projectId={project.id} sessionId={session?.worktree?session.id:undefined} agents={agents}/>}
    {tab==='Terminal'&&!isTauri()&&<>
     <div className="terminal-output">{!commands.length&&<p>Your own project checks and their actual output appear here.<br/>The agent runs its own commands through its tool.</p>}
      {commands.map(c=><div className="terminal-command" key={c.id}><strong><span>❯</span> {c.command}</strong><pre>{c.output||'Process started…'}</pre><small className={c.exit_code===0?'file-added':c.status==='running'?'muted':'file-modified'}>{c.status==='running'?'Running…':c.status==='completed'?`Process exited with code ${c.exit_code}`:`${c.status} · exit ${c.exit_code??'unavailable'}`}</small></div>)}

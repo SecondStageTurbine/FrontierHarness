@@ -205,6 +205,42 @@ class ProjectFiles:
             return {'command':command,'exit_code':None,'output':'Setup exceeded its five-minute limit and was stopped.'}
         return {'command':command,'exit_code':proc.returncode,'output':out.decode('utf-8','replace')[-8000:]}
 
+    @staticmethod
+    def python_env(root):
+        """Which interpreter a project's own tooling expects, so agents and the terminal use it rather than the system one."""
+        root=Path(root)
+        for folder in ('.venv','venv','env'):
+            python=root/folder/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
+            if python.is_file():
+                activate=str(root/folder/('Scripts/Activate.ps1' if os.name=='nt' else 'bin/activate'))
+                return {'kind':'venv','python':str(python),'activate':('& "'+activate+'"') if os.name=='nt' else ('source "'+activate+'"'),
+                        'note':f'This project has a virtual environment at {folder}/; run Python and pip through {python} rather than the system interpreter.'}
+        if (root/'uv.lock').is_file():
+            return {'kind':'uv','python':None,'activate':None,'note':'This project is managed by uv: run commands with `uv run` and add packages with `uv add`.'}
+        if (root/'poetry.lock').is_file():
+            return {'kind':'poetry','python':None,'activate':None,'note':'This project is managed by Poetry: run commands with `poetry run` and add packages with `poetry add`.'}
+        if (root/'environment.yml').is_file() or (root/'environment.yaml').is_file():
+            return {'kind':'conda','python':None,'activate':None,'note':'This project declares a conda environment in environment.yml; activate it before running Python.'}
+        if (root/'Pipfile').is_file():
+            return {'kind':'pipenv','python':None,'activate':None,'note':'This project uses Pipenv: run commands with `pipenv run`.'}
+        return None
+
+    async def clone(self,tenant_id,url,name=None):
+        """Clone a repository into a new managed project folder and register it as a project."""
+        from . import gitops
+        if not gitops.available():
+            raise ValueError('Git is not installed, or not on the PATH Frontier was started with.')
+        name=name or re.sub(r'\.git$','',url.rstrip('/').split('/')[-1].split(':')[-1]) or 'Repository'
+        project=self.create(tenant_id,name)
+        target=Path(project['root'])
+        try:
+            await gitops.run(target.parent,'clone','--',url,str(target),timeout=600)
+        except gitops.GitError as exc:
+            self.store.delete(tenant_id,'projects',project['id'])
+            shutil.rmtree(target,ignore_errors=True)
+            raise ValueError(f'Clone failed: {exc}') from None
+        return project
+
     def credentials(self,tenant_id,project_id,session_id=None):
         """The names of variables in the project's .env files, never their values."""
         root=self.root(tenant_id,project_id,session_id)

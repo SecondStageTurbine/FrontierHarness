@@ -1,7 +1,7 @@
 import {test,expect} from '@playwright/test';
 
 test('one conversation, any agent: selection, switching, team mode, rewind, snooze, project settings',async({page})=>{
- const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+ const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error'&&!m.text().includes('favicon'))errors.push('console: '+m.text())});
  const request=page.request;
  await request.post('/api/auth/setup',{data:{username:'desktop-tester',password:'desktop-test-password-2026'}});
  const t=(await (await request.post('/api/tenants',{data:{name:'Desktop test workspace'}})).json()).id;
@@ -12,6 +12,7 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
 
  await page.goto('/');
  await page.getByRole('button',{name:'Create your first project',exact:true}).click();
+ await expect(page.getByLabel('Or clone a repository',{exact:true})).toBeVisible();
  await page.getByLabel('Project name',{exact:true}).fill('Authentication project');
  await page.getByRole('button',{name:'Create project',exact:true}).click();
  await expect(page.getByRole('heading',{name:'What are we working on?'})).toBeVisible();
@@ -64,6 +65,12 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  // Another turn, then the session menu: snooze hides the session under its own list.
  await page.getByRole('button',{name:'Send',exact:true}).click();
  await expect(page.locator('.agent-turn')).toContainText('Done.',{timeout:15000});
+ // Selecting text in a reply offers to cite it, and the citation becomes a chip under the composer.
+ await page.locator('.agent-turn .inline-build').first().evaluate(el=>{const r=document.createRange();r.selectNodeContents(el);const s=window.getSelection()!;s.removeAllRanges();s.addRange(r)});
+ await page.locator('.conversation-thread').dispatchEvent('mouseup');
+ await page.getByRole('button',{name:'Cite in composer',exact:true}).click();
+ await expect(page.locator('.context-chips')).toContainText('reply from Claude');
+ await page.locator('.context-chips button').first().click();
  const row=page.locator('.session-list>button').first();
  await row.click({button:'right'});
  const menu=page.getByRole('menu');
@@ -91,6 +98,17 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await page.getByLabel('Rules for every agent',{exact:true}).fill('Always write tests.');
  await page.getByRole('button',{name:'Save workspace settings',exact:true}).click();
  await expect.poll(async()=>(await (await request.get('/api/tenants')).json())[0].rules).toBe('Always write tests.');
+ // Interface size and spellcheck are per-device preferences applied at once.
+ await page.getByLabel('Interface size',{exact:true}).selectOption('110');
+ await expect.poll(async()=>page.evaluate(()=>(document.body.style as CSSStyleDeclaration&{zoom:string}).zoom)).toBe('110%');
+ await page.getByLabel('Interface size',{exact:true}).selectOption('100');
+ // The MCP catalog fills the add-server form.
+ await page.locator('.desktop-settings nav button',{hasText:'MCP & Skills'}).click();
+ await page.getByRole('button',{name:'Catalog',exact:true}).click();
+ await page.locator('.mcp-catalog>button',{hasText:'Playwright browser'}).click();
+ await expect(page.getByRole('dialog').getByLabel('Command',{exact:true})).toHaveValue('npx');
+ await page.getByRole('dialog').getByRole('button',{name:'Save server',exact:true}).click();
+ await expect(page.locator('.mcp-card')).toContainText('playwright');
  await page.locator('.desktop-settings nav button',{hasText:'Agents & Providers'}).click();
  await expect(page.getByRole('heading',{name:'Agents & providers'})).toBeVisible();
  await expect(page.locator('.tool-versions, .error-text').first()).toBeVisible({timeout:20000});
