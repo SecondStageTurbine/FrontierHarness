@@ -42,6 +42,9 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await agent.selectOption({label:'Claude'});
  await team.click();
  await expect(team).toHaveAttribute('aria-pressed','true');
+ await expect(team).toHaveClass(/on/);
+ await expect(page.locator('.team-strip')).toContainText('Claude leads');
+ await expect(page.locator('.composer.team')).toBeVisible();
  await expect(page.locator('.composer-footnote')).toContainText('Claude will lead');
  await team.click();
  await expect(team).toHaveAttribute('aria-pressed','false');

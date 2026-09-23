@@ -404,3 +404,8 @@ body{overflow:hidden}
 .modal.wide{width:min(1280px,calc(100vw - 48px))}
 
 .modal.wide{position:fixed}.modal-resizer{position:absolute;top:0;bottom:0;width:10px;cursor:col-resize;z-index:2;border-radius:12px}.modal-resizer.left{left:-3px}.modal-resizer.right{right:-3px}.modal-resizer:hover,.modal-resizer:active{background:color-mix(in srgb,var(--primary) 35%,transparent)}
+
+/* Team mode is loud on purpose: a red pill on the toggle, a red edge on the composer, and a strip that says who leads. */
+.composer-context-controls>button.team-toggle.on{background:color-mix(in srgb,var(--danger) 22%,var(--surface));border:1px solid var(--danger);color:var(--danger);padding:4px 9px;gap:6px;font-size:10px;font-weight:600;border-radius:999px}.composer-context-controls>button.team-toggle.on:hover{background:color-mix(in srgb,var(--danger) 32%,var(--surface));color:var(--danger)}
+.composer.team{border-color:var(--danger);box-shadow:0 0 0 1px color-mix(in srgb,var(--danger) 35%,transparent),0 3px 15px #0001}.composer.team:focus-within{border-color:var(--danger);box-shadow:0 0 0 2px color-mix(in srgb,var(--danger) 35%,transparent)}
+.team-strip{display:flex;gap:9px;align-items:center;font-size:10px;color:var(--danger);padding:8px 12px;margin-bottom:8px;border:1px solid color-mix(in srgb,var(--danger) 45%,var(--border));background:color-mix(in srgb,var(--danger) 8%,var(--surface));border-radius:8px}.team-strip>span{flex:1;color:var(--foreground)}.team-strip strong{color:var(--danger)}.team-strip>button{font-size:9px;padding:3px 8px;background:none;color:var(--muted)}
