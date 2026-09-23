@@ -431,3 +431,5 @@ tail to the backend log on failure, never to the conversation. The same Read-onl
 lead makes, with the Fable model and the harness's stripped environment, was reproduced by hand
 on this machine and succeeded, so the earlier failures were not a sign-in problem.
 The cause of the user's failed turns was found by rebuilding the lead's prompt from a copy of the store and running the same call: the model row carried the identifier "Fable 5.1", which Claude Code reports as unrecognised; the alias is `fable`. That case is now named explicitly.
+
+Version 0.12.3 fixes the team card's worker link, which looked up the worker in the sidebar's session list and did nothing when that list predated the worker; it now selects the session by id and refreshes the list.
