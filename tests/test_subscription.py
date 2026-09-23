@@ -238,3 +238,21 @@ def test_an_unknown_model_identifier_is_named_as_such():
     with pytest.raises(ProviderError) as failed:
         read_claude(json.dumps({'is_error': True, 'result': "There's an issue with the selected model (Fable 5.1). It may not exist or you may not have access to it."}), '[claude-code:unrecognized_model] {"model":"Fable 5.1"}', 1, 'claude_cli')
     assert 'does not recognise the model identifier' in str(failed.value) and 'fable' in str(failed.value) and 'signed in' not in str(failed.value)
+
+
+def test_a_tool_outside_the_path_is_found_in_its_installers_folder(tmp_path, monkeypatch):
+    import os
+    from pathlib import Path
+    from backend import broker
+    home = tmp_path/'home'; (home/'.local'/'bin').mkdir(parents=True)
+    exe = home/'.local'/'bin'/('claude.exe' if os.name == 'nt' else 'claude')
+    exe.write_bytes(b'')
+    monkeypatch.setenv('PATH', str(tmp_path/'empty'))
+    monkeypatch.setattr(broker, 'refresh_path', lambda: None)
+    monkeypatch.setitem(broker.KNOWN_DIRS, 'claude_cli', [str(home/'.local'/'bin')])
+    assert broker.locate('claude_cli') == str(exe)
+    exe.unlink()
+    import pytest
+    with pytest.raises(broker.ProviderError) as missing:
+        broker.resolve_cli('claude_cli')
+    assert 'not on the PATH' in str(missing.value) and 'install.ps1' in str(missing.value)

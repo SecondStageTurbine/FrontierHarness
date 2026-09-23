@@ -96,9 +96,59 @@ def account_env(store, tenant_id, config):
     home = str(account_home(store, tenant_id, config['provider'], account))
     return {variable: home for variable in ACCOUNT_HOME_VARS[config['provider']]}
 
+# Where each tool's own installer puts it when that folder may not be on the PATH Frontier started with.
+KNOWN_DIRS = {
+    'claude_cli': ['~/.local/bin', '~/.claude/local', '%LOCALAPPDATA%/Programs/claude', '%LOCALAPPDATA%/Microsoft/WinGet/Links'],
+    'codex_cli': ['~/.local/bin', '%LOCALAPPDATA%/Programs/codex', '%LOCALAPPDATA%/Microsoft/WinGet/Links'],
+    'opencode_cli': ['~/.local/bin', '~/.opencode/bin', '%LOCALAPPDATA%/Microsoft/WinGet/Links'],
+    'gemini_cli': ['~/.local/bin', '%LOCALAPPDATA%/Microsoft/WinGet/Links'],
+}
+
+
+def refresh_path():
+    """Re-read PATH from the registry, as a new terminal would.
+
+    Frontier lives in the tray, so it can outlive the moment a tool was installed; the PATH it
+    inherited at login then lacks the folder the installer just added. Merging the current user and
+    machine values in lets a tool installed a minute ago be found without restarting Frontier.
+    """
+    if os.name != 'nt':
+        return
+    import winreg
+    parts = []
+    for hive, key in ((winreg.HKEY_LOCAL_MACHINE, r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'), (winreg.HKEY_CURRENT_USER, 'Environment')):
+        try:
+            with winreg.OpenKey(hive, key) as handle:
+                value, _ = winreg.QueryValueEx(handle, 'Path')
+                parts += [os.path.expandvars(v) for v in str(value).split(';') if v.strip()]
+        except OSError:
+            continue
+    current = os.environ.get('PATH', '').split(';')
+    merged = list(dict.fromkeys([p for p in current + parts if p]))
+    os.environ['PATH'] = ';'.join(merged)
+
+
+def locate(provider):
+    """The tool on PATH, else in the folders its installers use; None when it is nowhere."""
+    name = CLI_TOOLS[provider][0]
+    found = shutil.which(name)
+    if found:
+        return found
+    refresh_path()
+    found = shutil.which(name)
+    if found:
+        return found
+    for folder in KNOWN_DIRS.get(provider, []):
+        base = Path(os.path.expandvars(os.path.expanduser(folder)))
+        for candidate in (base/(name+'.exe'), base/(name+'.cmd'), base/name):
+            if candidate.is_file():
+                return str(candidate)
+    return None
+
+
 def resolve_cli(provider):
     name, entry, label = CLI_TOOLS[provider]
-    found = shutil.which(name)
+    found = locate(provider)
     if found:
         suffix = Path(found).suffix.lower()
         # Windows cannot start a script shim directly, and an extensionless file there is one.
@@ -116,7 +166,12 @@ def resolve_cli(provider):
             if node:
                 return [node, str(script)]
             raise ProviderError(f'{label} is installed through npm, so Node.js is required to run it, and node was not found on the path.')
-    raise ProviderError(f'The {label} command line tool was not found. Install it, sign in to your subscription, then select it again.')
+    hint = {'claude_cli': 'Install it from https://claude.com/claude-code (in PowerShell: irm https://claude.ai/install.ps1 | iex), run `claude` once in a terminal to sign in',
+            'codex_cli': 'Install it with `npm install -g @openai/codex`, run `codex login` once',
+            'opencode_cli': 'Install it with `npm install -g opencode-ai`, run `opencode auth login` once',
+            'gemini_cli': 'Install it with `npm install -g @google/gemini-cli`, run `gemini` once to sign in'}.get(provider, 'Install it and sign in once in a terminal')
+    raise ProviderError(f'The {label} command line tool was not found on this computer: `{name}` is not on the PATH and not in the folders its installer uses. {hint}, then press Test connection again.')
+
 
 def toml_value(value):
     """A Python value as the TOML literal Codex's `-c key=value` override reads."""
