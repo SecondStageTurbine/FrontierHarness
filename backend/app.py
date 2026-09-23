@@ -7,6 +7,7 @@ import io
 import json
 import os
 import secrets
+import sys
 import time
 import httpx
 from collections import defaultdict, deque
@@ -41,16 +42,22 @@ def create_app(directory=None, broker=None):
     async def lifespan(app):
         # Exclusive OS file lock prevents accidental multiple workers on one store.
         lock = (store.directory / 'worker.lock').open('a+b')
-        lock.seek(0)
-        if lock.read(1) == b'':
-            lock.write(b'0'); lock.flush()
-        lock.seek(0)
-        if os.name == 'nt':
-            import msvcrt
-            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            lock.seek(0)
+            if lock.read(1) == b'':
+                lock.write(b'0'); lock.flush()
+            lock.seek(0)
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            # Another backend holds this data folder. Say so plainly; the launcher shows this line.
+            sys.stderr.write('Another Frontier is already using this data folder. Close it, or wait a moment for it to finish shutting down, then try again.\n')
+            sys.stderr.flush()
+            os._exit(3)
         runner.recover()
         stop = asyncio.Event()
         clock = asyncio.create_task(automations.scheduler(store, runner, stop))
@@ -195,6 +202,18 @@ def create_app(directory=None, broker=None):
         return {'enabled': wanted, 'listening': remote.remote_host(str(store.directory)) == '0.0.0.0' and os.environ.get('HARNESS_DESKTOP_PORT') is not None and app.state.bound_remote,
                 'addresses': remote.addresses(), 'port': int(os.environ.get('HARNESS_DESKTOP_PORT') or 0) or None,
                 'has_password': bool(row and ':' in (row['password'] or '')), 'username': current['username']}
+
+    @app.get('/api/tray')
+    def tray_status(request:Request):
+        user(request)
+        return {'enabled': remote.tray_enabled(store.directory)}
+
+    @app.put('/api/tray')
+    def tray_set(payload:RemoteInput, request:Request):
+        """Whether closing the window keeps Frontier running in the tray. Read by the desktop at each close."""
+        user(request)
+        remote.set_tray_enabled(store.directory, payload.enabled)
+        return {'enabled': payload.enabled}
 
     @app.put('/api/remote')
     def remote_set(payload:RemoteInput, request:Request):

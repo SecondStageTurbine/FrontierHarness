@@ -340,3 +340,19 @@ choice through `AgentRunner.writer`. A fifth native command, `open_with`, launch
 draft stash are composer-only state, the stash in localStorage per project. The icon set was
 regenerated with `tauri icon` from the supplied artwork after flood-filling its black canvas
 to transparent. Four new tests cover the title line, the meter, and compaction. The suite is at 89.
+
+Version 0.10.0 adds the tray and a single-instance guard. The tray is built after the backend is
+up (`build_tray` in `main.rs`, `tray-icon` and `image-png` features, the 32 px icon embedded with
+`include_bytes!`), with Open and Quit menu items and a left click that shows the window. Close
+requests are intercepted in `on_window_event`: when `tray.json` in app data allows it, the default,
+the window hides instead of closing; the backend writes that flag through `/api/tray` and the
+General settings page toggles it. `tauri-plugin-single-instance` is registered first so a second
+launch hands off to the running one and exits, which also ends the "second instance dies on the
+store lock" failure seen since 0.5.0. For the case that remains, a backend started against a data
+folder another backend holds, the lifespan now catches the lock error, prints one plain line, and
+exits with code 3; the launcher shows that line instead of "see backend.log". Two tests cover the
+flag round trip and the second backend's exit. The suite is at 101. At runtime the installed build
+was checked over CDP and with process listings: closing the window left the process alive with
+no visible window, a second launch produced no second process, and the tray reopened the window.
+The sidebar's brand row, which repeated the window title, is gone; the collapse control moved into
+the session header beside the project name.

@@ -13,7 +13,7 @@ folder looked like before and after.
 
 ## Install the desktop application
 
-Run `src-tauri/target/release/bundle/nsis/Frontier_0.9.0_x64-setup.exe`. The per-user Windows installer includes Frontier, its Python runtime, backend dependencies, and frontend assets. Launch **Frontier** from the Start menu afterward. It does not need this repository, Python, Rust, Node.js, or a terminal to run. Existing projects, sessions, and encrypted credentials stay in the same application-data directory.
+Run `src-tauri/target/release/bundle/nsis/Frontier_0.10.0_x64-setup.exe`. The per-user Windows installer includes Frontier, its Python runtime, backend dependencies, and frontend assets. Launch **Frontier** from the Start menu afterward. It does not need this repository, Python, Rust, Node.js, or a terminal to run. Existing projects, sessions, and encrypted credentials stay in the same application-data directory.
 
 Frontier checks GitHub releases once at launch. When a newer version is published, a banner offers **Install and restart**; the installer runs for the current user and the app reopens on the new version. **Settings → General → Check for updates** does the same on demand. Feeds are signed: the app only installs a package whose signature matches the public key built into it.
 
@@ -103,6 +103,10 @@ With more than one agent connected and a git repository open, the split icon bes
 ### Automations
 
 **Settings → Automations** runs a prompt on its own: daily at a time, every N minutes, or when a webhook is called. Each run opens a session in the chosen project and sends the prompt as one turn under the posture you set, so the result reads like any other conversation. Schedules fire only while Frontier is open; a run missed while it was closed happens once at the next start. The webhook is a POST to the URL shown on the card, whose secret is the whole credential.
+
+### The tray, and one Frontier at a time
+
+Closing the window keeps Frontier running in the system tray: automations keep firing, finished turns still notify you, and the tray icon's menu offers **Open Frontier** and **Quit Frontier**. A left click on the icon reopens the window. **Settings → General → Window** turns this off, after which closing the window quits. Launching Frontier while it is already running brings the existing window to the front instead of starting a second copy, and a backend that finds its data folder already in use says so in one line instead of a stack trace.
 
 ### Themes
 

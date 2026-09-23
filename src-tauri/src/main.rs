@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{collections::HashMap,io::{Read,Write},net::{TcpListener,TcpStream},path::{Path,PathBuf},process::{Child,Command,Stdio},sync::Mutex,time::Duration};
-use tauri::{Emitter,Manager,State,WebviewUrl,WebviewWindowBuilder};
+use tauri::{Emitter,Manager,State,WebviewUrl,WebviewWindowBuilder,WindowEvent};
+use tauri::menu::{Menu,MenuItem};
+use tauri::tray::{TrayIconBuilder,TrayIconEvent};
 use portable_pty::{native_pty_system,CommandBuilder,PtySize};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -99,6 +101,43 @@ fn open_with(tool: String, path: String) -> Result<(),String> {
     Ok(())
 }
 
+/// Closing the window hides Frontier to the tray unless the user turned that off in Settings.
+/// The setting is a flag file the backend writes, read here at each close so no restart is needed.
+fn tray_enabled(data: &Path) -> bool {
+    std::fs::read_to_string(data.join("tray.json")).ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("enabled").and_then(|e| e.as_bool()))
+        .unwrap_or(true)
+}
+fn show_main(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let open = MenuItem::with_id(app, "open", "Open Frontier", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Frontier", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &quit])?;
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
+    TrayIconBuilder::with_id("main")
+        .icon(icon)
+        .tooltip("Frontier")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "open" => show_main(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click { button: tauri::tray::MouseButton::Left, .. } = event { show_main(tray.app_handle()); }
+        })
+        .build(app)?;
+    Ok(())
+}
+
 fn close_ptys(handle: &tauri::AppHandle) {
     if let Some(state)=handle.try_state::<Ptys>() { if let Ok(mut map)=state.0.lock() { for (_,mut pty) in map.drain() { let _=pty.child.kill(); } } }
 }
@@ -142,7 +181,10 @@ fn launch(app: &mut tauri::App, data: &Path) -> Result<(),Box<dyn std::error::Er
     let mut ready = false;
     for _ in 0..450 {
         if TcpStream::connect_timeout(&address.parse()?,Duration::from_millis(100)).is_ok() { ready=true; break; }
-        if let Some(status) = child.try_wait()? { return Err(format!("Frontier backend exited: {status}. See backend.log in app data.").into()); }
+        if let Some(status) = child.try_wait()? {
+            let tail = std::fs::read_to_string(data.join("backend.log")).ok().and_then(|s| s.lines().rev().find(|l| !l.trim().is_empty()).map(|l| l.to_string())).unwrap_or_default();
+            return Err(if tail.contains("already using") { tail } else { format!("Frontier backend exited: {status}. See backend.log in app data.") }.into());
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
     if !ready { let _=child.kill(); return Err("Frontier's backend did not start in time.".into()); }
@@ -159,6 +201,9 @@ fn launch(app: &mut tauri::App, data: &Path) -> Result<(),Box<dyn std::error::Er
 
 fn main() {
     let app = tauri::Builder::default()
+        // Registered first: a second launch hands its arguments to this one and exits, instead of
+        // starting a second backend that would die on the store lock.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -172,8 +217,15 @@ fn main() {
             // be silent. Leave the reason beside the backend log, and clear it once past.
             let log = data.join("launch-error.log");
             match launch(app,&data) {
-                Ok(()) => { let _ = std::fs::remove_file(&log); Ok(()) }
+                Ok(()) => { let _ = std::fs::remove_file(&log); build_tray(app.handle())?; Ok(()) }
                 Err(error) => { let _ = std::fs::write(&log,error.to_string()); Err(error) }
+            }
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if let Ok(data) = window.app_handle().path().app_local_data_dir() {
+                    if tray_enabled(&data) { api.prevent_close(); let _ = window.hide(); }
+                }
             }
         })
         .build(tauri::generate_context!())

@@ -47,3 +47,15 @@ def addresses():
     except OSError:
         pass
     return found
+
+
+def tray_enabled(directory):
+    """Closing the window keeps Frontier in the tray unless this flag says otherwise. Default on."""
+    try:
+        return bool(json.loads((Path(directory)/'tray.json').read_text(encoding='utf-8')).get('enabled', True))
+    except (OSError, ValueError):
+        return True
+
+
+def set_tray_enabled(directory, value):
+    (Path(directory)/'tray.json').write_text(json.dumps({'enabled': bool(value)}), encoding='utf-8')

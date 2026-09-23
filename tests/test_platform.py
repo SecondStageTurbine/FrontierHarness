@@ -220,3 +220,28 @@ def test_skills_and_commands_are_listed_from_the_project(tmp_path):
         p = c.post(f'/api/t/{t}/projects', json={'name': 'P', 'root': str(root)}).json()
         found = [s for s in c.get(f'/api/t/{t}/projects/{p["id"]}/skills').json() if s['scope'] == 'project']
         assert {(s['name'], s['kind'], s['description']) for s in found} == {('deploy', 'skill', 'Ship it safely'), ('review', 'command', 'Review the diff carefully.')}
+
+
+def test_the_tray_flag_defaults_on_and_is_read_by_the_desktop(tmp_path):
+    assert remote.tray_enabled(tmp_path) is True
+    remote.set_tray_enabled(tmp_path, False)
+    assert remote.tray_enabled(tmp_path) is False
+    with TestClient(create_app(str(tmp_path/'state'), ScriptedAgent())) as c:
+        setup(c)
+        assert c.get('/api/tray').json() == {'enabled': True}
+        assert c.put('/api/tray', json={'enabled': False}).json() == {'enabled': False}
+        assert c.get('/api/tray').json() == {'enabled': False}
+
+
+def test_a_second_backend_on_the_same_data_folder_says_so_and_exits(tmp_path):
+    import os, sys
+    env = {**os.environ, 'PYTHONUTF8': '1', 'PYTHONPATH': str(Path(__file__).resolve().parents[1])}
+    script = tmp_path/'hold.py'
+    script.write_text('import sys, time; from backend.app import create_app; from fastapi.testclient import TestClient; c = TestClient(create_app(sys.argv[1])); c.__enter__(); time.sleep(float(sys.argv[2])); c.__exit__(None, None, None)', encoding='utf-8')
+    first = subprocess.Popen([sys.executable, str(script), str(tmp_path/'state'), '8'], env=env)
+    try:
+        time.sleep(3)
+        second = subprocess.run([sys.executable, str(script), str(tmp_path/'state'), '0'], env=env, capture_output=True, text=True, timeout=30)
+        assert second.returncode == 3 and 'already using this data folder' in second.stderr
+    finally:
+        first.kill()
