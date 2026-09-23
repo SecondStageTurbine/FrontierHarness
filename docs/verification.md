@@ -412,3 +412,8 @@ fills the add-server form for nine common servers. Six new tests cover fallback 
 another agent, the environment note, clone validation and a failed clone leaving nothing behind,
 worktree cleanup, and archive on merge; the browser suite checks the clone field, citation chips,
 interface size, and the catalog. The suite is at 120. Built and installed only on request.
+
+Version 0.12.1 fixes the Agents & Providers page, where a fixed three-column grid squeezed the
+model cards until the footer's delete button sat outside the card. The grid now fits as many
+340-pixel columns as the page allows and the footer wraps. The browser suite asserts that every
+footer control stays inside its card's box.

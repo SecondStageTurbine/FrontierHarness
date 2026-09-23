@@ -111,6 +111,10 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await expect(page.locator('.mcp-card')).toContainText('playwright');
  await page.locator('.desktop-settings nav button',{hasText:'Agents & Providers'}).click();
  await expect(page.getByRole('heading',{name:'Agents & providers'})).toBeVisible();
+ // Every model card keeps its whole footer, delete button included, inside its own box.
+ await expect(page.locator('.model-card').first()).toBeVisible();
+ const clipped=await page.evaluate(()=>[...document.querySelectorAll('.model-card')].filter(c=>{const r=c.getBoundingClientRect();return [...c.querySelectorAll('.model-card-footer>*')].some(b=>{const q=b.getBoundingClientRect();return q.right>r.right+1||q.left<r.left-1})}).length);
+ expect(clipped).toBe(0);
  await expect(page.locator('.tool-versions, .error-text').first()).toBeVisible({timeout:20000});
  expect(errors).toEqual([]);
 });
