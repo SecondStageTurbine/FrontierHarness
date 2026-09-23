@@ -356,3 +356,17 @@ was checked over CDP and with process listings: closing the window left the proc
 no visible window, a second launch produced no second process, and the tray reopened the window.
 The sidebar's brand row, which repeated the window title, is gone; the collapse control moved into
 the session header beside the project name.
+
+Also in 0.10.0: a screenshot taken for the README exposed that `src/desktop/desktop.css` was never
+imported. It was an orphan from an earlier design pass, and every rule appended to it since 0.5.0,
+the update banner, queue and stash chips, git panel, editor, terminal tabs, preview, approval
+cards, settings pages, themes' accent row, had been absent from the bundle; the components rendered
+with the base button and text styles. The live sheet is `src/styles/shell.css`. The appended rules
+moved there, the few legacy selectors in the orphan that the live sheet lacked (context menus and
+the unified diff among them) were carried over, and the orphan was deleted. The bundle was then
+checked for the class names, and the git panel's computed layout was read in the installed window.
+The icon set was regenerated again from new artwork for this release. Its black canvas carried a
+faint patch in one corner that a flood fill left behind, so the tile is now cut out by a rounded
+rectangle fitted to its own glow ring before the corners are cleared. The desktop and Start menu
+shortcuts point at the executable with icon index 0, so they take the embedded icon; after
+installing, the icon was extracted from the installed executable and compared by eye.
