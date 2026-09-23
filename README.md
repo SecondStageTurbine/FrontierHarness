@@ -7,7 +7,9 @@ Frontier is a desktop harness for coding agents. You hold one conversation about
 folder and choose which agent answers each turn: Claude Code, Codex, Gemini CLI, or OpenCode,
 including a local model through OpenCode. Switching agent mid-conversation costs nothing. The
 conversation lives in Frontier, not inside any tool's own session, and the agent taking over is
-given it along with the folder the previous one was working in.
+given it along with the folder the previous one was working in. Or leave the choice to
+**Adaptive**, the default: it routes each message to the least expensive connected agent whose
+capability profile covers it, and escalates to a stronger one, with a handoff, if that agent fails.
 
 Every agent is agentic. A turn runs the agent command line tool you already have installed, in
 your project folder, with its own tools: it reads, writes, and runs commands there. What it may
