@@ -400,3 +400,7 @@ body{overflow:hidden}
 .cite-button{position:absolute;z-index:5;display:inline-flex;align-items:center;gap:5px;font-size:10px;padding:4px 9px;background:var(--elevated);border:1px solid var(--border);color:var(--foreground);border-radius:6px;box-shadow:var(--shadow)}
 /* Model cards: as many columns as fit at a readable width, never three squeezed ones; the footer wraps instead of pushing the delete button out of the card. */
 .desktop-settings-body .model-grid{grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}.model-card-footer{flex-wrap:wrap;row-gap:8px}.model-card-footer>button{flex:0 0 auto;min-width:0}.model-card-footer>.icon-button{margin-left:auto}
+/* Wide dialogs, settings and project settings among them, use the window: the earlier :has() rule never matched in the desktop webview. */
+.modal.wide{width:min(1280px,calc(100vw - 48px))}
+
+.modal.wide{position:fixed}.modal-resizer{position:absolute;top:0;bottom:0;width:10px;cursor:col-resize;z-index:2;border-radius:12px}.modal-resizer.left{left:-3px}.modal-resizer.right{right:-3px}.modal-resizer:hover,.modal-resizer:active{background:color-mix(in srgb,var(--primary) 35%,transparent)}

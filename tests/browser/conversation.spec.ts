@@ -93,6 +93,16 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
 
  // Settings: every page is there, the workspace rules save, and the tools table renders.
  await page.getByRole('button',{name:'Settings',exact:true}).click();
+ expect(await page.locator('.modal.wide').evaluate(el=>el.clientWidth)).toBeGreaterThan(1100);  // Settings use the window, not a 800px dialog.
+ // Either edge of a wide dialog drags it wider or narrower, and the width is remembered.
+ const before=await page.locator('.modal.wide').evaluate(el=>el.getBoundingClientRect().width);
+ const grip=await page.locator('.modal-resizer.right').boundingBox();
+ await page.mouse.move(grip!.x+grip!.width/2,grip!.y+200);await page.mouse.down();await page.mouse.move(grip!.x-120,grip!.y+200,{steps:6});await page.mouse.up();
+ const after=await page.locator('.modal.wide').evaluate(el=>el.getBoundingClientRect().width);
+ expect(before-after).toBeGreaterThan(150);
+ await page.keyboard.press('Escape');
+ await page.getByRole('button',{name:'Settings',exact:true}).click();
+ expect(Math.abs(await page.locator('.modal.wide').evaluate(el=>el.getBoundingClientRect().width)-after)).toBeLessThan(3);
  const tabs=await page.locator('.desktop-settings nav button').allTextContents();
  expect(tabs).toEqual(['General','Agents & Providers','MCP & Skills','Automations','Usage','Remote access','Workspaces','Security','Developer']);
  await page.getByLabel('Rules for every agent',{exact:true}).fill('Always write tests.');

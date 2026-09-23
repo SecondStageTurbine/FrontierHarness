@@ -413,7 +413,12 @@ another agent, the environment note, clone validation and a failed clone leaving
 worktree cleanup, and archive on merge; the browser suite checks the clone field, citation chips,
 interface size, and the catalog. The suite is at 120. Built and installed only on request.
 
-Version 0.12.1 fixes the Agents & Providers page, where a fixed three-column grid squeezed the
-model cards until the footer's delete button sat outside the card. The grid now fits as many
-340-pixel columns as the page allows and the footer wraps. The browser suite asserts that every
-footer control stays inside its card's box.
+Version 0.12.1 fixes the Agents & Providers page. Measuring the installed window showed the
+settings dialog was 800 pixels wide: the `:has()` rule meant to widen it never matched, so the
+fixed three-column model grid squeezed each card until the footer's delete button sat outside it.
+Wide dialogs now open at up to 1280 pixels through a plain rule, and each has a drag handle down
+both edges (`Modal` in `ui.tsx`), so the user pulls it to any width from 560 pixels to the window,
+remembered per dialog on the device. The grid fits as many 340-pixel columns as the dialog allows
+and the footer wraps. The browser suite asserts the opening width, drags the edge, checks the new
+width is kept after reopening, and checks every footer control stays inside its card; the same
+was driven in the installed window.
