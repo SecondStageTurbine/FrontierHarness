@@ -441,3 +441,5 @@ Version 0.12.4: `team.assign` gives review tasks (needs `review`, or a title nam
 Version 0.12.5 repairs the review-title regex in `team.py`: in 0.12.4 its word boundaries had been written as backspace characters by an inline patch, so titles never matched and only the `review` tag routed a task. A test now checks recognition by title alone and that a word like "Previewing" does not match.
 
 Version 0.12.6 fixes "command line tool was not found" on a machine where the tool was installed but Frontier could not see it. Frontier stays alive in the tray, so the PATH it inherited at login can predate an install; `broker.locate` now falls back to the registry's current user and machine PATH and to each tool's installer folders. Verified from a PATH stripped to System32: Claude Code was still found at ~/.local/bin through the registry.
+
+Version 0.12.7 adds Adaptive family profiles for Codex's gpt-6-astra, gpt-6-sol and gpt-6-luna, from `codex debug models`. They apply after the generic `mini` rule, a row's own numbers still win, and older identifiers such as gpt-5.6-sol keep the provider default so existing routing does not shift.

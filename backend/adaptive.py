@@ -47,6 +47,12 @@ FAMILY_PROFILES = [
     ('flash',      dict(cost_class='low', speed=9, coding=6, reasoning=6, planning=5, debugging=6, architecture=5, review=6)),
     ('mini',       dict(cost_class='low', speed=9, coding=6, reasoning=6, planning=5, debugging=6, architecture=5, review=6)),
     ('sonnet',     dict(reasoning=9, planning=9, architecture=9, speed=6)),
+    # Codex's families, as `codex debug models` describes them. Astra is the frontier tier and costs
+    # the most; Sol is the coding workhorse; Luna is the fast, cheap tier. Applied after 'mini' so a Codex
+    # identifier is judged by its own family. Older identifiers keep the Codex provider default.
+    ('gpt-6-astra', dict(cost_class='high',   coding=10, reasoning=10, planning=9, debugging=10, architecture=9, review=9, tool_use=10, repository=10, instruction_following=9, speed=5)),
+    ('gpt-6-sol',   dict(cost_class='medium', coding=9,  reasoning=8,  planning=8, debugging=9,  architecture=8, review=8, tool_use=9,  repository=9,  instruction_following=9, speed=7)),
+    ('gpt-6-luna',  dict(cost_class='low',    coding=7,  reasoning=6,  planning=6, debugging=6,  architecture=5, review=6, tool_use=8,  repository=7,  instruction_following=8, speed=9)),
 ]
 
 

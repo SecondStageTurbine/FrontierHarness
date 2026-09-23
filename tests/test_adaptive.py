@@ -306,3 +306,15 @@ def test_requirements_are_validated_not_trusted():
         TaskRequirements(task_type='wizardry', complexity='low', risk='low', requirements={})
     with pytest.raises(ValueError):
         TaskRequirements(task_type='explain', complexity='enormous', risk='low', requirements={})
+
+
+def test_codex_families_have_their_own_default_profiles():
+    from backend.adaptive import profile
+    row = lambda name: {'id': name, 'name': name, 'provider': 'codex_cli', 'model_name': name}
+    astra, sol, luna = profile(row('gpt-6-astra')), profile(row('gpt-6-sol')), profile(row('gpt-6-luna'))
+    assert (astra['cost_class'], sol['cost_class'], luna['cost_class']) == ('high', 'medium', 'low')
+    assert astra['reasoning'] > sol['reasoning'] > luna['reasoning'] and luna['speed'] > astra['speed']
+    assert profile(row('gpt-5.6-sol')) == {**profile(row('gpt-5.5')), 'id': 'gpt-5.6-sol', 'name': 'gpt-5.6-sol'}  # Older rows are unchanged.
+    # The row's own numbers still win over the family default.
+    custom = profile({**row('gpt-6-luna'), 'capabilities': {'coding': 9}, 'cost_class': 'free'})
+    assert custom['coding'] == 9 and custom['cost_class'] == 'free'
