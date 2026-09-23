@@ -422,3 +422,12 @@ remembered per dialog on the device. The grid fits as many 340-pixel columns as 
 and the footer wraps. The browser suite asserts the opening width, drags the edge, checks the new
 width is kept after reopening, and checks every footer control stays inside its card; the same
 was driven in the installed window.
+
+Version 0.12.2 changes how a failed Claude turn is reported. `read_claude` used to answer every
+`is_error` result with "confirm the subscription is signed in", which sent a signed-in user the
+wrong way; it now carries Claude's own `result` text, names a sign-in problem only when that text
+says so, and states the exit code when there is no text. `run_agent` writes the tool's stderr
+tail to the backend log on failure, never to the conversation. The same Read-only call the team
+lead makes, with the Fable model and the harness's stripped environment, was reproduced by hand
+on this machine and succeeded, so the earlier failures were not a sign-in problem.
+The cause of the user's failed turns was found by rebuilding the lead's prompt from a copy of the store and running the same call: the model row carried the identifier "Fable 5.1", which Claude Code reports as unrecognised; the alias is `fable`. That case is now named explicitly.

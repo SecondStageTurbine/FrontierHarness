@@ -14,6 +14,7 @@ import asyncio
 import json
 import os
 import re
+import logging
 import shutil
 import time
 from pathlib import Path
@@ -233,7 +234,16 @@ def read_claude(out, err, code, provider):
     if payload.get('is_error') or code != 0:
         if is_exhausted(payload.get('result'), err):
             raise exhausted_error(provider)
-        raise ProviderError(f'{CLI_TOOLS[provider][2]} could not complete this turn. Run it once in a terminal to confirm the subscription is signed in.')
+        # Claude's own words for what went wrong: a model it cannot use, a prompt too long, a
+        # policy refusal. Guessing "sign in" when the login is fine sends the user the wrong way.
+        reason = ' '.join(str(payload.get('result') or '').split())[:400]
+        if re.search(r'issue with the selected model|unrecognized_model|may not exist or you may not have access', reason + ' ' + (err or ''), re.I):
+            raise ProviderError(f'{CLI_TOOLS[provider][2]} does not recognise the model identifier on this row. Use the name the tool itself accepts, such as sonnet, opus, haiku or fable, in Settings → Agents & Providers. Claude said: {reason}')
+        if re.search(r'not logged in|/login|please log in|not authenticated|invalid api key', reason, re.I):
+            raise ProviderError(f'{CLI_TOOLS[provider][2]} is not signed in ({reason}). Run it once in a terminal to sign in, then try again.')
+        if reason:
+            raise ProviderError(f'{CLI_TOOLS[provider][2]} stopped this turn: {reason}')
+        raise ProviderError(f'{CLI_TOOLS[provider][2]} could not complete this turn (exit code {code}). Run it once in a terminal to see why; a sign-in problem shows there.')
     usage = payload.get('usage') or {}
     return AgentResult(payload.get('result') or '', usage.get('input_tokens'), usage.get('output_tokens'))
 
@@ -341,10 +351,16 @@ class ModelBroker:
                     code, out, err = await run_cli(argv, prompt, root, env)
             except TimeoutError:
                 raise ProviderError(f'{CLI_TOOLS[provider][2]} was still working after {TURN_TIMEOUT // 60} minutes and was stopped. Anything it had already written to the folder is still there.') from None
-            if provider == 'claude_cli':
-                return read_claude(out, err, code, provider)
-            if provider == 'gemini_cli':
-                return read_gemini(out, err, code, provider)
+            try:
+                if provider == 'claude_cli':
+                    return read_claude(out, err, code, provider)
+                if provider == 'gemini_cli':
+                    return read_gemini(out, err, code, provider)
+            except ProviderError:
+                # The tool's stderr stays out of the conversation, but its tail goes to the local
+                # backend log so a failed turn can be diagnosed on this machine.
+                logging.getLogger('frontier.broker').warning('%s turn failed (exit %s). stderr tail: %s', CLI_TOOLS[provider][2], code, ' '.join((err or '')[-1500:].split()))
+                raise
             if code != 0:
                 raise cli_exit_error(provider, code, out, err)
             if provider == 'opencode_cli':

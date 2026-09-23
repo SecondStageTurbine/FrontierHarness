@@ -216,3 +216,25 @@ async def test_a_failed_tool_names_the_recovery_without_echoing_stderr(tmp_path,
     with pytest.raises(broker.ProviderError) as raised:
         await broker.ModelBroker(store).invoke_agent('tenant-a', store.get('tenant-a', 'models', 'codex_cli'), 'Prompt.', 'edit', project(tmp_path))
     assert 'signed in' in str(raised.value) and 'secrets' not in str(raised.value)
+
+
+def test_a_claude_error_reaches_the_user_in_claudes_own_words():
+    from backend.broker import read_claude, ProviderError
+    import json, pytest
+    with pytest.raises(ProviderError) as failed:
+        read_claude(json.dumps({'is_error': True, 'result': 'The model fable is not available to this account.', 'subtype': 'error'}), '', 1, 'claude_cli')
+    assert 'not available to this account' in str(failed.value) and 'signed in' not in str(failed.value)
+    with pytest.raises(ProviderError) as spent:
+        read_claude(json.dumps({'is_error': True, 'result': 'You have hit your usage limit.'}), '', 1, 'claude_cli')
+    assert spent.value.exhausted
+    with pytest.raises(ProviderError) as silent:
+        read_claude(json.dumps({'is_error': True}), '', 2, 'claude_cli')
+    assert 'exit code 2' in str(silent.value)
+
+
+def test_an_unknown_model_identifier_is_named_as_such():
+    from backend.broker import read_claude, ProviderError
+    import json, pytest
+    with pytest.raises(ProviderError) as failed:
+        read_claude(json.dumps({'is_error': True, 'result': "There's an issue with the selected model (Fable 5.1). It may not exist or you may not have access to it."}), '[claude-code:unrecognized_model] {"model":"Fable 5.1"}', 1, 'claude_cli')
+    assert 'does not recognise the model identifier' in str(failed.value) and 'fable' in str(failed.value) and 'signed in' not in str(failed.value)
