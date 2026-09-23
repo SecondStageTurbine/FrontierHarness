@@ -81,7 +81,7 @@ def normalise_plan(plan):
     return {'summary': (plan or {}).get('summary') or '', 'tasks': tasks}
 
 
-REVIEW_WORDS = re.compile(r'(review|audit|verify|verification|integrat\w*|final gate|check)', re.I)
+REVIEW_WORDS = re.compile(r'\b(review|audit|verify|verification|integrat\w*|final gate|check)\b', re.I)
 
 
 def is_review(task):

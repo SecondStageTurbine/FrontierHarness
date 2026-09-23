@@ -327,3 +327,9 @@ def test_review_tasks_go_to_a_different_model_family_from_the_lead_and_the_autho
     # With only the lead's family left besides the authors, it still avoids the lead.
     assert team.assign(review, agents[:2], agents[0], authors={'codex_cli'})['provider'] == 'codex_cli'
     assert not team.is_review({'title': 'Fix the shader warning', 'needs': ['coding']})
+
+
+def test_review_tasks_are_recognised_by_their_title_alone():
+    assert team.is_review({'title': 'Review and integrate Web fixes, final gate', 'needs': ['coding']})
+    assert team.is_review({'title': 'Audit the auth changes', 'needs': []})
+    assert not team.is_review({'title': 'Previewing the checkout page', 'needs': []})  # A word boundary, not a substring.
