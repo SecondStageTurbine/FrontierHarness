@@ -1,9 +1,10 @@
 {
-  "filename": "Frontier_0.12.1_x64-setup.exe",
-  "bytes": 35454771,
-  "sha256": "6b3d714ef56fe64e0b95fc66707b24b1cdcf7ce40ab612a1a6c0387e8aa8a8ee",
+  "filename": "Frontier_0.12.2_x64-setup.exe",
+  "bytes": 35454835,
+  "sha256": "fc4e65013900f870f347566f22bd6dc1aed628b14a753e8cf6e28c4ea6df4b9c",
   "architecture": "Windows x64",
   "signed": false,
-  "installed_executables_match_current_build": true,
-  "installed_backend_matches_tested_package": true
+  "installed_executables_match_current_build": null,
+  "installed_backend_matches_tested_package": null,
+  "note": "Built and published without installing on the build machine; the running 0.12.1 there was left in place to test the updater."
 }
