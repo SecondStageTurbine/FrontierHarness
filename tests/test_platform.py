@@ -108,14 +108,19 @@ def test_an_approval_card_is_raised_by_the_turn_and_answered_by_the_user(tmp_pat
     assert 'approval.requested' in events and 'approval.decided' in events
 
 
-def test_a_read_only_turn_carries_no_approval_tool(tmp_path, monkeypatch):
+def test_a_read_only_turn_carries_frontiers_tools_but_never_the_permission_prompt(tmp_path, monkeypatch):
+    # Questions and the task board work in every posture; only Edit files routes permission prompts to a card.
+    from backend.broker import agent_argv
     monkeypatch.setenv('HARNESS_DESKTOP_PORT', '8765')
     agent = ScriptedAgent()
     store = setup_store(tmp_path/'state'); folder = tmp_path/'work'; folder.mkdir()
     runner = AgentRunner(store, agent)
     project, session = open_project(store, runner, 'tenant-a', folder)
     asyncio.run(turn(runner, store, 'tenant-a', project, session, 'Look.', 'claude_cli', 'read'))
-    assert 'approval' not in agent.calls[0]['extras'] and agent.calls[0]['extras']['mcp_servers'] == []
+    extras = agent.calls[0]['extras']
+    assert extras['approval']['command'][-1] == '--permission-tool' and extras['mcp_servers'] == []
+    argv = agent_argv('claude_cli', ['claude'], 'sonnet', 'read', folder, folder/'f', {**extras, 'mcp_config': 'm.json'})
+    assert '--permission-prompt-tool' not in argv and 'mcp__frontier__ask_user' in argv and 'mcp__frontier__approve' not in argv
 
 
 def test_automations_run_on_schedule_by_webhook_and_by_hand(tmp_path):

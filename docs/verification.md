@@ -489,3 +489,18 @@ wiring: Claude returned its session, week and per-model week; Codex its weekly w
 answer is kept five minutes and a refusal until its Retry-After, even when refreshed, which a test
 checks. The browser suite runs against fixed figures, so it never uses the tester's sign-in, and
 checks the card shows on a wide window and hides on a narrow one.
+
+Version 0.14.0 adds question cards, the task board and pop-out panels, checked live. The first live
+question run found that Claude, asked to check with the user, reaches for its own AskUserQuestion
+tool, which in print mode goes to the permission prompt tool and showed up as a permission card for
+"AskUserQuestion". Frontier now turns each of its questions into a question card and returns the
+answers keyed by question text, as Claude reads them; under Read only and Full auto, where no
+permission prompt reaches Frontier, that tool is disallowed and Claude uses Frontier's `ask_user`.
+Live: Claude asked "What is your favourite animal?", was answered "otter", and created otter.txt.
+The board: Claude marked a task done through `board_update`. Codex first refused, because under
+`-a never` an MCP tool that needs approval is refused; Frontier's server is now passed to Codex with
+`default_tools_approval_mode="approve"`, and Codex then marked its task done. Pop-out panels were
+checked in the browser suite through `window.open`; in the desktop shell they open as Tauri windows
+named `popout-*`, which the capability file now covers; that path was compiled but not opened here,
+because running a second copy of Frontier would hand off to the one in use. 147 tests and the
+browser suite pass.

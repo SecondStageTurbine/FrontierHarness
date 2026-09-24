@@ -167,5 +167,32 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  const clipped=await page.evaluate(()=>[...document.querySelectorAll('.model-card')].filter(c=>{const r=c.getBoundingClientRect();return [...c.querySelectorAll('.model-card-footer>*')].some(b=>{const q=b.getBoundingClientRect();return q.right>r.right+1||q.left<r.left-1})}).length);
  expect(clipped).toBe(0);
  await expect(page.locator('.tool-versions, .error-text').first()).toBeVisible({timeout:20000});
+ await page.keyboard.press('Escape');
+
+ // A question card: the agent asks mid-turn, the turn waits, and the chosen answer reaches it.
+ await page.locator('.new-session-button').click();
+ await page.getByLabel('Agent',{exact:true}).selectOption({label:'Claude'});
+ await page.getByLabel('Ask Frontier',{exact:true}).fill('Style the button, but ask me first.');
+ await page.getByRole('button',{name:'Send',exact:true}).click();
+ const question=page.locator('.question-card');
+ await expect(question).toContainText('Which colour should the button be?',{timeout:15000});
+ await question.getByRole('button',{name:'Green',exact:true}).click();
+ await expect(page.locator('.agent-turn').last()).toContainText('You chose Green.',{timeout:15000});
+ await expect(question).toHaveCount(0);
+
+ // The task board: a task added by hand and moved along, in the Tasks panel.
+ await page.getByRole('button',{name:'Open preview',exact:true}).click();
+ await page.locator('.inspector-tabs button',{hasText:'Tasks'}).click();
+ await page.getByLabel('New task',{exact:true}).fill('Add a dark theme');
+ await page.getByRole('button',{name:'Add task',exact:true}).click();
+ await expect(page.locator('.task-column.todo')).toContainText('Add a dark theme');
+ await page.getByLabel('Status of Add a dark theme',{exact:true}).selectOption('doing');
+ await expect(page.locator('.task-column.doing')).toContainText('Add a dark theme');
+
+ // Pop out: the panel opens in its own window, which follows the project the main window has open.
+ const [popup]=await Promise.all([page.waitForEvent('popup'),page.getByRole('button',{name:'Pop out panel',exact:true}).click()]);
+ await expect(popup.locator('.task-column.doing')).toContainText('Add a dark theme',{timeout:15000});
+ await expect(page.locator('.context-inspector')).toHaveCount(0);
+ await popup.close();
  expect(errors).toEqual([]);
 });

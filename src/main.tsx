@@ -13,7 +13,10 @@ import 'highlight.js/styles/github-dark.css';
 import './styles/global.css';
 import './styles/shell.css';
 const DesktopWorkspace=lazy(()=>import('./desktop/DesktopWorkspace'));
-function TenantDesktop(){const {tenant}=useWorkspace();return <DesktopWorkspace key={tenant?.id||'no-workspace'}/>}
+const Popout=lazy(()=>import('./desktop/Popout'));
+// A panel popped out into its own window loads the same page with ?popout=<panel>.
+const popped=new URLSearchParams(window.location.search).get('popout');
+function TenantDesktop(){const {tenant}=useWorkspace();return popped?<Popout key={tenant?.id||'no-workspace'} initial={popped as 'Files'}/>:<DesktopWorkspace key={tenant?.id||'no-workspace'}/>}
 const client=new QueryClient({defaultOptions:{queries:{staleTime:5000,retry:(count,error)=>error instanceof ApiError&&error.status<500?false:count<2,refetchOnWindowFocus:true}}});
 class ErrorBoundary extends React.Component<{children:React.ReactNode},{error:Error|null}>{state={error:null as Error|null};static getDerivedStateFromError(error:Error){return {error}}render(){return this.state.error?<div className="loading-page"><h2>Frontier encountered an error</h2><p>Your projects and saved sessions are safe.</p><button onClick={()=>window.location.reload()}>Reload workspace</button></div>:this.props.children}}
 ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><ErrorBoundary><QueryClientProvider client={client}><BrowserRouter><AuthGate><WorkspaceProvider><Suspense fallback={<div className="loading-page">Opening Frontier…</div>}><TenantDesktop/></Suspense></WorkspaceProvider></AuthGate></BrowserRouter></QueryClientProvider></ErrorBoundary></React.StrictMode>);

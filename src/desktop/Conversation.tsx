@@ -1,13 +1,13 @@
 import {useState} from 'react';
-import {Check,ChevronRight,LoaderCircle,FileCode2,AlertTriangle,Square,ArrowRightLeft,Eye,Pencil,Zap,Clock,X,Undo2,FoldVertical,ShieldQuestion,Users,FileText,Terminal,GitCompareArrows,ExternalLink,MessageSquare} from 'lucide-react';
+import {Check,ChevronRight,LoaderCircle,FileCode2,AlertTriangle,Square,ArrowRightLeft,Eye,Pencil,Zap,Clock,X,Undo2,FoldVertical,ShieldQuestion,MessageCircleQuestion,Users,FileText,Terminal,GitCompareArrows,ExternalLink,MessageSquare} from 'lucide-react';
 import {MarkdownOutput} from '../components/Markdown';
 import {duration,money} from '../lib/api';
 import {working} from '../types';
 import {modeLabels,type Approval,type Message,type Mode,type Session,type Team as TeamState} from '../types';
-export type InspectorTab='Files'|'Changes'|'Terminal'|'Preview';
+export type InspectorTab='Files'|'Changes'|'Terminal'|'Preview'|'Tasks';
 const modeIcon={read:Eye,edit:Pencil,auto:Zap};
 
-export function Conversation({session,onInspect,onUnqueue,onRevert,onDecide,onRewind,onOpenSession,onCite}:{session:Session;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onUnqueue?:(id:string)=>void;onRevert?:(id:string)=>void;onDecide?:(approval:Approval,allow:boolean)=>void;onRewind?:(id:string)=>void;onOpenSession?:(id:string)=>void;onCite?:(text:string,from:string)=>void}){
+export function Conversation({session,onInspect,onUnqueue,onRevert,onDecide,onRewind,onOpenSession,onCite}:{session:Session;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onUnqueue?:(id:string)=>void;onRevert?:(id:string)=>void;onDecide?:(approval:Approval,allow:boolean,message?:string)=>void;onRewind?:(id:string)=>void;onOpenSession?:(id:string)=>void;onCite?:(text:string,from:string)=>void}){
  const busy=working(session.messages.at(-1));
  const [cite,setCite]=useState<{text:string;from:string;x:number;y:number}|null>(null);
  // Selecting text inside a reply offers to cite it in the composer as a typed reference.
@@ -56,7 +56,7 @@ function TeamCard({team,onOpenSession}:{team:TeamState;onOpenSession?:(id:string
   </li>)}</ol>}
  </div>;
 }
-function AgentMessage({message,onInspect,onRevert,approvals=[],onDecide,onOpenSession}:{message:Message;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onRevert?:(id:string)=>void;approvals?:Approval[];onDecide?:(approval:Approval,allow:boolean)=>void;onOpenSession?:(id:string)=>void}){
+function AgentMessage({message,onInspect,onRevert,approvals=[],onDecide,onOpenSession}:{message:Message;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onRevert?:(id:string)=>void;approvals?:Approval[];onDecide?:(approval:Approval,allow:boolean,message?:string)=>void;onOpenSession?:(id:string)=>void}){
  const running=message.status==='running';
  const ModeIcon=modeIcon[(message.mode||'edit') as Mode];
  const changes=message.changes||[];
@@ -74,7 +74,8 @@ function AgentMessage({message,onInspect,onRevert,approvals=[],onDecide,onOpenSe
     :<><strong>{message.routing.chosen.name}</strong><em> · {message.routing.chosen.because}</em></>}
   </div>}
   {message.team&&<TeamCard team={message.team} onOpenSession={onOpenSession}/>}
-  {running&&approvals.map(a=><div key={a.id} className="approval-card" role="alertdialog" aria-label={`${a.tool_name} needs permission`}><ShieldQuestion size={16}/><div><strong>{message.model_name} wants to run {a.tool_name}</strong><code>{describeInput(a.tool_name,a.input)}</code><small>Allowed once; the turn continues either way. Nothing happens until you answer.</small></div><div className="approval-actions"><button className="primary" onClick={()=>onDecide?.(a,true)}>Allow</button><button onClick={()=>onDecide?.(a,false)}>Deny</button></div></div>)}
+  {running&&approvals.filter(a=>a.kind==='question').map(a=><QuestionCard key={a.id} approval={a} asker={message.model_name||'The agent'} onAnswer={(text)=>onDecide?.(a,text!==null,text??undefined)}/>)}
+  {running&&approvals.filter(a=>a.kind!=='question').map(a=><div key={a.id} className="approval-card" role="alertdialog" aria-label={`${a.tool_name} needs permission`}><ShieldQuestion size={16}/><div><strong>{message.model_name} wants to run {a.tool_name}</strong><code>{describeInput(a.tool_name,a.input)}</code><small>Allowed once; the turn continues either way. Nothing happens until you answer.</small></div><div className="approval-actions"><button className="primary" onClick={()=>onDecide?.(a,true)}>Allow</button><button onClick={()=>onDecide?.(a,false)}>Deny</button></div></div>)}
   {running
    ?<div className="agent-working-caption">{message.routing?.status==='choosing'?'Adaptive is choosing an agent for this message.':message.team?'The team is working. Each task runs in its own session; open one from the card to watch it.':'Reading the project and working in it. The reply appears when the agent finishes.'}</div>
    :message.content&&<div className="inline-build"><MarkdownOutput text={message.content} onFile={(p,l)=>onInspect('Files',p,l)}/></div>}
@@ -87,4 +88,18 @@ function AgentMessage({message,onInspect,onRevert,approvals=[],onDecide,onOpenSe
   {message.status==='cancelled'&&<div className="thread-alert"><Square size={15}/><div><strong>Stopped.</strong><p>{message.error}</p></div></div>}
   {message.status==='complete'&&!changes.length&&message.mode!=='read'&&<div className="thread-completion"><Check size={15}/><span>No files changed.</span></div>}
  </div>;
+}
+
+/** An agent asked something mid-turn and is waiting: pick a suggested answer or write one. */
+function QuestionCard({approval,asker,onAnswer}:{approval:Approval;asker:string;onAnswer:(text:string|null)=>void}){
+ const [text,setText]=useState(''),[sent,setSent]=useState(false);
+ const question=String(approval.input.question||''),options=Array.isArray(approval.input.options)?(approval.input.options as unknown[]).map(String):[];
+ const answer=(value:string|null)=>{if(sent)return;setSent(true);onAnswer(value)};
+ return <div className="approval-card question-card" role="alertdialog" aria-label={`${asker} asks a question`}><MessageCircleQuestion size={16}/><div>
+  <strong>{asker} asks</strong><p>{question}</p>
+  {options.length>0&&<div className="question-options">{options.map(o=><button key={o} disabled={sent} onClick={()=>answer(o)}>{o}</button>)}</div>}
+  <form className="question-answer" onSubmit={e=>{e.preventDefault();if(text.trim())answer(text.trim())}}><textarea aria-label="Your answer" rows={2} placeholder="Or write an answer…" value={text} disabled={sent} onChange={e=>setText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(text.trim())answer(text.trim())}}}/>
+   <div className="approval-actions"><button className="primary" type="submit" disabled={sent||!text.trim()}>Answer</button><button type="button" disabled={sent} onClick={()=>answer(null)}>Let it decide</button></div></form>
+  <small>The turn is paused until you answer. “Let it decide” tells the agent to use its judgement and say what it assumed.</small>
+ </div></div>;
 }

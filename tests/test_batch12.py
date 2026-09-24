@@ -95,6 +95,11 @@ def test_a_lead_plans_workers_do_the_tasks_in_worktrees_and_the_lead_reviews(tmp
     assert reply['team']['status'] == 'done' and [t['status'] for t in tasks] == ['done', 'done']
     assert tasks[1]['model_id'] == 'codex_cli' and tasks[0]['model_id'] in ('claude_cli', 'codex_cli', 'opencode_cli')
     assert all(t['merge'] == 'applied' for t in tasks)
+    # The plan is on the project's board too, done, each task pointing at its worker's session.
+    from backend import board
+    on_board = board.tasks(store, 'tenant-a', project['id'])
+    assert sorted((b['title'], b['status']) for b in on_board) == sorted((t['title'], 'done') for t in tasks)
+    assert {b['session_id'] for b in on_board} == {t['session_id'] for t in tasks}
     # The workers wrote in their worktrees; the patches landed in the project folder, uncommitted.
     assert (root/'a.txt').read_text(encoding='utf-8') == 'A' and (root/'b.txt').read_text(encoding='utf-8') == 'B'
     worker_ids = {t['session_id'] for t in tasks}

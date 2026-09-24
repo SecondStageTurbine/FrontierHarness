@@ -10,10 +10,10 @@ from fastapi import Request, Response, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse, FileResponse
 from .schemas import (ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput, GitPaths, CommitInput, FileWrite,
                       McpServerInput, ApprovalDecision, ApprovalRequest, FanoutInput, AutomationInput, ProjectSettings, PrCreateInput,
-                      DevServerInput, RewindInput, ImportInput, CloneInput, CatchupInput, ResumeCliInput)
+                      DevServerInput, RewindInput, ImportInput, CloneInput, CatchupInput, ResumeCliInput, BoardTaskInput, BoardTaskPatch)
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
-from . import gitops, automations, pullrequests, devserver, maintenance
+from . import gitops, automations, pullrequests, devserver, maintenance, board
 import secrets
 from datetime import datetime, timedelta, timezone
 from .adaptive import ADAPTIVE
@@ -340,7 +340,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
     @app.post('/internal/approvals')
     def approval_request(payload:ApprovalRequest,request:Request):
         """Called by the turn's own permission tool over loopback, authenticated by the turn token."""
-        approval_id=runner.request_approval(request.headers.get('x-frontier-turn',''),payload.tool_name,payload.input,payload.tool_use_id)
+        approval_id=runner.request_approval(request.headers.get('x-frontier-turn',''),payload.tool_name,payload.input,payload.tool_use_id,payload.kind)
         return {'id':approval_id}
 
     @app.get('/internal/approvals/{approval_id}')
@@ -654,6 +654,66 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
     def import_history(tenant_id:str,project_id:str,payload:ImportInput,request:Request):
         scoped(request,tenant_id)
         return maintenance.import_history(store,tenant_id,store.get(tenant_id,'projects',project_id),payload.sources)
+
+    # ── The project's task board ──
+    def turn_of(request):
+        turn=runner.turn_tokens.get(request.headers.get('x-frontier-turn',''))
+        if not turn:
+            raise HTTPException(403,'This turn is not running.')
+        return turn
+
+    def agent_name(tenant_id,session_id,message_id):
+        session=store.get(tenant_id,'sessions',session_id)
+        message=next((m for m in session['messages'] if m['id']==message_id),{})
+        return message.get('model_name') or 'agent',session
+
+    @app.get('/internal/board')
+    def board_for_turn(request:Request):
+        tenant_id,project_id,_,_=turn_of(request)
+        return board.tasks(store,tenant_id,project_id)
+
+    @app.post('/internal/board')
+    def board_add_for_turn(payload:BoardTaskInput,request:Request):
+        tenant_id,project_id,session_id,message_id=turn_of(request)
+        name,session=agent_name(tenant_id,session_id,message_id)
+        return board.add(store,tenant_id,project_id,payload.title,payload.notes,payload.status,f'{name} · {session["name"]}',session_id)
+
+    @app.post('/internal/board/{task_id}')
+    def board_update_for_turn(task_id:str,payload:BoardTaskPatch,request:Request):
+        tenant_id,project_id,session_id,message_id=turn_of(request)
+        name,_=agent_name(tenant_id,session_id,message_id)
+        try:
+            return board.update(store,tenant_id,project_id,task_id,by=name,**payload.model_dump(exclude_unset=True))
+        except (KeyError,TenantIsolationViolationException):
+            raise HTTPException(404,'No task with that id on this project’s board.') from None
+
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/board')
+    def board_list(tenant_id:str,project_id:str,request:Request):
+        scoped(request,tenant_id)
+        store.get(tenant_id,'projects',project_id)
+        return board.tasks(store,tenant_id,project_id)
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/board')
+    def board_add(tenant_id:str,project_id:str,payload:BoardTaskInput,request:Request):
+        scoped(request,tenant_id)
+        store.get(tenant_id,'projects',project_id)
+        return board.add(store,tenant_id,project_id,payload.title,payload.notes,payload.status)
+
+    @app.put('/api/t/{tenant_id}/projects/{project_id}/board/{task_id}')
+    def board_update(tenant_id:str,project_id:str,task_id:str,payload:BoardTaskPatch,request:Request):
+        scoped(request,tenant_id)
+        try:
+            return board.update(store,tenant_id,project_id,task_id,by='you',**payload.model_dump(exclude_unset=True))
+        except KeyError:
+            raise HTTPException(404,'No such task.') from None
+
+    @app.delete('/api/t/{tenant_id}/projects/{project_id}/board/{task_id}')
+    def board_delete(tenant_id:str,project_id:str,task_id:str,request:Request):
+        scoped(request,tenant_id)
+        if store.get(tenant_id,'board',task_id).get('project_id')!=project_id:
+            raise HTTPException(404,'No such task.')
+        store.delete(tenant_id,'board',task_id)
+        return {'deleted':task_id}
 
     @app.get('/api/t/{tenant_id}/projects/{project_id}/cli-sessions')
     async def cli_sessions(tenant_id:str,project_id:str,request:Request):

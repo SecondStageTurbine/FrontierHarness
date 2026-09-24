@@ -458,3 +458,30 @@ body{overflow:hidden}
 .desktop-settings .metrics>div{display:flex;flex-direction:column;gap:2px;padding:10px 12px;background:var(--card);border:1px solid var(--border);border-radius:10px}
 .desktop-settings .metrics span{font-size:11px;color:var(--subtle)}
 .desktop-settings .metrics strong{font-size:18px;font-variant-numeric:tabular-nums}
+
+/* Question cards: an agent waiting on an answer */
+.question-card{border-color:color-mix(in srgb,var(--primary) 45%,var(--border));background:color-mix(in srgb,var(--primary) 7%,var(--surface))}
+.question-card>svg{color:var(--primary);flex:0 0 auto}
+.question-card>div{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px}
+.question-card p{margin:0;white-space:pre-wrap}
+.question-options{display:flex;flex-wrap:wrap;gap:6px}
+.question-options button{padding:5px 10px}
+.question-answer{display:flex;flex-direction:column;gap:6px}
+.question-answer textarea{min-height:0}
+/* Task board */
+.task-board{display:flex;flex-direction:column;gap:12px;padding:12px;overflow:auto;height:100%}
+.task-add{display:flex;gap:6px}
+.task-add button{padding:8px 10px}
+.task-column h4{display:flex;align-items:center;gap:6px;margin:0 0 6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.task-column h4 small{color:var(--subtle)}
+.task-column.doing h4{color:var(--primary)}.task-column.blocked h4{color:var(--danger)}
+.task-card{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:start;padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--card);margin-bottom:6px}
+.task-card select{width:auto;padding:3px 6px;font-size:11px}
+.task-body{display:flex;flex-direction:column;gap:2px;min-width:0}
+.task-body p{margin:0;font-size:12px;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
+.task-body small{color:var(--subtle);font-size:11px}
+.task-column.done .task-body strong{text-decoration:line-through;color:var(--muted)}
+.task-done-toggle{align-self:flex-start}
+/* A panel in its own window fills it */
+.popout-shell{height:100vh;display:flex;background:var(--background)}
+.popout-shell>.context-inspector{width:100%;max-width:none;flex:1;border-left:0}

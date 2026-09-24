@@ -1,5 +1,5 @@
 import {useState,useEffect,useRef,useDeferredValue} from 'react';
-import {X,FileCode2,Folder,ChevronRight,Download,Terminal,SplitSquareHorizontal,AlignLeft,Play,Save,Search,MessageSquarePlus} from 'lucide-react';
+import {X,ExternalLink,FileCode2,Folder,ChevronRight,Download,Terminal,SplitSquareHorizontal,AlignLeft,Play,Save,Search,MessageSquarePlus} from 'lucide-react';
 import {isTauri} from '@tauri-apps/api/core';
 import {Term} from './Term';
 import {Preview} from './Preview';
@@ -8,8 +8,10 @@ import {api,download} from '../lib/api';
 import type {ProjectFile,Project,Session,FileChange,ContextChip} from '../types';
 import type {InspectorTab} from './Conversation';
 import {GitPanel} from './GitPanel';
+import {TaskBoard} from './TaskBoard';
+import {popOut} from './Popout';
 
-export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,onFile,busy,onChip,onCompose,agents=[]}:{tab:InspectorTab;onTab:(t:InspectorTab)=>void;onClose:()=>void;project:Project;session?:Session;filePath:string|null;fileLine?:number;onFile:(s:string,line?:number)=>void;busy:boolean;onChip?:(chip:ContextChip)=>void;onCompose?:(text:string)=>void;agents?:{provider:string;name:string}[]}){
+export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,onFile,busy,onChip,onCompose,agents=[],popped=false,onOpenSession}:{tab:InspectorTab;onTab:(t:InspectorTab)=>void;onClose:()=>void;project:Project;session?:Session;filePath:string|null;fileLine?:number;onFile:(s:string,line?:number)=>void;busy:boolean;onChip?:(chip:ContextChip)=>void;onCompose?:(text:string)=>void;agents?:{provider:string;name:string}[];popped?:boolean;onOpenSession?:(id:string)=>void}){
  const {path,notify}=useWorkspace(),refresh=useRefresh();
  const [query,setQuery]=useState('');const deferred=useDeferredValue(query.trim());
  // A session in its own worktree reads that worktree; the project folder otherwise.
@@ -27,8 +29,9 @@ export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,o
  useEffect(()=>{void tree.refetch()},[changes.length]);
  const selected=changes.find(c=>c.id===changeId)||[...changes].reverse().find(c=>c.path===filePath)||changes.at(-1);
  return <aside className="context-inspector">
-  <div className="inspector-tabs">{(['Files','Changes','Terminal','Preview'] as InspectorTab[]).map(t=><button key={t} className={tab===t?'selected':''} onClick={()=>onTab(t)}>{t}</button>)}<button className="icon-button" title="Close panel" aria-label="Close contextual panel" onClick={onClose}><X size={15}/></button></div>
+  <div className="inspector-tabs">{(['Files','Changes','Terminal','Preview','Tasks'] as InspectorTab[]).map(t=><button key={t} className={tab===t?'selected':''} onClick={()=>onTab(t)}>{t}</button>)}{!popped&&<button className="icon-button" title="Open this panel in its own window" aria-label="Pop out panel" onClick={()=>{void popOut(tab);onClose()}}><ExternalLink size={14}/></button>}<button className="icon-button" title="Close panel" aria-label="Close contextual panel" onClick={onClose}><X size={15}/></button></div>
   <div className="inspector-content">
+   {tab==='Tasks'&&<TaskBoard project={project} onOpenSession={onOpenSession}/>}
    {tab==='Files'&&<><div className="file-browser">
     <div className="file-browser-heading"><Folder size={14}/>{project.name}{session?.worktree&&<em className="branch-chip" title={session.worktree.path}>{session.worktree.branch}</em>}<small>{tree.data?.length||0} files</small></div>
     <label className="file-search"><Search size={12}/><input aria-label="Search project files" placeholder="Search in files…" value={query} onChange={e=>setQuery(e.target.value)}/>{query&&<button className="icon-button" aria-label="Clear search" onClick={()=>setQuery('')}><X size={11}/></button>}</label>

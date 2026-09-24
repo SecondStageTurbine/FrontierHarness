@@ -151,6 +151,18 @@ Right-click a session to rename, pin, archive, or snooze it for an hour or until
 
 Closing the window keeps Frontier running in the system tray: automations keep firing, finished turns still notify you, and the tray icon's menu offers **Open Frontier** and **Quit Frontier**. A left click on the icon reopens the window. **Settings → General → Window** turns this off, after which closing the window quits. Launching Frontier while it is already running brings the existing window to the front instead of starting a second copy.
 
+### Question cards
+
+When Claude needs a decision only you can make, it pauses and asks in the conversation instead of guessing. The card shows the question, any suggested answers as buttons, and a box for your own; the turn waits, up to an hour, and continues with your answer. **Let it decide** tells it to use its judgement and say what it assumed. Under Edit files this is Claude's own question tool, routed to Frontier; under Read only and Full auto it asks through Frontier's `ask_user` tool. Claude only: the other tools cannot hold a turn open for an answer.
+
+### Task board
+
+Each project has a task board, in the **Tasks** panel: To do, Doing, Blocked and Done. Add tasks by hand; team mode puts its plan there and moves each task as its worker starts, finishes or fails, linked to the worker's session. Every agent is shown the open tasks at the start of a turn, and Claude, Codex and OpenCode can list, add and update them through Frontier's board tools, so a later session picks up where an earlier one left off. Each task says who added it and who last moved it.
+
+### Pop-out panels
+
+The arrow button beside the panel tabs opens Files, Changes, Terminal, Preview or Tasks in its own window, for a second monitor. The window follows whichever project and session the main window has open; asking for the same panel again brings its window forward.
+
 ### Subscription usage
 
 On a wide enough window, a **Usage** card sits beside the composer, and the same figures head **Settings → Usage** at any width. It shows how much of each signed-in Claude and Codex subscription's windows is used and when each resets, the same figures as each tool's own usage view: Claude's current session, its week and any per-model week, and Codex's windows and plan. It reads the sign-in each tool already keeps on this computer, so anyone using Frontier sees their own plans, and the tokens never leave the backend. It refreshes every five minutes, or from its refresh button; when a provider rate-limits the figures, Frontier waits as long as it was asked before asking again.
@@ -257,6 +269,7 @@ The Python suite exercises workspace boundaries, a turn's file record, agent swi
 | Git status, staging, commit, push, checkpoints, worktrees | `backend/gitops.py` |
 | The approval MCP server Claude calls during a turn | `backend/permission_tool.py` |
 | Frontier's own MCP server for other agents | `backend/frontier_mcp.py` |
+| The project task board | `backend/board.py` |
 | Team mode: plan, delegate, apply, review | `backend/team.py` |
 | Pull requests through the GitHub CLI | `backend/pullrequests.py` |
 | The project's dev server | `backend/devserver.py` |

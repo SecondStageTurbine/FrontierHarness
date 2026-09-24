@@ -10,6 +10,7 @@ import asyncio
 import json
 import re
 
+from . import board
 from . import adaptive, gitops
 from .adaptive import ADAPTIVE, TaskRequirements
 from .broker import AgentResult, ProviderError
@@ -188,6 +189,8 @@ class Team:
             agent = assign(task, agents, self.lead, cooling, authors)
             task.update(model_id=agent['id'], model_name=agent['name'], cross_review=is_review(task))
         self.save(message, session, f'Planned {len(team["tasks"])} tasks.')
+        for task in team['tasks']:
+            self.to_board(task)
         repo = await gitops.toplevel(self.root)
         for batch in waves(team['tasks']):
             if repo and len(batch) > 1:
@@ -240,7 +243,15 @@ class Team:
         task = next(t for t in message['team']['tasks'] if t['id'] == task_id)
         task.update(fields)
         self.save(message, session, note)
+        self.to_board(task)
         return task
+
+    def to_board(self, task):
+        """Each team task is also a task on the project's board, so later sessions see what the team did."""
+        status = {'working': 'doing', 'fixing': 'doing', 'done': 'done', 'failed': 'blocked'}.get(task.get('status'), 'todo')
+        board.mirror(self.runner.store, self.tenant_id, self.project_id, f'team:{self.message_id}:{task["id"]}', task['title'], status,
+                     notes=(task.get('report') or task.get('instructions') or '')[:600], session_id=task.get('session_id'),
+                     source=f'team · {task.get("model_name") or "agent"}')
 
     async def work(self, task_id, objective, team, repo, fix=None):
         """One task, done by its agent in its own session, then folded back into the lead's folder."""

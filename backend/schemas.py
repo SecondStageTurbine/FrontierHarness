@@ -194,13 +194,24 @@ class McpServerInput(StrictModel):
 
 class ApprovalDecision(StrictModel):
     allow: bool
-    message: str | None = Field(default=None, max_length=500)
+    message: str | None = Field(default=None, max_length=4000)  # A reason for a no, or the answer to a question.
 
 class ApprovalRequest(BaseModel):
     model_config = ConfigDict(extra='ignore')
     tool_name: str = Field(default='tool', max_length=200)
     input: dict = Field(default_factory=dict)
     tool_use_id: str | None = None
+    kind: Literal['permission', 'question'] = 'permission'
+
+class BoardTaskInput(StrictModel):
+    title: str = Field(min_length=1, max_length=200)
+    notes: str = Field(default='', max_length=4000)
+    status: Literal['todo', 'doing', 'blocked', 'done'] = 'todo'
+
+class BoardTaskPatch(StrictModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    notes: str | None = Field(default=None, max_length=4000)
+    status: Literal['todo', 'doing', 'blocked', 'done'] | None = None
 
 class FanoutInput(StrictModel):
     content: str = Field(min_length=2, max_length=40000)

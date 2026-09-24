@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import adaptive, gitops, localhealth, team as teamwork
+from . import adaptive, board, gitops, localhealth, team as teamwork
 from .adaptive import ADAPTIVE, MAX_ESCALATIONS
 from .broker import CLI_TOOLS, ProviderError
 from .projects import ProjectFiles
@@ -168,7 +168,7 @@ def context_usage(session):
     return {'chars': chars, 'limit': TRANSCRIPT_LIMIT, 'dropped': dropped, 'compacted': compacted}
 
 
-def build_prompt(messages, switched, handoff=None, mode=None, summary=None, first=False, rules=None, memory=None, environment=None):
+def build_prompt(messages, switched, handoff=None, mode=None, summary=None, first=False, rules=None, memory=None, environment=None, board=None):
     """Instructions, then as much of the conversation as fits, ending at the new message.
 
     A handoff, when present, is what a previous agent left behind on this same turn; it goes
@@ -195,6 +195,11 @@ def build_prompt(messages, switched, handoff=None, mode=None, summary=None, firs
         head += '\n\nPROJECT NOTES (kept by the user and earlier conversations about this project):\n' + memory.strip()[:20000]
     if environment:
         head += '\n\nPROJECT ENVIRONMENT: ' + environment
+    if board:
+        head += ('\n\nPROJECT TASK BOARD (open tasks shared by every session in this project). When this turn finishes, '
+                 'advances or blocks one of them, update it with the frontier board_update tool if you have it; otherwise '
+                 'say in your reply which task changed. Add a task with board_add only for real follow-up work the user '
+                 'should see, not for steps of this turn.\n' + board)
     if summary:
         head += '\n\nEarlier messages of this conversation were compacted into this summary:\n' + summary
     return head + '\n\n' + '\n\n'.join(lines)
@@ -291,7 +296,9 @@ class AgentRunner:
         if (project or {}).get('agent_browser') and not any(s['name'] == 'frontier-browser' for s in servers):
             extras['mcp_servers'] = servers + [browser_server(project)]
         port = os.environ.get('HARNESS_DESKTOP_PORT')
-        if port and mode == 'edit':
+        if port:
+            # Frontier's own tools: under Edit files the approval card; in every posture the question
+            # card (Claude) and the project's task board.
             if getattr(sys, 'frozen', False):
                 command, env = [sys.executable, '--permission-tool'], {}
             else:
@@ -299,7 +306,7 @@ class AgentRunner:
             extras['approval'] = {'url': f'http://127.0.0.1:{port}', 'token': token, 'command': command, 'env': env}
         return extras
 
-    def request_approval(self, token, tool_name, tool_input, tool_use_id=None):
+    def request_approval(self, token, tool_name, tool_input, tool_use_id=None, kind='permission'):
         """A running turn's tool asks; the conversation shows a card until someone answers."""
         turn = self.turn_tokens.get(token)
         if not turn:
@@ -307,9 +314,10 @@ class AgentRunner:
         tenant_id, project_id, session_id, message_id = turn
         approval = {'id': uid(), 'tenant_id': tenant_id, 'session_id': session_id, 'message_id': message_id, 'tool_name': tool_name,
                     'input': tool_input, 'tool_use_id': tool_use_id, 'created_at': now(), 'decision': None, 'message': None,
-                    'event': asyncio.Event()}
+                    'event': asyncio.Event(), 'kind': kind}
         self.approvals[approval['id']] = approval
-        self.store.event(tenant_id, session_id, 'approval.requested', f'{tool_name} needs your permission.', message_id=message_id, approval_id=approval['id'])
+        text = f'The agent asks: {str(tool_input.get("question") or "")[:200]}' if kind == 'question' else f'{tool_name} needs your permission.'
+        self.store.event(tenant_id, session_id, 'approval.requested', text, message_id=message_id, approval_id=approval['id'])
         return approval['id']
 
     async def approval_state(self, approval_id, wait=0):
@@ -508,6 +516,7 @@ class AgentRunner:
         rules = (self.store.tenant_internal(tenant_id) or {}).get('rules')
         memory = project.get('memory')
         environment = ' '.join(filter(None, [(self.files.python_env(root) or {}).get('note'), browser_note(project, root)])) or None
+        board_text = board.render(board.tasks(self.store, tenant_id, project_id))
         # Read only cannot change the folder, so it is not read twice to prove that.
         before = await asyncio.to_thread(fingerprint, self.files, tenant_id, project_id, session_id) if mode != 'read' else {}
         # In a repository, the whole working tree is also checkpointed as hidden git objects, so a
@@ -530,7 +539,7 @@ class AgentRunner:
                 self.store.put(tenant_id, 'sessions', session)
                 visible, summary = conversation(session)
                 objective = next(m['content'] for m in reversed(session['messages']) if m['role'] == 'user')
-                lead_prompt = build_prompt(visible, False, None, 'read', summary, rules=rules, memory=memory, environment=environment)
+                lead_prompt = build_prompt(visible, False, None, 'read', summary, rules=rules, memory=memory, environment=environment, board=board_text)
                 result = await teamwork.Team(self, tenant_id, project_id, session_id, message_id, config, mode, root).run(lead_prompt, objective)
             rounds = 0 if message.get('team') else 1 + (MAX_ESCALATIONS if adaptive_turn else 0)
             spare = 2  # How many times a spent agent may hand this turn to another agent.
@@ -539,7 +548,7 @@ class AgentRunner:
                 tried.add(config['id'])
                 visible, summary = conversation(session)
                 prompt = build_prompt(visible, bool(message.get('switched_from')), handoff_text, mode, summary,
-                                      first=sum(1 for m in session['messages'] if m['role'] == 'user') == 1, rules=rules, memory=memory, environment=environment)
+                                      first=sum(1 for m in session['messages'] if m['role'] == 'user') == 1, rules=rules, memory=memory, environment=environment, board=board_text)
                 native = resumable(session, config, root, project, message)
                 result, error = None, None
                 try:
@@ -548,7 +557,7 @@ class AgentRunner:
                         # only what was said since it last spoke is sent. A session it cannot find falls back to the replay.
                         fresh = [m for m in session['messages'][native['upto']:] if m['id'] != message_id]
                         try:
-                            result = await self.broker.invoke_agent(tenant_id, config, build_prompt(fresh, False, handoff_text, mode, rules=rules, memory=memory, environment=environment),
+                            result = await self.broker.invoke_agent(tenant_id, config, build_prompt(fresh, False, handoff_text, mode, rules=rules, memory=memory, environment=environment, board=board_text),
                                                                     mode, root, {**extras, 'resume': native['id']})
                             result.resumed = True
                         except ProviderError as exc:

@@ -237,6 +237,8 @@ def mcp_config_for_opencode(servers):
                                    else {'type': 'local', 'command': [server['command'], *(server.get('args') or [])], 'environment': server.get('env') or {}, 'enabled': True})
     return {'mcp': entries}
 
+FRONTIER_TOOLS = ('ask_user', 'board_list', 'board_add', 'board_update')  # Served by permission_tool beside `approve`.
+
 def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None):
     """One posture, four spellings. This is the only place the tools differ on power.
 
@@ -251,6 +253,10 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
         # the project and the wrong voice for a question. Read only is the ordinary agent with
         # its writing and shell tools removed, refusing anything else rather than asking.
         disallowed = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'] if mode == 'read' else []
+        if extras.get('approval') and mode != 'edit':
+            # Claude's own question tool needs the permission prompt, which only Edit files routes to
+            # Frontier; elsewhere it would be refused, so Claude asks through Frontier's ask_user instead.
+            disallowed.append('AskUserQuestion')
         if extras.get('protect_env'):
             # The project keeps its secrets: Claude may not open .env files under any posture.
             disallowed += ['Read(./.env)', 'Read(./.env.*)', 'Read(**/.env)', 'Read(**/.env.*)']
@@ -262,9 +268,12 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
             # Claude's own session continues, with its full internal state, instead of a replayed transcript.
             argv += ['--resume', extras['resume']]
         # The browser only looks at pages; asking the user before every click would stall the turn on
-        # a card per step, so its tools are allowed outright under every posture.
-        if any(s['name'] == 'frontier-browser' for s in servers):
-            argv += ['--allowedTools', 'mcp__frontier-browser']
+        # a card per step, so its tools are allowed outright under every posture. So are Frontier's own
+        # question and task-board tools, which touch nothing in the project.
+        allowed = (['mcp__frontier-browser'] if any(s['name'] == 'frontier-browser' for s in servers) else []) + \
+                  ([f'mcp__frontier__{name}' for name in FRONTIER_TOOLS] if extras.get('approval') else [])
+        if allowed:
+            argv += ['--allowedTools', *allowed]
         if extras.get('mcp_config'):
             argv += ['--mcp-config', str(extras['mcp_config'])]
             if mode == 'edit' and extras.get('approval'):
@@ -284,6 +293,9 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
                 argv += ['-c', f'{key}.command={toml_value(server["command"])}', '-c', f'{key}.args={toml_value(server.get("args") or [])}']
                 if server.get('env'):
                     argv += ['-c', f'{key}.env={toml_value(server["env"])}']
+            if server.get('trusted'):
+                # Exec has no one to approve a tool call, so a server Frontier vouches for runs its tools unasked.
+                argv += ['-c', f'{key}.default_tools_approval_mode="approve"']
         if extras.get('resume'):
             # `exec resume` takes no -C or --sandbox: the working directory is the project, and the
             # sandbox is set through its config key.
@@ -446,10 +458,16 @@ class ModelBroker:
         with TemporaryDirectory(prefix='frontier-turn-') as scratch:
             final = Path(scratch)/'final.txt'
             servers = extras.get('mcp_servers') or []
-            if provider == 'claude_cli' and (servers or (mode == 'edit' and extras.get('approval'))):
+            if provider == 'claude_cli' and (servers or extras.get('approval')):
                 config_path = Path(scratch)/'mcp.json'
-                config_path.write_text(json.dumps(mcp_config_for_claude(servers, extras.get('approval') if mode == 'edit' else None)), encoding='utf-8')
+                config_path.write_text(json.dumps(mcp_config_for_claude(servers, extras.get('approval'))), encoding='utf-8')
                 extras['mcp_config'] = config_path
+            if provider in ('codex_cli', 'opencode_cli') and extras.get('approval'):
+                # The same server with only the task board: these tools cannot hold a turn open for a question.
+                approval = extras['approval']
+                servers = servers + [{'name': 'frontier', 'transport': 'stdio', 'trusted': True, 'command': approval['command'][0], 'args': approval['command'][1:],
+                                      'env': {'FRONTIER_URL': approval['url'], 'FRONTIER_TOKEN': approval['token'], 'FRONTIER_TOOLS': 'board', **approval.get('env', {})}}]
+                extras['mcp_servers'] = servers
             if provider == 'opencode_cli' and servers:
                 env['OPENCODE_CONFIG_CONTENT'] = json.dumps(mcp_config_for_opencode(servers))
             argv = agent_argv(provider, launch, config['model_name'], mode, root, final, extras)
