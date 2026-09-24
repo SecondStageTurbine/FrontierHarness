@@ -154,6 +154,10 @@ class CatchupInput(StrictModel):
 class ImportInput(StrictModel):
     sources: list[Literal['claude', 'codex']] = Field(default_factory=lambda: ['claude', 'codex'], min_length=1)
 
+class ResumeCliInput(StrictModel):
+    source: Literal['claude', 'codex']
+    key: str = Field(min_length=1, max_length=200)
+
 class InstructionInput(StrictModel):
     content: str = Field(min_length=2, max_length=40000)
     model_id: str = Field(min_length=1)

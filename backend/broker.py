@@ -59,6 +59,8 @@ class AgentResult:
     input_tokens: int | None
     output_tokens: int | None
     served_by: str | None = None  # The model row that answered, when a spent subscription was switched away from.
+    session_id: str | None = None  # The tool's own conversation id, for resuming it natively next turn.
+    resumed: bool = False  # This turn continued the tool's own session rather than replaying the transcript.
 
 def is_exhausted(*texts):
     return any(phrase in (text or '').lower() for text in texts for phrase in LIMIT_PHRASES)
@@ -256,6 +258,9 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
                 '--permission-mode', {'read': 'dontAsk', 'edit': 'acceptEdits', 'auto': 'bypassPermissions'}[mode]]
         if disallowed:
             argv += ['--disallowedTools', *disallowed]
+        if extras.get('resume'):
+            # Claude's own session continues, with its full internal state, instead of a replayed transcript.
+            argv += ['--resume', extras['resume']]
         # The browser only looks at pages; asking the user before every click would stall the turn on
         # a card per step, so its tools are allowed outright under every posture.
         if any(s['name'] == 'frontier-browser' for s in servers):
@@ -279,6 +284,14 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
                 argv += ['-c', f'{key}.command={toml_value(server["command"])}', '-c', f'{key}.args={toml_value(server.get("args") or [])}']
                 if server.get('env'):
                     argv += ['-c', f'{key}.env={toml_value(server["env"])}']
+        if extras.get('resume'):
+            # `exec resume` takes no -C or --sandbox: the working directory is the project, and the
+            # sandbox is set through its config key.
+            if mode != 'auto':
+                argv += ['-c', 'sandbox_mode=' + toml_value('read-only' if mode == 'read' else 'workspace-write')]
+            argv += ['exec', 'resume', '--skip-git-repo-check', '--model', model_name, '--output-last-message', str(final_path)]
+            argv += ['--dangerously-bypass-approvals-and-sandbox'] if mode == 'auto' else []
+            return argv + [extras['resume'], '-']
         argv += ['exec', '--skip-git-repo-check', '--model', model_name, '-C', str(root), '--output-last-message', str(final_path)]
         argv += (['--dangerously-bypass-approvals-and-sandbox'] if mode == 'auto'
                  else ['--sandbox', 'read-only' if mode == 'read' else 'workspace-write'])
@@ -339,7 +352,7 @@ def read_claude(out, err, code, provider):
             raise ProviderError(f'{CLI_TOOLS[provider][2]} stopped this turn: {reason}')
         raise ProviderError(f'{CLI_TOOLS[provider][2]} could not complete this turn (exit code {code}). Run it once in a terminal to see why; a sign-in problem shows there.')
     usage = payload.get('usage') or {}
-    return AgentResult(payload.get('result') or '', usage.get('input_tokens'), usage.get('output_tokens'))
+    return AgentResult(payload.get('result') or '', usage.get('input_tokens'), usage.get('output_tokens'), session_id=payload.get('session_id'))
 
 def read_gemini(out, err, code, provider):
     """Gemini prints one JSON object with the reply under `response`; anything else is a failure."""

@@ -88,6 +88,14 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await page.locator('.agent-browser input[type=checkbox]').first().check();
  await expect(page.locator('.agent-browser')).toContainText('screenshots appear here');
  await page.keyboard.press('Escape');
+ // Resume from CLI: the sidebar button and /resume open the same picker of Claude and Codex conversations.
+ await page.getByRole('button',{name:'Resume from CLI',exact:true}).click();
+ await expect(page.getByRole('dialog')).toContainText('Resume from CLI');
+ await expect(page.getByRole('dialog').locator('.resume-list, p.muted').first()).toBeVisible({timeout:30000});
+ await page.keyboard.press('Escape');
+ await page.getByPlaceholder(/Ask|Message|Tell/).first().fill('/res');
+ await expect(page.locator('.slash-menu')).toContainText('/resume');
+ await page.getByPlaceholder(/Ask|Message|Tell/).first().fill('');
  // Project settings from the project's own menu: memory saved and read back.
  await page.locator('.project-list>button').first().click({button:'right'});
  await page.getByRole('menuitem',{name:'Project settings…'}).click();

@@ -91,6 +91,8 @@ def read_claude(root):
             except json.JSONDecodeError:
                 continue
             kind = record.get('type')
+            if kind == 'user' and not messages and record.get('entrypoint') == 'sdk-cli':
+                break  # Started by `claude -p`, as Frontier's own turns are: not a conversation someone had.
             if kind == 'custom-title':
                 title = record.get('customTitle') or record.get('title') or title
             if record.get('isSidechain') or record.get('isMeta') or kind not in ('user', 'assistant'):
@@ -124,7 +126,7 @@ def read_codex(root):
         except (OSError, json.JSONDecodeError):
             continue
         meta = head.get('payload') or {}
-        if head.get('type') != 'session_meta' or str(Path(meta.get('cwd') or '').resolve()).lower() != wanted:
+        if head.get('type') != 'session_meta' or meta.get('originator') == 'codex_exec' or str(Path(meta.get('cwd') or '').resolve()).lower() != wanted:
             continue
         messages = []
         for line in file.read_text(encoding='utf-8', errors='replace').splitlines()[1:]:
@@ -154,17 +156,57 @@ def import_history(store, tenant_id, project, sources=('claude', 'codex')):
     """Conversations the tools kept about this folder become sessions here, once each."""
     existing = {s.get('imported_key') for s in store.list(tenant_id, 'sessions') if s.get('imported_key')}
     imported = []
-    readers = {'claude': read_claude, 'codex': read_codex}
     for source in sources:
-        for item in readers[source](project['root']):
-            key = f'{source}:{item["key"]}'
-            if key in existing:
+        for item in READERS[source](project['root']):
+            if f'{source}:{item["key"]}' in existing:
                 continue
-            session = {'id': uid(), 'project_id': project['id'], 'name': item['name'] or 'Imported conversation', 'messages': item['messages'], 'commands': [],
-                       'created_at': item['created_at'], 'updated_at': item['messages'][-1]['created_at'], 'auto_named': False, 'imported_key': key, 'imported_from': source}
-            store.put(tenant_id, 'sessions', session)
+            session = import_item(store, tenant_id, project, source, item)
             imported.append({'id': session['id'], 'name': session['name'], 'source': source, 'messages': len(item['messages'])})
     return imported
+
+
+READERS = {'claude': read_claude, 'codex': read_codex}
+
+
+def native_of(source, key, count):
+    """The tool's own session behind an imported conversation. The next turn by the same tool resumes
+    it natively, sending only the messages after `upto`; any other agent replays the transcript."""
+    return {'provider': 'claude_cli' if source == 'claude' else 'codex_cli', 'id': key, 'upto': count}
+
+
+def import_item(store, tenant_id, project, source, item):
+    session = {'id': uid(), 'project_id': project['id'], 'name': item['name'] or 'Imported conversation', 'messages': item['messages'], 'commands': [],
+               'created_at': item['created_at'], 'updated_at': item['messages'][-1]['created_at'], 'auto_named': False,
+               'imported_key': f'{source}:{item["key"]}', 'imported_from': source, 'native': native_of(source, item['key'], len(item['messages']))}
+    store.put(tenant_id, 'sessions', session)
+    return session
+
+
+def cli_conversations(store, tenant_id, project):
+    """Recent Claude and Codex conversations about this folder, newest first, for the resume picker."""
+    imported = {s['imported_key']: s['id'] for s in store.list(tenant_id, 'sessions') if s.get('imported_key') and s.get('project_id') == project['id']}
+    rows = []
+    for source, reader in READERS.items():
+        for item in reader(project['root']):
+            first = next(m['content'] for m in item['messages'] if m['role'] == 'user')
+            rows.append({'source': source, 'key': item['key'], 'name': item['name'], 'first': first[:300], 'created_at': item['created_at'],
+                         'updated_at': item['messages'][-1]['created_at'], 'messages': len(item['messages']),
+                         'session_id': imported.get(f'{source}:{item["key"]}')})
+    return sorted(rows, key=lambda r: r['updated_at'], reverse=True)[:40]
+
+
+def resume_cli(store, tenant_id, project, source, key):
+    """One CLI conversation as a session here: imported now, or the one imported before."""
+    item = next((i for i in READERS[source](project['root']) if i['key'] == key), None)
+    if item is None:
+        raise LookupError(f'That {source.title()} conversation is no longer on this computer.')
+    existing = next((s for s in store.list(tenant_id, 'sessions') if s.get('imported_key') == f'{source}:{key}' and s.get('project_id') == project['id']), None)
+    if existing is None:
+        return import_item(store, tenant_id, project, source, item)
+    if existing.get('archived'):
+        existing['archived'] = False
+        store.put(tenant_id, 'sessions', existing)
+    return existing
 
 
 

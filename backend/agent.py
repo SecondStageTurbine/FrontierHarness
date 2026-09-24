@@ -130,6 +130,19 @@ def browser_note(project, root):
             'take a screenshot, and report what you saw, not what you expect.')
 
 
+def resumable(session, config, root, project, message):
+    """The tool session to resume natively this turn, if the same tool that owns it is answering
+    in the project folder itself (a worktree is another folder, which the tool's session does not know)."""
+    native = session.get('native')
+    if not native or message.get('team') or native['provider'] != config.get('provider'):
+        return None
+    try:
+        same = Path(root).resolve() == Path(project['root']).resolve()
+    except OSError:
+        same = False
+    return native if same else None
+
+
 def conversation(session):
     """The messages an agent is sent, and the summary standing in for the ones compacted away."""
     messages = session.get('messages') or []
@@ -527,9 +540,25 @@ class AgentRunner:
                 visible, summary = conversation(session)
                 prompt = build_prompt(visible, bool(message.get('switched_from')), handoff_text, mode, summary,
                                       first=sum(1 for m in session['messages'] if m['role'] == 'user') == 1, rules=rules, memory=memory, environment=environment)
+                native = resumable(session, config, root, project, message)
                 result, error = None, None
                 try:
-                    result = await self.broker.invoke_agent(tenant_id, config, prompt, mode, root, extras)
+                    if native:
+                        # The same tool takes this turn, so its own session continues with its full memory;
+                        # only what was said since it last spoke is sent. A session it cannot find falls back to the replay.
+                        fresh = [m for m in session['messages'][native['upto']:] if m['id'] != message_id]
+                        try:
+                            result = await self.broker.invoke_agent(tenant_id, config, build_prompt(fresh, False, handoff_text, mode, rules=rules, memory=memory, environment=environment),
+                                                                    mode, root, {**extras, 'resume': native['id']})
+                            result.resumed = True
+                        except ProviderError as exc:
+                            if exc.exhausted:
+                                raise
+                            session['native'] = None
+                            self.store.put(tenant_id, 'sessions', session)
+                            self.store.event(tenant_id, session_id, 'turn.agent', f'{config["name"]} could not resume its own session ({exc}); the conversation is replayed instead.', message_id=message_id)
+                    if result is None:
+                        result = await self.broker.invoke_agent(tenant_id, config, prompt, mode, root, extras)
                 except ProviderError as exc:
                     if not exc.exhausted:
                         error = str(exc)
@@ -621,6 +650,13 @@ class AgentRunner:
                        cost=self.cost(tenant_id, (result.served_by if result else None) or message.get('model_id'), result))
         if attempts and message.get('routing'):
             message['routing']['attempts'] = [{k: v for k, v in a.items() if k != 'reply'} for a in attempts]
+        if session.get('native') and status == 'complete':
+            # The tool's own session now holds this turn too; a reply from anyone else means it no longer
+            # has the whole conversation, so later turns replay it.
+            if result and result.resumed and not (result.served_by and result.served_by != message['model_id']):
+                session['native'].update(id=result.session_id or session['native']['id'], upto=len(session['messages']))
+            else:
+                session['native'] = None
         if result and result.served_by and result.served_by != message['model_id']:
             # Another connected subscription answered because the selected one was spent. The
             # message names the agent that replied, or the conversation credits the wrong one.

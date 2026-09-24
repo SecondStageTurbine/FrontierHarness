@@ -151,6 +151,12 @@ Right-click a session to rename, pin, archive, or snooze it for an hour or until
 
 Closing the window keeps Frontier running in the system tray: automations keep firing, finished turns still notify you, and the tray icon's menu offers **Open Frontier** and **Quit Frontier**. A left click on the icon reopens the window. **Settings → General → Window** turns this off, after which closing the window quits. Launching Frontier while it is already running brings the existing window to the front instead of starting a second copy.
 
+### Resume from the command line
+
+**Resume from CLI** in the sidebar, or `/resume` in the composer, lists the recent conversations you had with Claude Code or Codex in this project's folder, newest first, with the first message and date. Pick one and it becomes the current session. Frontier's own turns, which also run those tools, are left out of the list.
+
+A resumed conversation keeps the tool's own memory. When the same tool takes the next turn in the project folder, Frontier continues that tool's session natively (`claude --resume`, `codex exec resume`) and sends only what was said since, so everything the tool read, ran and thought is still there. Any other agent picks the conversation up from the transcript, as usual, and from then on every agent does, because the tool's own session no longer holds the whole conversation. A session the tool can no longer find falls back to the transcript on its own.
+
 ### Since you were last here
 
 Open a project after six hours or more away and, if anything happened, a strip says what: turns, commits, files changed, automation runs. **Summarize** has an agent, under Read only, turn those facts into a short catch-up: what was done and by whom, what changed, what was left unfinished, and the next sensible step.
@@ -250,7 +256,7 @@ The Python suite exercises workspace boundaries, a turn's file record, agent swi
 | Team mode: plan, delegate, apply, review | `backend/team.py` |
 | Pull requests through the GitHub CLI | `backend/pullrequests.py` |
 | The project's dev server | `backend/devserver.py` |
-| Tool versions and updates, history import | `backend/maintenance.py` |
+| Tool versions and updates, history import and the resume picker | `backend/maintenance.py` |
 | Scheduled and webhook turns, idle archiving | `backend/automations.py` |
 | Remote access and tray flags | `backend/remote.py` |
 | Workspace-scoped persistence and encryption | `backend/store.py` |

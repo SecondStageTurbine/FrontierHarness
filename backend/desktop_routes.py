@@ -10,7 +10,7 @@ from fastapi import Request, Response, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse, FileResponse
 from .schemas import (ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput, GitPaths, CommitInput, FileWrite,
                       McpServerInput, ApprovalDecision, ApprovalRequest, FanoutInput, AutomationInput, ProjectSettings, PrCreateInput,
-                      DevServerInput, RewindInput, ImportInput, CloneInput, CatchupInput)
+                      DevServerInput, RewindInput, ImportInput, CloneInput, CatchupInput, ResumeCliInput)
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
 from . import gitops, automations, pullrequests, devserver, maintenance
@@ -654,6 +654,19 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
     def import_history(tenant_id:str,project_id:str,payload:ImportInput,request:Request):
         scoped(request,tenant_id)
         return maintenance.import_history(store,tenant_id,store.get(tenant_id,'projects',project_id),payload.sources)
+
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/cli-sessions')
+    async def cli_sessions(tenant_id:str,project_id:str,request:Request):
+        scoped(request,tenant_id)
+        return await asyncio.to_thread(maintenance.cli_conversations,store,tenant_id,store.get(tenant_id,'projects',project_id))
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/cli-sessions/resume')
+    async def cli_resume(tenant_id:str,project_id:str,payload:ResumeCliInput,request:Request):
+        scoped(request,tenant_id)
+        try:
+            return await asyncio.to_thread(maintenance.resume_cli,store,tenant_id,store.get(tenant_id,'projects',project_id),payload.source,payload.key)
+        except LookupError as exc:
+            raise HTTPException(404,str(exc)) from None
 
     @app.get('/api/t/{tenant_id}/providers/versions')
     async def provider_versions(tenant_id:str,request:Request):

@@ -469,3 +469,15 @@ and automation runs since a moment, and summarises them under Read only on reque
 **First-run wizard**: `maintenance.detect` finds each tool, its version and the identifiers to
 offer, reading Codex's from `codex debug models` and OpenCode's default from its config. Six new
 tests and the browser suite cover it; the suite is at 136.
+
+Version 0.13.1 adds resuming command line conversations, checked live against both tools. Each tool
+first read a file with a word in it and replied without repeating it; the file was then deleted. Tool
+results are not imported, so only the tool's own session could know the word. Picked from the
+resume list and asked from memory, Claude (`claude -p --resume`) and Codex (`codex exec resume`,
+whose resume form takes no `-C` or `--sandbox`, so the sandbox is set by `-c sandbox_mode`) both
+answered with the word. Claude's print mode keeps the same session id on resume; Frontier stores
+whatever id comes back. The picker leaves out conversations started by `claude -p` (entrypoint
+`sdk-cli`) and `codex exec` (originator `codex_exec`), which is how Frontier's own turns are recorded;
+before this, a history import brought those in as well. Four new tests cover the list, the native
+turn sending only new messages, the fallback when another agent answers or the session is gone,
+and each tool's argument spelling; the suite is at 140.
