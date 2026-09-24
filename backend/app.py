@@ -220,7 +220,7 @@ def create_app(directory=None, broker=None):
             row = db.execute('SELECT password FROM users WHERE id=?', (current['id'],)).fetchone()
         wanted = remote.enabled(store.directory)
         return {'enabled': wanted, 'listening': remote.remote_host(str(store.directory)) == '0.0.0.0' and os.environ.get('HARNESS_DESKTOP_PORT') is not None and app.state.bound_remote,
-                'addresses': remote.addresses(), 'port': int(os.environ.get('HARNESS_DESKTOP_PORT') or 0) or None,
+                'addresses': remote.addresses(), 'interfaces': remote.interfaces(), 'port': int(os.environ.get('HARNESS_DESKTOP_PORT') or 0) or None,
                 'has_password': bool(row and ':' in (row['password'] or '')), 'username': current['username']}
 
     @app.get('/api/tray')
@@ -288,7 +288,8 @@ def create_app(directory=None, broker=None):
         token = secrets.token_urlsafe(32)
         pairings[hashlib.sha256(token.encode()).hexdigest()] = (current['id'], time.time() + 600)
         port = int(os.environ.get('HARNESS_DESKTOP_PORT') or 0) or None
-        return {'token': token, 'expires_in': 600, 'urls': [f'http://{a}:{port}/pair?code={token}' for a in remote.addresses()] if port else []}
+        found = remote.interfaces() if port else []
+        return {'token': token, 'expires_in': 600, 'urls': [f'http://{i["address"]}:{port}/pair?code={token}' for i in found], 'labels': [i['label'] for i in found]}
 
     @app.get('/pair')
     def pair(code:str=''):

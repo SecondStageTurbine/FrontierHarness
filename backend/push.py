@@ -48,13 +48,15 @@ def send(directory, event, title, message, click=None, wait=False, force=False):
     payload = {'topic': settings['topic'], 'title': title[:200], 'message': (message or title)[:1000],
                'tags': [{'done': 'white_check_mark', 'failed': 'x', 'waiting': 'raising_hand'}[event]],
                'priority': 4 if event == 'waiting' else 3}
-    if click:
-        payload['click'] = click
+    def with_link():
+        # The link may need the machine's addresses, which takes a moment to read: done off the caller's thread.
+        link = click() if callable(click) else click
+        return {**payload, 'click': link} if link else payload
     if wait:
-        return post(settings['server'], payload)
+        return post(settings['server'], with_link())
     def deliver():
         try:
-            post(settings['server'], payload)
+            post(settings['server'], with_link())
         except OSError:
             pass
     threading.Thread(target=deliver, daemon=True).start()

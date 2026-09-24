@@ -88,3 +88,13 @@ def test_several_logins_for_one_tool_pool_into_one_allowance(tmp_path, monkeypat
     monkeypatch.setattr(maintenance, 'fetch_json', lambda url, headers: (None, 'rate limited', 60) if 'work' in headers['Authorization'] else fetch(url, headers))
     [solo] = maintenance.subscription_limits(logins=[{'provider': 'claude_cli', 'name': 'Default sign-in', 'home': None}, {'provider': 'claude_cli', 'name': 'work', 'home': str(work_home)}])
     assert solo['error'] is None and {l['label']: l['percent'] for l in solo['limits']}['Current session'] == 80 and solo['logins'][1]['error'] == 'rate limited'
+
+
+def test_pairing_offers_addresses_a_phone_can_reach_and_leaves_out_vpn_and_virtual_ones():
+    from backend import remote
+    assert remote.classify('192.168.1.33', 'Ethernet 2', 'Realtek PCIe 2.5GbE Family Controller') == 'lan'
+    assert remote.classify('100.120.202.35', 'Tailscale', 'Tailscale Tunnel') == 'tailnet'
+    assert remote.classify('10.2.0.2', 'ProtonVPN', 'WireGuard Tunnel') == 'vpn'
+    assert remote.classify('192.168.56.1', 'Ethernet 3', 'VirtualBox Host-Only Ethernet Adapter') is None
+    assert remote.classify('172.26.32.1', 'vEthernet (WSL (Hyper-V firewall))', 'Hyper-V Virtual Ethernet Adapter') is None
+    assert remote.classify('169.254.55.35', 'Wi-Fi 5') is None

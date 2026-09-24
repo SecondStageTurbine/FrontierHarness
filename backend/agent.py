@@ -366,7 +366,7 @@ class AgentRunner:
             title = {'done': f'{agent} finished in {project["name"]}', 'failed': f'{agent} stopped in {project["name"]}',
                      'waiting': f'{agent} needs you in {project["name"]}'}[event]
             body = ' '.join(text.split())[:300] if push.config(directory)['details'] and text else session.get('name') or ''
-            push.send(directory, event, title, body, push.link(directory, tenant_id, project_id, session['id']))
+            push.send(directory, event, title, body, lambda: push.link(directory, tenant_id, project_id, session['id']))
         except Exception:
             pass  # A notification is a courtesy; it never disturbs the turn.
 

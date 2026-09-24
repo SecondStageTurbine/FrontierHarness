@@ -605,3 +605,11 @@ Version 0.19.4 fixes the nine problems the whole-codebase review found.
 - A spent agent with a single login is given its rest; the output of a failed tool is judged for
   "out of usage" with the prompt it echoed taken out.
 171 tests pass.
+
+Version 0.19.5 fixes pairing on a machine with a VPN. The pairing code used the address of the default
+route, which on the user's machine was ProtonVPN's tunnel (10.2.0.2): a phone on the Wi-Fi cannot reach
+it, so the page never loaded. Addresses now come from Windows with their adapters, and are ordered local
+network first, then Tailscale; VPN tunnels, virtual adapters (Hyper-V, VirtualBox) and link-local
+addresses are left out. On this machine that gives 192.168.1.33 (Ethernet 2) and 100.120.202.35
+(Tailscale), both of which answered /api/health; 10.2.0.2, 192.168.56.1 and 172.26.32.1 are no longer
+offered. A VPN that blocks local-network traffic can still stop the phone; the pairing note says so.

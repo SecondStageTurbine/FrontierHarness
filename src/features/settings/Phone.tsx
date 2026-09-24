@@ -11,7 +11,7 @@ const EVENTS:[string,string][]=[['done','A turn finished'],['failed','A turn sto
 /** Pair a phone by scanning a code, and send it notifications. Shown in Remote access. */
 export function Phone({listening}:{listening:boolean}){
  const {notify,copy}=useWorkspace();const client=useQueryClient();
- const [pairing,setPairing]=useState<{urls:string[];expires:number}|null>(null),[address,setAddress]=useState(0);
+ const [pairing,setPairing]=useState<{urls:string[];labels:string[];expires:number}|null>(null),[address,setAddress]=useState(0);
  const [error,setError]=useState(''),[busy,setBusy]=useState('');
  const push=useQuery({queryKey:['push'],queryFn:({signal})=>api.get<Push>('/push',signal)});
  const [server,setServer]=useState<string|null>(null);
@@ -24,11 +24,11 @@ export function Phone({listening}:{listening:boolean}){
   {!listening?<p className="muted">Turn remote access on and restart Frontier, then pair your phone here.</p>:<>
    <p className="muted">Scan with the phone's camera. It opens Frontier signed in as you, with no password to type. The code works once, for ten minutes, and only on your network or tailnet.</p>
    {pairing&&url?<div className="pair-box"><Qr text={url} label="Pairing code for your phone"/><div>
-     {pairing.urls.length>1&&<select aria-label="Address" value={address} onChange={e=>setAddress(Number(e.target.value))}>{pairing.urls.map((u,i)=><option key={u} value={i}>{new URL(u).host}</option>)}</select>}
-     <small className="muted">Expires {new Date(pairing.expires).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}. If the phone cannot open it, try another address; a phone on mobile data needs a tailnet such as Tailscale.</small>
+     {pairing.urls.length>1&&<select aria-label="Address" value={address} onChange={e=>setAddress(Number(e.target.value))}>{pairing.urls.map((u,i)=><option key={u} value={i}>{new URL(u).host}{pairing.labels[i]?` · ${pairing.labels[i]}`:''}</option>)}</select>}
+     <small className="muted">Expires {new Date(pairing.expires).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}. The phone must be on the same Wi-Fi, or signed in to the same Tailscale. If the page never loads, try the other address. A VPN on this computer can block the phone: allow LAN connections in the VPN's settings, or use the Tailscale address.</small>
      <div className="actions"><button onClick={()=>copy(url,'Pairing link copied')}><Copy size={13}/>Copy link</button><button onClick={()=>setPairing(null)}>Done</button></div>
      <small className="muted">The link also pairs another computer's Frontier: paste it in Settings → Environments there.</small></div></div>
-   :<button disabled={busy!==''} onClick={()=>act('pair',async()=>{const r=await api.post<{urls:string[];expires_in:number}>('/remote/pair');if(!r.urls.length)throw new Error('No network address found to pair over.');setAddress(0);setPairing({urls:r.urls,expires:Date.now()+r.expires_in*1000})})}><QrCode size={14}/>Show pairing code</button>}
+   :<button disabled={busy!==''} onClick={()=>act('pair',async()=>{const r=await api.post<{urls:string[];labels?:string[];expires_in:number}>('/remote/pair');if(!r.urls.length)throw new Error('No network address found to pair over.');setAddress(0);setPairing({urls:r.urls,labels:r.labels||[],expires:Date.now()+r.expires_in*1000})})}><QrCode size={14}/>Show pairing code</button>}
   </>}
   <h3><BellRing size={16}/> Push notifications</h3>
   <p className="muted">Phones only allow web notifications from secure sites, which a local address is not, so Frontier sends them through <a href="https://ntfy.sh" target="_blank" rel="noreferrer">ntfy</a>, a free notification app for Android and iPhone. Install it, subscribe to the topic below (scan it), and Frontier tells you when an agent finishes or needs you. Tapping one opens the conversation.</p>
