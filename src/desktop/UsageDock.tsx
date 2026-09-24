@@ -4,8 +4,9 @@ import {RefreshCw} from 'lucide-react';
 import {useWorkspace} from '../app/context';
 import {api} from '../lib/api';
 
-type Limit={label:string;percent:number;severity:string;resets_at:string|null};
-type Plan={provider:string;label:string;plan:string|null;error:string|null;retry_after:number|null;limits:Limit[]};
+type Limit={label:string;percent:number;severity:string;resets_at:string|null;logins?:number};
+type Login={name:string;plan:string|null;error:string|null;limits:Limit[]};
+type Plan={provider:string;label:string;plan:string|null;error:string|null;retry_after:number|null;limits:Limit[];logins?:Login[]};
 
 function resets(at:string|null){
  if(!at)return '';
@@ -26,12 +27,13 @@ export function UsageDock({inline=false}:{inline?:boolean}){
  return <aside className={`usage-dock${inline?' inline':''}`} aria-label="Subscription usage">
   <div className="usage-dock-head"><strong>{inline?'Subscription limits':'Usage'}</strong><button className="icon-button" title="Refresh usage" aria-label="Refresh usage" disabled={limits.isFetching} onClick={()=>{setForce(true);setTimeout(()=>limits.refetch())}}><RefreshCw size={12} className={limits.isFetching?'spin':''}/></button></div>
   {limits.data.map(p=><div key={p.provider} className="usage-plan-card">
-   <div className="usage-plan-title">{p.label}{p.plan&&<small>{p.plan}</small>}</div>
+   <div className="usage-plan-title">{p.label}{p.plan&&<small>{p.plan}</small>}{(p.logins?.length||0)>1&&<small className="usage-pooled" title="Each window is the average across the logins that have it: how much of their combined allowance is used.">{p.logins!.length} logins pooled</small>}</div>
    {p.error?<p className="usage-plan-error">{p.error}</p>:p.limits.map(l=>{const level=l.percent>=90||l.severity==='critical'?'critical':l.percent>=70||l.severity==='warning'?'warning':'';return <div key={l.label} className="usage-limit">
     <div className="usage-limit-top"><span>{l.label}</span><span>{Math.round(l.percent)}%</span></div>
     <div className="usage-limit-track"><div className={`usage-limit-fill ${level}`} style={{width:`${Math.max(0,Math.min(100,l.percent))}%`}}/></div>
-    <small>{resets(l.resets_at)}</small>
+    <small>{(p.logins?.length||0)>1?`${Math.round(100-l.percent)}% of the combined allowance left · `:''}{resets(l.resets_at)}</small>
    </div>})}
+   {(p.logins?.length||0)>1&&<div className="usage-logins">{p.logins!.map(login=>{const worst=Math.max(0,...login.limits.map(l=>l.percent));return <div key={login.name} className="usage-login" title={login.error||login.limits.map(l=>`${l.label}: ${Math.round(l.percent)}%`).join(' · ')}><span>{login.name}</span>{login.error?<em>unavailable</em>:inline?login.limits.map(l=><em key={l.label}>{l.label} {Math.round(l.percent)}%</em>):<em>up to {Math.round(worst)}% used</em>}</div>})}</div>}
   </div>)}
  </aside>;
 }

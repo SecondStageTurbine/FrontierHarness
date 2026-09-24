@@ -101,6 +101,9 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await page.locator('.desktop-settings nav button',{hasText:'Usage'}).click();
  await expect(page.locator('.usage-dock.inline')).toContainText('Subscription limits');
  await expect(page.locator('.usage-dock.inline')).toContainText('Week, all models');
+ await expect(page.locator('.usage-dock.inline')).toContainText('2 logins pooled');
+ await expect(page.locator('.usage-dock.inline')).toContainText('24% of the combined allowance left');
+ await expect(page.locator('.usage-dock.inline .usage-logins')).toContainText('work');
  await page.screenshot({path:'test-results/usage-settings.png'});
  await page.keyboard.press('Escape');
  // Resume from CLI: the sidebar button and /resume open the same picker of Claude and Codex conversations.

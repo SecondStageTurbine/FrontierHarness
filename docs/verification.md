@@ -568,3 +568,11 @@ reply streamed back through this backend; the conversation is then found on the 
 switching back shows this machine's projects again. A pairing link works once, only this machine's
 signed-in user can pass calls through, and a forgotten machine can no longer be reached. Two real
 separate computers were not used. 162 tests and three browser suites pass.
+
+Version 0.19.1 pools subscription limits. The Usage card now reads every login a workspace connected
+(the machine's own sign-in and each named account's folder), and pools them per tool: a window is the
+average of the logins that have it, and resets when the first of them does. A test signs two Claude
+logins in with different usage (80% and 20% of the session, 60% and 40% of the week) and gets 50% for
+each pooled window, the earlier reset, and both logins listed; when one login is rate limited, the pool
+is the one that answered and the refusal stays on its own row. Live, this machine's single logins read
+as before. 163 tests and three browser suites pass.

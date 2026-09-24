@@ -647,3 +647,9 @@ body{overflow:hidden}
 .env-row>div{flex:1;min-width:0;display:flex;flex-direction:column}
 .env-row small{color:var(--subtle)}
 .env-current{font-size:11px;color:var(--primary)}
+
+/* Pooled subscription logins */
+.usage-pooled{color:var(--primary)!important;text-transform:none!important}
+.usage-logins{display:flex;flex-direction:column;gap:3px;padding-top:4px;border-top:1px dashed var(--border)}
+.usage-login{display:flex;flex-wrap:wrap;justify-content:space-between;gap:2px 8px;font-size:11px;color:var(--muted)}
+.usage-login em{font-style:normal;color:var(--subtle)}

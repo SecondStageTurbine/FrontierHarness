@@ -56,3 +56,35 @@ def test_push_notifications_publish_to_a_private_topic_when_a_turn_finishes(tmp_
         new = c.put('/api/push', json={'new_topic': True}).json()
         assert new['topic'] != topic and new['events'] == ['failed'] and new['details'] is True
         assert c.post('/api/push/test').json()['sent'] and sent[-1][1]['title'] == 'Frontier test notification'
+
+
+def test_several_logins_for_one_tool_pool_into_one_allowance(tmp_path, monkeypatch):
+    import json
+    from pathlib import Path
+    from backend import maintenance
+    home = tmp_path/'home'; (home/'.claude').mkdir(parents=True)
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: home))
+    monkeypatch.delenv('CLAUDE_CONFIG_DIR', raising=False); monkeypatch.delenv('CODEX_HOME', raising=False)
+    (home/'.claude'/'.credentials.json').write_text(json.dumps({'claudeAiOauth': {'accessToken': 'personal'}}), encoding='utf-8')
+    usage = {'personal': [('session', 80, '2026-09-24T10:00:00Z'), ('weekly_all', 60, '2026-09-27T00:00:00Z')],
+             'work': [('session', 20, '2026-09-24T08:00:00Z'), ('weekly_all', 40, '2026-09-28T00:00:00Z')]}
+    def fetch(url, headers):
+        token = headers['Authorization'].split()[-1]
+        return {'limits': [{'kind': k, 'percent': p, 'resets_at': r} for k, p, r in usage[token]]}, None, None
+    monkeypatch.setattr(maintenance, 'fetch_json', fetch); monkeypatch.setattr(maintenance, 'LIMITS_CACHE', {})
+    with TestClient(create_app(str(tmp_path/'state'), ScriptedAgent())) as c:
+        t = setup(c)
+        c.post(f'/api/t/{t}/models', json={'name': 'Claude (work)', 'provider': 'claude_cli', 'model_name': 'sonnet', 'account': 'work'})
+        work_home = tmp_path/'state'/'subscriptions'/t/'claude_cli'/'work'; work_home.mkdir(parents=True, exist_ok=True)
+        (work_home/'.credentials.json').write_text(json.dumps({'claudeAiOauth': {'accessToken': 'work'}}), encoding='utf-8')
+        [claude] = c.get(f'/api/t/{t}/providers/limits').json()
+    assert [l['name'] for l in claude['logins']] == ['Default sign-in', 'work']
+    pooled = {l['label']: l for l in claude['limits']}
+    assert pooled['Current session']['percent'] == 50 and pooled['Current session']['logins'] == 2
+    assert pooled['Current session']['resets_at'] == '2026-09-24T08:00:00Z'  # The first window to reset.
+    assert pooled['Week, all models']['percent'] == 50
+    # One login refused: the pool is the one that answered, and the refusal stays on its own row.
+    monkeypatch.setattr(maintenance, 'LIMITS_CACHE', {})
+    monkeypatch.setattr(maintenance, 'fetch_json', lambda url, headers: (None, 'rate limited', 60) if 'work' in headers['Authorization'] else fetch(url, headers))
+    [solo] = maintenance.subscription_limits(logins=[{'provider': 'claude_cli', 'name': 'Default sign-in', 'home': None}, {'provider': 'claude_cli', 'name': 'work', 'home': str(work_home)}])
+    assert solo['error'] is None and {l['label']: l['percent'] for l in solo['limits']}['Current session'] == 80 and solo['logins'][1]['error'] == 'rate limited'

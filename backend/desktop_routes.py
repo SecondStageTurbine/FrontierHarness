@@ -821,7 +821,14 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
     @app.get('/api/t/{tenant_id}/providers/limits')
     async def provider_limits(tenant_id:str,request:Request,refresh:bool=False):
         scoped(request,tenant_id)
-        return await asyncio.to_thread(maintenance.subscription_limits,refresh)
+        # The machine's own sign-in for each tool, plus every named login this workspace connected.
+        from .broker import account_home
+        logins=list(maintenance.DEFAULT_LOGINS)
+        for model in store.list(tenant_id,'models'):
+            account=model.get('account')
+            if account and model.get('provider') in maintenance.READERS_LIMITS and not any(l['provider']==model['provider'] and l['name']==account for l in logins):
+                logins.append({'provider':model['provider'],'name':account,'home':str(account_home(store,tenant_id,model['provider'],account))})
+        return await asyncio.to_thread(maintenance.subscription_limits,refresh,logins)
 
     @app.get('/api/t/{tenant_id}/providers/versions')
     async def provider_versions(tenant_id:str,request:Request):

@@ -312,9 +312,9 @@ def read_token(path, *keys):
         return None
 
 
-def claude_limits():
+def claude_limits(home=None):
     import os
-    home = Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home()/'.claude')
+    home = Path(home or os.environ.get('CLAUDE_CONFIG_DIR') or Path.home()/'.claude')
     token = read_token(home/'.credentials.json', 'claudeAiOauth', 'accessToken')
     if not token:
         return None  # Not signed in to Claude Code with a subscription on this computer.
@@ -331,10 +331,10 @@ def claude_limits():
     return {'provider': 'claude_cli', 'label': 'Claude', 'plan': None, 'error': None, 'retry_after': None, 'limits': limits}
 
 
-def codex_limits():
+def codex_limits(home=None):
     import os
     from datetime import datetime, timezone
-    home = Path(os.environ.get('CODEX_HOME') or Path.home()/'.codex')
+    home = Path(home or os.environ.get('CODEX_HOME') or Path.home()/'.codex')
     token = read_token(home/'auth.json', 'tokens', 'access_token')
     if not token:
         return None
@@ -354,22 +354,53 @@ def codex_limits():
     return {'provider': 'codex_cli', 'label': 'Codex', 'plan': payload.get('plan_type'), 'error': None, 'retry_after': None, 'limits': limits}
 
 
-def subscription_limits(force=False):
-    """Each signed-in subscription's usage windows. A good answer is kept five minutes; a refusal until
-    the provider's Retry-After, or a minute, so a refresh never hammers an endpoint that rate-limits."""
+READERS_LIMITS = {'claude_cli': claude_limits, 'codex_cli': codex_limits}
+DEFAULT_LOGINS = [{'provider': 'claude_cli', 'name': 'Default sign-in', 'home': None}, {'provider': 'codex_cli', 'name': 'Default sign-in', 'home': None}]
+
+
+def one_login(login, force):
+    """One login's windows, cached per login. A good answer is kept five minutes; a refusal until the
+    provider's Retry-After, or a minute, so a refresh never hammers an endpoint that rate-limits."""
     import time
-    found = []
-    for provider, read in (('claude_cli', claude_limits), ('codex_cli', codex_limits)):
-        until, result = LIMITS_CACHE.get(provider, (0, None))
-        if force and result is not None and not result['error']:
-            until = 0  # A refresh re-asks a good answer, never one the provider asked us to wait on.
-        if time.time() >= until:
-            result = read()
-            ttl = LIMITS_TTL if result is None or not result['error'] else (result['retry_after'] or 60)
-            LIMITS_CACHE[provider] = (time.time() + ttl, result)
+    key = (login['provider'], str(login['home']))
+    until, result = LIMITS_CACHE.get(key, (0, None))
+    if force and result is not None and not result['error']:
+        until = 0  # A refresh re-asks a good answer, never one the provider asked us to wait on.
+    if time.time() >= until:
+        result = READERS_LIMITS[login['provider']](login['home'])
+        ttl = LIMITS_TTL if result is None or not result['error'] else (result['retry_after'] or 60)
+        LIMITS_CACHE[key] = (time.time() + ttl, result)
+    return result
+
+
+def pool(provider, label, logins):
+    """Several logins for one tool as one allowance: each window is the average of the logins that have
+    it, since each login brings its own full window; it resets when the first of them does."""
+    good = [l for l in logins if not l['error']]
+    windows = {}
+    for login in good:
+        for limit in login['limits']:
+            windows.setdefault(limit['label'], []).append(limit)
+    limits = []
+    for name, found in windows.items():
+        resets = sorted(l['resets_at'] for l in found if l.get('resets_at'))
+        rank = {'normal': 0, 'warning': 1, 'critical': 2}
+        limits.append({'label': name, 'percent': round(sum(l['percent'] for l in found) / len(found), 1), 'logins': len(found),
+                       'severity': max((l.get('severity') or 'normal' for l in found), key=lambda v: rank.get(v, 0)), 'resets_at': resets[0] if resets else None})
+    plans = sorted({l['plan'] for l in good if l.get('plan')})
+    error = None if good else (logins[0]['error'] if logins else None)
+    return {'provider': provider, 'label': label, 'plan': ', '.join(plans) or None, 'error': error,
+            'retry_after': None if good else logins[0].get('retry_after'), 'limits': limits, 'logins': logins}
+
+
+def subscription_limits(force=False, logins=None):
+    """Every signed-in subscription's usage windows, pooled per tool when there are several logins."""
+    by_provider = {}
+    for login in logins or DEFAULT_LOGINS:
+        result = one_login(login, force)
         if result is not None:
-            found.append(result)
-    return found
+            by_provider.setdefault(login['provider'], []).append({**result, 'name': login['name']})
+    return [pool(provider, found[0]['label'], found) for provider, found in by_provider.items()]
 
 
 # ── First run: folders the agent tools already have conversations about ──
