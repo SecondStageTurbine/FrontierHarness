@@ -101,6 +101,35 @@ def transcript(messages):
     return lines
 
 
+def browser_server(project):
+    """A real browser the agent can open, click and read, through Playwright's MCP server.
+
+    Screenshots land in .frontier/browser in the project, where the Preview panel shows them. Headed
+    when the user asked to watch; otherwise headless. On Windows npx is a .cmd, so it goes through cmd.
+    """
+    output = str(Path(project['root'])/'.frontier'/'browser')
+    args = ['-y', '@playwright/mcp@latest', '--isolated', '--output-dir', output] + ([] if project.get('agent_browser_visible') else ['--headless'])
+    if os.name == 'nt':
+        # Playwright wants Chrome by default; Edge ships with every Windows 10 and 11, so it is named outright.
+        edge = next((str(p) for p in (Path(os.environ.get('PROGRAMFILES(X86)', r'C:\Program Files (x86)'))/'Microsoft/Edge/Application/msedge.exe',
+                                      Path(os.environ.get('PROGRAMFILES', r'C:\Program Files'))/'Microsoft/Edge/Application/msedge.exe',
+                                      Path(os.environ.get('LOCALAPPDATA', ''))/'Microsoft/Edge/Application/msedge.exe') if p.is_file()), None)
+        args += ['--browser', 'msedge'] + (['--executable-path', edge] if edge else [])
+    command, args = (('cmd', ['/c', 'npx', *args]) if os.name == 'nt' else ('npx', args))
+    return {'name': 'frontier-browser', 'transport': 'stdio', 'command': command, 'args': args, 'env': {}, 'enabled': True}
+
+
+def browser_note(project, root):
+    if not project.get('agent_browser'):
+        return None
+    from . import devserver
+    server = devserver.get(root)
+    where = f' The project\'s dev server is running at http://localhost:{server.port}/.' if server and server.status()['running'] and server.port else ''
+    return ('A real browser is available through the frontier-browser tools (navigate, click, type, read the page, console '
+            'messages, screenshots).' + where + ' After changing anything a user sees, open it, check the console for errors, '
+            'take a screenshot, and report what you saw, not what you expect.')
+
+
 def conversation(session):
     """The messages an agent is sent, and the summary standing in for the ones compacted away."""
     messages = session.get('messages') or []
@@ -246,6 +275,8 @@ class AgentRunner:
         approval tool that turns a prompt into a card."""
         servers = [s for s in self.store.list(tenant_id, 'mcp_servers') if s.get('enabled', True)]
         extras = {'mcp_servers': servers, 'protect_env': bool((project or {}).get('protect_env', True))}
+        if (project or {}).get('agent_browser') and not any(s['name'] == 'frontier-browser' for s in servers):
+            extras['mcp_servers'] = servers + [browser_server(project)]
         port = os.environ.get('HARNESS_DESKTOP_PORT')
         if port and mode == 'edit':
             if getattr(sys, 'frozen', False):
@@ -463,7 +494,7 @@ class AgentRunner:
         extras['timeout'] = max(MIN_TURN_MINUTES, int(project.get('turn_minutes') or 0)) * 60
         rules = (self.store.tenant_internal(tenant_id) or {}).get('rules')
         memory = project.get('memory')
-        environment = (self.files.python_env(root) or {}).get('note')
+        environment = ' '.join(filter(None, [(self.files.python_env(root) or {}).get('note'), browser_note(project, root)])) or None
         # Read only cannot change the folder, so it is not read twice to prove that.
         before = await asyncio.to_thread(fingerprint, self.files, tenant_id, project_id, session_id) if mode != 'read' else {}
         # In a repository, the whole working tree is also checkpointed as hidden git objects, so a

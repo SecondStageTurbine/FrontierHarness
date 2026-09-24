@@ -256,6 +256,10 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
                 '--permission-mode', {'read': 'dontAsk', 'edit': 'acceptEdits', 'auto': 'bypassPermissions'}[mode]]
         if disallowed:
             argv += ['--disallowedTools', *disallowed]
+        # The browser only looks at pages; asking the user before every click would stall the turn on
+        # a card per step, so its tools are allowed outright under every posture.
+        if any(s['name'] == 'frontier-browser' for s in servers):
+            argv += ['--allowedTools', 'mcp__frontier-browser']
         if extras.get('mcp_config'):
             argv += ['--mcp-config', str(extras['mcp_config'])]
             if mode == 'edit' and extras.get('approval'):

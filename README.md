@@ -30,6 +30,8 @@ looked like before and after so any turn can be reverted.
 | **MCP servers and skills** | Servers the workspace hands to every agent on every turn, with a catalog of common ones, and the skills and slash commands the agents already find, offered with `/` in the composer. |
 | **Team mode** | Pick a lead; it plans the work as tasks, Frontier hands each task to the agent whose profile fits (or the one the lead names), workers run in parallel worktrees, their changes are folded back, and the lead reviews and replies. |
 | **Pull requests** | Open a PR from the session's branch through the GitHub CLI, watch checks and review state, and hand review comments to the agent. |
+| **Agents that test in a browser** | Turn it on per project and every editing turn gets a real browser: the agent opens the page it changed, clicks through, reads the console and takes screenshots, which appear in the Preview panel. |
+| **Frontier as a tool** | Frontier is itself an MCP server: another agent, an editor or a script can list projects, send a message to any agent here and wait for the reply, and catch up on a project. |
 | **Quiet desktop manners** | Tray icon and close-to-tray, one instance at a time, desktop notifications when a turn finishes in the background, signed auto-updates, usage per agent and project, four themes and an accent colour. |
 
 ## Install the desktop application
@@ -41,6 +43,9 @@ Frontier checks GitHub releases once at launch. When a newer version is publishe
 The installer installs WebView2 if it is missing; that step needs internet access. The installer is not Authenticode-signed, so Windows may ask you to confirm it. Project-specific dependencies are separate: npm checks need Node.js, and projects with additional Python packages can supply a `.venv`.
 
 ## Connecting agents
+
+On first run, **Set up your agents** looks for Claude Code, Codex, OpenCode and Gemini CLI on this computer, shows where each is and its version, offers the model identifiers each accepts (Codex's are read from Codex itself), and connects the ones you tick in one go; for a tool that is missing it shows the install and sign-in commands. **Settings → Agents & Providers → Run the setup wizard again** reopens it.
+
 
 On a fresh installation, open **Settings → Agents & Providers → Connect model**. Choose **Claude subscription**, **Codex subscription**, **Gemini CLI** or **OpenCode subscription** to run a model without any API key: Frontier runs the agent command line tool you already have installed, and that tool signs in with your own subscription. Install the tool, sign in once in a terminal, then connect a model whose identifier is the name the tool accepts, such as `sonnet` for Claude or `opencode-go/glm-5.3` for OpenCode. There is no key, endpoint or per-token rate to enter. **Test connection** confirms the tool runs; a sign-in problem surfaces on the first request.
 
@@ -146,6 +151,18 @@ Right-click a session to rename, pin, archive, or snooze it for an hour or until
 
 Closing the window keeps Frontier running in the system tray: automations keep firing, finished turns still notify you, and the tray icon's menu offers **Open Frontier** and **Quit Frontier**. A left click on the icon reopens the window. **Settings → General → Window** turns this off, after which closing the window quits. Launching Frontier while it is already running brings the existing window to the front instead of starting a second copy.
 
+### Since you were last here
+
+Open a project after six hours or more away and, if anything happened, a strip says what: turns, commits, files changed, automation runs. **Summarize** has an agent, under Read only, turn those facts into a short catch-up: what was done and by whom, what changed, what was left unfinished, and the next sensible step.
+
+### A browser for the agent
+
+In the **Preview** panel, **Let agents use a browser** gives every editing turn in that project Playwright's browser tools, driving the Microsoft Edge that ships with Windows. The agent is told to open what it changed, check the console, take a screenshot and report what it saw. Screenshots land in `.frontier/browser` in the project and show in the Preview panel; click one to enlarge it. **Show the agent's browser window** runs it visibly instead of hidden. The browser's tools never wait on an approval card. It needs Node.js; the first turn downloads Playwright's server.
+
+### Frontier as a tool for other agents
+
+Frontier is also an MCP server. **Settings → MCP & Skills → Use Frontier from other agents** gives the exact command to add it to Claude Code or Codex, and the JSON for any other client. Its tools list projects and sessions, read a conversation, send a message to any connected agent here (Adaptive by default) and wait for the reply, show a project's git changes, and catch up on what happened since a number of hours ago. It works while Frontier is running and only for programs run by you on this computer: it authenticates with a token in Frontier's data folder, and only over loopback.
+
 ### Automations
 
 **Settings → Automations** runs a prompt on its own: daily at a time, every N minutes, or when a webhook is called. Each run opens a session in the chosen project and sends the prompt as one turn under the posture you set, so the result reads like any other conversation. Schedules fire while Frontier is open or in the tray; a run missed while it was closed happens once at the next start. The webhook is a POST to the URL shown on the card, whose secret is the whole credential.
@@ -229,6 +246,7 @@ The Python suite exercises workspace boundaries, a turn's file record, agent swi
 | Adaptive routing and capability profiles | `backend/adaptive.py` |
 | Git status, staging, commit, push, checkpoints, worktrees | `backend/gitops.py` |
 | The approval MCP server Claude calls during a turn | `backend/permission_tool.py` |
+| Frontier's own MCP server for other agents | `backend/frontier_mcp.py` |
 | Team mode: plan, delegate, apply, review | `backend/team.py` |
 | Pull requests through the GitHub CLI | `backend/pullrequests.py` |
 | The project's dev server | `backend/devserver.py` |

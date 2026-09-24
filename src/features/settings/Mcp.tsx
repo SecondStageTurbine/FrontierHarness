@@ -1,9 +1,10 @@
 import {useState} from 'react';
-import {Plug,Plus,Trash2,Pencil,Sparkles,Terminal} from 'lucide-react';
+import {Plug,Plus,Trash2,Pencil,Sparkles,Terminal,Copy} from 'lucide-react';
 import {useWorkspace,useResource,useRefresh} from '../../app/context';
 import {Field,Modal,Confirm,PageHeading} from '../../components/ui';
 import {api} from '../../lib/api';
 import type {McpServer,Skill,Project} from '../../types';
+import {useQuery} from '@tanstack/react-query';
 
 type Form={name:string;transport:'stdio'|'http';command:string;args:string;env:string;url:string;enabled:boolean};
 /** Well-known servers, filled into the form for the user to complete: a token, a path, a connection string. */
@@ -21,6 +22,18 @@ const CATALOG:{name:string;title:string;blurb:string;command:string;args:string;
 const blank:Form={name:'',transport:'stdio',command:'',args:'',env:'',url:'',enabled:true};
 
 /** MCP servers the workspace hands to every agent that can take them, and the skills the agents already see. */
+/** Frontier itself as an MCP server: how another agent, an editor or a script adds it. */
+function SelfServer(){
+ const {path,notify}=useWorkspace();
+ const q=useQuery({queryKey:['mcp-self'],queryFn:({signal})=>api.get<{command:string;args:string[];claude:string;codex:string;json:unknown}>(path('/mcp-self'),signal)});
+ const copy=(t:string)=>navigator.clipboard.writeText(t).then(()=>notify('Copied')).catch(()=>notify('Clipboard unavailable'));
+ if(!q.data)return null;
+ return <section className="self-mcp"><h3><Plug size={16}/> Use Frontier from other agents</h3>
+  <p className="muted">Frontier is also an MCP server. Another agent, an editor or a script can list your projects and conversations, send a message to any agent here and wait for its reply, read a project's git changes, and catch up on what happened. It works while Frontier is running, and only for programs run by you on this computer.</p>
+  {([['Claude Code',q.data.claude],['Codex',q.data.codex],['Any MCP client (JSON)',JSON.stringify(q.data.json,null,2)]] as [string,string][]).map(([label,value])=><div key={label} className="self-mcp-row"><strong>{label}</strong><pre>{value}</pre><button className="icon-button" aria-label={`Copy ${label} setup`} onClick={()=>copy(value)}><Copy size={13}/></button></div>)}
+ </section>;
+}
+
 export default function Mcp({project}:{project?:Project}){
  const {path,notify}=useWorkspace(),refresh=useRefresh();
  const servers=useResource<McpServer[]>('/mcp');
@@ -40,6 +53,7 @@ export default function Mcp({project}:{project?:Project}){
   {!servers.data?.length?<p className="muted">No MCP servers yet. A server is a command that speaks the Model Context Protocol over stdio, or an HTTP endpoint that does.</p>:
    <div className="mcp-list">{servers.data.map(s=><article key={s.id} className={`mcp-card ${s.enabled===false?'off':''}`}><Plug size={16}/><div><strong>{s.name}</strong><code>{s.transport==='http'?s.url:[s.command,...(s.args||[])].join(' ')}</code>{s.enabled===false&&<small>Disabled</small>}</div><label className="toggle-row compact"><input type="checkbox" role="switch" checked={s.enabled!==false} onChange={async e=>{try{await api.put(path(`/mcp/${s.id}`),{name:s.name,transport:s.transport,command:s.command,args:s.args||[],env:s.env||{},url:s.url,enabled:e.target.checked});await refresh()}catch(err){notify((err as Error).message)}}}/></label><button className="icon-button" aria-label={`Edit ${s.name}`} onClick={()=>edit(s)}><Pencil size={14}/></button><button className="icon-button" aria-label={`Remove ${s.name}`} onClick={()=>setRemove(s)}><Trash2 size={14}/></button></article>)}</div>}
   <p className="muted small">Gemini CLI reads its own settings file for MCP servers and is not configured from here.</p>
+  <SelfServer/>
   <h3><Sparkles size={16}/> Skills and commands{project&&<span className="muted"> · {project.name}</span>}</h3>
   {!project?<p className="muted">Open a project to see what its agents find.</p>:skills.isPending?<p className="muted">Looking…</p>:!skills.data?.length?<p className="muted">Nothing found. Claude reads <code>.claude/skills/&lt;name&gt;/SKILL.md</code> and <code>.claude/commands/&lt;name&gt;.md</code> in the project and in your home folder; Codex and Gemini read the same layout under <code>.codex</code> and <code>.gemini</code>.</p>:
    <div className="skill-list">{skills.data.map(s=><div key={s.path} className="skill-row"><span className={`skill-kind ${s.kind}`}>{s.kind==='command'?'/':<Terminal size={11}/>}</span><div><strong>{s.kind==='command'?`/${s.name}`:s.name}</strong>{s.description&&<p>{s.description}</p>}</div><small>{s.provider} · {s.scope}</small></div>)}</div>}

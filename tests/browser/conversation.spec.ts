@@ -83,6 +83,11 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await page.locator('.archived-toggle',{hasText:'Snoozed (1)'}).click();
  await expect(page.locator('.session-list>button').first()).toBeVisible();
 
+ // The preview panel offers the agent a browser, saved on the project without disturbing its other settings.
+ await page.getByRole('button',{name:'Open preview',exact:true}).click();
+ await page.locator('.agent-browser input[type=checkbox]').first().check();
+ await expect(page.locator('.agent-browser')).toContainText('screenshots appear here');
+ await page.keyboard.press('Escape');
  // Project settings from the project's own menu: memory saved and read back.
  await page.locator('.project-list>button').first().click({button:'right'});
  await page.getByRole('menuitem',{name:'Project settings…'}).click();
@@ -115,6 +120,16 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await page.getByLabel('Interface size',{exact:true}).selectOption('110');
  await expect.poll(async()=>page.evaluate(()=>(document.body.style as CSSStyleDeclaration&{zoom:string}).zoom)).toBe('110%');
  await page.getByLabel('Interface size',{exact:true}).selectOption('100');
+ // Frontier offers itself as an MCP server, with the exact commands to add it elsewhere.
+ await page.locator('.desktop-settings nav button',{hasText:'MCP & Skills'}).click();
+ await expect(page.locator('.self-mcp')).toContainText('Use Frontier from other agents');
+ await expect(page.locator('.self-mcp pre').first()).toContainText('--mcp-server');
+ // The setup wizard reopens from Agents & Providers and lists every tool it looked for.
+ await page.locator('.desktop-settings nav button',{hasText:'Agents & Providers'}).click();
+ await page.getByRole('button',{name:'Run the setup wizard again',exact:true}).click();
+ await expect(page.locator('.wizard-tool')).toHaveCount(4,{timeout:60000});
+ await page.getByRole('button',{name:'Skip for now',exact:true}).click();
+ await page.getByRole('button',{name:'Settings',exact:true}).click();
  // The MCP catalog fills the add-server form.
  await page.locator('.desktop-settings nav button',{hasText:'MCP & Skills'}).click();
  await page.getByRole('button',{name:'Catalog',exact:true}).click();

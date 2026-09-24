@@ -7,7 +7,11 @@ the Claude CLI bill per token instead of using the signed-in subscription.
 import asyncio
 import os
 
-CHILD_ENV_KEYS = {'PATH','SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','TEMP','TMP','USERPROFILE','HOME','APPDATA','LOCALAPPDATA','LANG'}
+# Where Windows keeps programs and who the user is: not credentials, and tools such as Playwright,
+# npm and git look installed software up through them.
+CHILD_ENV_KEYS = {'PATH','SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','TEMP','TMP','USERPROFILE','HOME','APPDATA','LOCALAPPDATA','LANG',
+                  'PROGRAMFILES','PROGRAMFILES(X86)','PROGRAMW6432','COMMONPROGRAMFILES','COMMONPROGRAMFILES(X86)','PROGRAMDATA','SYSTEMDRIVE',
+                  'USERNAME','USERDOMAIN','COMPUTERNAME','OS','PROCESSOR_ARCHITECTURE','NUMBER_OF_PROCESSORS','HOMEDRIVE','HOMEPATH'}
 
 def child_env(**extra):
     env={k:v for k,v in os.environ.items() if k.upper() in CHILD_ENV_KEYS}

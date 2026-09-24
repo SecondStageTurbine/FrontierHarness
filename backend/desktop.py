@@ -36,6 +36,10 @@ def main():
         sys.argv=[module,*sys.argv[3:]]
         runpy.run_module(module,run_name='__main__',alter_sys=True)
         return
+    if len(sys.argv)>1 and sys.argv[1]=='--mcp-server':
+        from backend.frontier_mcp import serve as serve_mcp
+        serve_mcp()
+        return
     if len(sys.argv)>1 and sys.argv[1]=='--permission-tool':
         from backend.permission_tool import serve
         serve()

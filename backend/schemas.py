@@ -130,6 +130,8 @@ class ProjectSettings(StrictModel):
     dev_command: str | None = Field(default=None, max_length=300)
     memory: str | None = Field(default=None, max_length=20000)
     turn_minutes: int | None = Field(default=None, ge=90, le=480)
+    agent_browser: bool = False
+    agent_browser_visible: bool = False
 
 class PrCreateInput(StrictModel):
     title: str = Field(min_length=1, max_length=200)
@@ -144,6 +146,10 @@ class DevServerInput(StrictModel):
 
 class RewindInput(StrictModel):
     restore_files: bool = True
+
+class CatchupInput(StrictModel):
+    since: str = Field(min_length=10, max_length=40)
+    summarize: bool = False
 
 class ImportInput(StrictModel):
     sources: list[Literal['claude', 'codex']] = Field(default_factory=lambda: ['claude', 'codex'], min_length=1)

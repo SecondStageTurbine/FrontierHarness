@@ -165,3 +165,72 @@ def import_history(store, tenant_id, project, sources=('claude', 'codex')):
             store.put(tenant_id, 'sessions', session)
             imported.append({'id': session['id'], 'name': session['name'], 'source': source, 'messages': len(item['messages'])})
     return imported
+
+
+
+INSTALL = {
+    'claude_cli': {'install': 'irm https://claude.ai/install.ps1 | iex', 'signin': 'claude', 'models': ['sonnet', 'opus', 'haiku', 'fable'], 'default': 'sonnet'},
+    'codex_cli': {'install': 'npm install -g @openai/codex', 'signin': 'codex login', 'models': ['gpt-6-sol', 'gpt-6-astra', 'gpt-6-luna'], 'default': 'gpt-6-sol'},
+    'opencode_cli': {'install': 'npm install -g opencode-ai', 'signin': 'opencode auth login', 'models': ['opencode/free'], 'default': 'opencode/free'},
+    'gemini_cli': {'install': 'npm install -g @google/gemini-cli', 'signin': 'gemini', 'models': ['gemini-2.5-pro', 'gemini-2.5-flash'], 'default': 'gemini-2.5-pro'},
+}
+
+
+async def codex_models():
+    """The identifiers this machine's Codex offers, and its configured default."""
+    try:
+        launch = resolve_cli('codex_cli')
+    except ProviderError:
+        return [], None
+    proc = await asyncio.create_subprocess_exec(*launch, 'debug', 'models', env=child_env(), stdin=asyncio.subprocess.DEVNULL,
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, **child_flags())
+    try:
+        async with asyncio.timeout(25):
+            out, _ = await proc.communicate()
+        slugs = [m['slug'] for m in json.loads(out.decode('utf-8', 'replace')).get('models', []) if m.get('visibility', 'list') == 'list']
+    except (TimeoutError, ValueError, KeyError):
+        await terminate(proc)
+        slugs = []
+    default = None
+    config = Path.home()/'.codex'/'config.toml'
+    if config.is_file():
+        found = re.search(r'^model\s*=\s*"([^"]+)"', config.read_text(encoding='utf-8', errors='replace'), re.M)
+        default = found.group(1) if found else None
+    return slugs, default
+
+
+def opencode_default():
+    for path in (Path.home()/'.config'/'opencode'/'opencode.json', Path.home()/'.config'/'opencode'/'opencode.jsonc'):
+        if path.is_file():
+            try:
+                text = re.sub(r'^\s*//.*$', '', path.read_text(encoding='utf-8', errors='replace'), flags=re.M)
+                return json.loads(text).get('model')
+            except ValueError:
+                return None
+    return None
+
+
+async def detect():
+    """Each agent tool: whether it is installed, where, its version, and the identifiers to offer."""
+    async def one(provider):
+        info = dict(INSTALL[provider])
+        row = {'provider': provider, 'label': CLI_TOOLS[provider][2], 'installed': False, 'path': None, 'version': None,
+               'install': info['install'], 'signin': info['signin'], 'models': list(info['models']), 'default': info['default']}
+        try:
+            row['path'] = ' '.join(resolve_cli(provider))
+            row['version'] = re.search(r'\d+\.\d+(\.\d+)?', await probe_cli(provider)).group(0)
+            row['installed'] = True
+        except (ProviderError, AttributeError, OSError):
+            return row
+        if provider == 'codex_cli':
+            slugs, default = await codex_models()
+            if slugs:
+                row['models'] = slugs
+            row['default'] = default if default in row['models'] else (row['models'][0] if row['models'] else row['default'])
+        if provider == 'opencode_cli':
+            configured = opencode_default()
+            if configured:
+                row['models'] = [configured] + [m for m in row['models'] if m != configured]
+                row['default'] = configured
+        return row
+    return await asyncio.gather(*(one(p) for p in CLI_TOOLS))

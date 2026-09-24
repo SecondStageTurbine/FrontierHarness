@@ -450,3 +450,22 @@ pm. Three tests cover the native layout found through the shim, the native layou
 Version 0.12.9 answers a turn that ended with "I've kicked off a retry… I'll report back once it completes." A turn is one subprocess and Frontier stops its whole process tree when it ends, so a background job an agent starts cannot outlive it and the agent cannot speak afterwards; the process table confirmed nothing was left running. Every prompt now says so. The Codex attempt before it had hit the 30-minute limit on a Unity gate, so a project can set its own limit. Diagnosing it also found the backend's event loop blocked for over a minute at the start of a turn in the Unity project (health checks timed out, one core at 100%): `fingerprint` and `repository_signals` read up to 2,000 files synchronously on the loop. They now run in a thread with `asyncio.to_thread`.
 
 Version 0.12.10 sets a 90-minute floor on every turn (`MIN_TURN_MINUTES`): the effective limit is the larger of 90 and the project's own setting, so projects configured before the floor are raised rather than migrated, and the setting now accepts 90 to 480 minutes.
+
+Version 0.13.0 adds four things and was checked live. **Agents in a browser**: with a project's
+`agent_browser` on, `browser_server` adds Playwright's MCP server (`@playwright/mcp`, isolated,
+headless unless asked, output to `.frontier/browser`) to every turn, and Claude gets
+`--allowedTools mcp__frontier-browser` so browsing never stalls on an approval card; the first
+live attempt did exactly that, waiting on a card per click. The second failed because Playwright
+defaults to Chrome, the third because the tool environment lacked `PROGRAMFILES(X86)` and
+Playwright looked for Edge only under the user profile. Frontier now names Edge and its path,
+and passes the Windows program-location variables to every tool (they are not credentials).
+The final live run: an outside MCP client asked Frontier to have Claude open a local page; the
+reply gave the exact title, heading and console error, and the screenshot appeared on disk and
+through the API. **Frontier as an MCP server**: `frontier_mcp.py`, standard library, started as
+`frontier-backend.exe --mcp-server`, authenticates with a token in the data folder that the
+backend accepts from loopback only. **Catch-up**: `POST …/catchup` gathers turns, files, commits
+(filtered by their own timestamps, since `git log --since` silently ignores dates it cannot parse)
+and automation runs since a moment, and summarises them under Read only on request.
+**First-run wizard**: `maintenance.detect` finds each tool, its version and the identifiers to
+offer, reading Codex's from `codex debug models` and OpenCode's default from its config. Six new
+tests and the browser suite cover it; the suite is at 136.

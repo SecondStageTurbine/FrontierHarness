@@ -7,10 +7,10 @@ import os
 import re
 from pathlib import Path
 from fastapi import Request, Response, HTTPException
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse, FileResponse
 from .schemas import (ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput, GitPaths, CommitInput, FileWrite,
                       McpServerInput, ApprovalDecision, ApprovalRequest, FanoutInput, AutomationInput, ProjectSettings, PrCreateInput,
-                      DevServerInput, RewindInput, ImportInput, CloneInput)
+                      DevServerInput, RewindInput, ImportInput, CloneInput, CatchupInput)
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
 from . import gitops, automations, pullrequests, devserver, maintenance
@@ -543,8 +543,96 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         project=store.get(tenant_id,'projects',project_id)
         if payload.default_model_id and payload.default_model_id!=ADAPTIVE:
             runner.select(tenant_id,payload.default_model_id)
-        project.update(payload.model_dump())
+        project.update(payload.model_dump(exclude_unset=True))  # Only what was sent; a toggle elsewhere must not wipe the rest.
         return store.put(tenant_id,'projects',project)
+
+    # ── Screenshots the agent's browser took, newest first ──
+    SHOT_TYPES={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp'}
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/browser-shots')
+    def browser_shots(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        folder=files.root(tenant_id,project_id,session_id)/'.frontier'/'browser'
+        if not folder.is_dir():
+            return []
+        shots=[f for f in folder.iterdir() if f.is_file() and not f.is_symlink() and f.suffix.lower() in SHOT_TYPES]
+        shots.sort(key=lambda f:f.stat().st_mtime,reverse=True)
+        return [{'name':f.name,'modified':datetime.fromtimestamp(f.stat().st_mtime,timezone.utc).isoformat(),'size':f.stat().st_size} for f in shots[:40]]
+
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/browser-shot')
+    def browser_shot(tenant_id:str,project_id:str,name:str,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        if not re.match(r'^[\w .()-]+$',name) or Path(name).suffix.lower() not in SHOT_TYPES:
+            raise ValueError('Not a screenshot name.')
+        target=files.root(tenant_id,project_id,session_id)/'.frontier'/'browser'/name
+        if not target.is_file() or target.is_symlink():
+            raise HTTPException(404,'No such screenshot.')
+        return FileResponse(target,media_type=SHOT_TYPES[target.suffix.lower()])
+
+    # ── Since you were last here ──
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/catchup')
+    async def catchup(tenant_id:str,project_id:str,payload:CatchupInput,request:Request):
+        """What happened in a project since a moment: turns, files, commits, automation runs; summarised on request."""
+        scoped(request,tenant_id)
+        project=store.get(tenant_id,'projects',project_id)
+        since=payload.since
+        turns=[]
+        for session in store.list(tenant_id,'sessions'):
+            if session['project_id']!=project_id:
+                continue
+            for index,message in enumerate(session.get('messages') or []):
+                if message.get('role')!='assistant' or (message.get('created_at') or '')<since:
+                    continue
+                asked=next((m['content'] for m in reversed(session['messages'][:index]) if m['role']=='user'),'')
+                turns.append({'session':session['name'],'agent':message.get('model_name'),'status':message.get('status'),'at':message.get('created_at'),
+                              'asked':asked.split('\n\nREFERENCED CONTEXT')[0][:300],'files':[c['path'] for c in message.get('changes') or []][:20],
+                              'reply':(message.get('content') or '')[:500]})
+        turns.sort(key=lambda t:t['at'] or '')
+        commits=[]
+        if await gitops.toplevel(project['root']):
+            try:
+                log=await gitops.run(project['root'],'log','--pretty=format:%h%x09%an%x09%cI%x09%s','-n','200')
+                # Filtered here rather than with --since, which git silently ignores for dates it cannot parse.
+                moment=datetime.fromisoformat(since.replace('Z','+00:00'))
+                for line in log.splitlines():
+                    parts=line.split('\t',3)
+                    if len(parts)==4 and datetime.fromisoformat(parts[2])>=moment:
+                        commits.append({'hash':parts[0],'author':parts[1],'date':parts[2][:10],'subject':parts[3]})
+                commits=commits[:60]
+            except gitops.GitError:
+                commits=[]
+        runs=[{'name':a['name'],'at':a.get('last_run_at'),'outcome':a.get('last_outcome')} for a in store.list(tenant_id,'automations') if a.get('project_id')==project_id and (a.get('last_run_at') or '')>=since]
+        files_touched=sorted({f for t in turns for f in t['files']})
+        result={'since':since,'counts':{'turns':len(turns),'commits':len(commits),'files':len(files_touched),'automation_runs':len(runs)},
+                'turns':turns[-40:],'commits':commits,'files':files_touched[:80],'automation_runs':runs,'summary':None,'model_name':None}
+        if payload.summarize and (turns or commits or runs):
+            config=runner.writer(tenant_id,{'messages':[]},project)
+            facts=json.dumps({k:result[k] for k in ('turns','commits','files','automation_runs')},indent=1)[:40000]
+            prompt=('The user is coming back to this project. Using only the facts below, write a short catch-up in markdown: '
+                    'what was done and by which agent, what changed in the code, what was left unfinished or failed, and the most '
+                    'sensible next step. Under 250 words. Do not run commands or change files.\n\nFACTS SINCE '+since+':\n'+facts)
+            reply=await runner.broker.invoke_agent(tenant_id,config,prompt,'read',project['root'])
+            result.update(summary=(reply.text or '').strip(),model_name=config['name'])
+        return result
+
+    # ── How other programs start Frontier's MCP server ──
+    @app.get('/api/t/{tenant_id}/mcp-self')
+    def mcp_self(tenant_id:str,request:Request):
+        scoped(request,tenant_id)
+        import sys
+        if getattr(sys,'frozen',False):
+            command,args=sys.executable,['--mcp-server']
+        else:
+            command,args=sys.executable,['-m','backend.desktop','--mcp-server']
+        quoted=' '.join(['"'+command+'"',*args])
+        return {'command':command,'args':args,'cwd':None if getattr(sys,'frozen',False) else str(Path(__file__).resolve().parents[1]),
+                'claude':f'claude mcp add frontier --scope user -- {quoted}','codex':f'codex mcp add frontier -- {quoted}',
+                'json':{'mcpServers':{'frontier':{'command':command,'args':args}}}}
+
+    # ── First-run setup: which agent tools this computer has ──
+    @app.get('/api/t/{tenant_id}/setup/detect')
+    async def setup_detect(tenant_id:str,request:Request):
+        scoped(request,tenant_id)
+        return await maintenance.detect()
 
     @app.get('/api/t/{tenant_id}/projects/{project_id}/environment')
     def environment(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):

@@ -49,7 +49,7 @@ export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,o
     {split&&selected.before!==null?<div className="split-diff"><div><span>Before</span><CodeView text={selected.before}/></div><div><span>After</span><CodeView text={selected.after||''}/></div></div>
      :<CodeView text={selected.after??selected.before??''}/>}</>}
    </>)}
-   {tab==='Preview'&&<Preview projectId={project.id} sessionId={session?.worktree?session.id:undefined} devCommand={project.dev_command||''}/>}
+   {tab==='Preview'&&<Preview projectId={project.id} sessionId={session?.worktree?session.id:undefined} devCommand={project.dev_command||''} project={project}/>}
    {tab==='Terminal'&&isTauri()&&<Term cwd={session?.worktree?.path||project.root} onChip={onChip} projectId={project.id} sessionId={session?.worktree?session.id:undefined} agents={agents}/>}
    {tab==='Terminal'&&!isTauri()&&<>
     <div className="terminal-output">{!commands.length&&<p>Your own project checks and their actual output appear here.<br/>The agent runs its own commands through its tool.</p>}

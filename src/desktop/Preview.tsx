@@ -1,12 +1,32 @@
 import {useEffect,useRef,useState} from 'react';
-import {useQuery} from '@tanstack/react-query';
-import {RefreshCw,ExternalLink,Globe,ArrowRight,Play,Square,RotateCcw,Terminal,Skull} from 'lucide-react';
+import {useQuery,useQueryClient} from '@tanstack/react-query';
+import {RefreshCw,ExternalLink,Globe,ArrowRight,Play,Square,RotateCcw,Terminal,Skull,Bot,Eye} from 'lucide-react';
+import type {Project} from '../types';
 import {useWorkspace} from '../app/context';
 import {api} from '../lib/api';
 
 /** A dev server the project is running, shown in place. Ports are probed on loopback; any URL works too. */
 type DevStatus={root:string;running:boolean;command?:string|null;pid?:number|null;port?:number|null;exit_code?:number|null;output?:string};
-export function Preview({projectId,sessionId,devCommand}:{projectId:string;sessionId?:string;devCommand:string}){
+/** What the agent's browser saw: its screenshots, newest first, and the switch that gives agents a browser at all. */
+function AgentBrowser({project,sessionId}:{project:Project;sessionId?:string}){
+ const {tenant,path,notify}=useWorkspace();const client=useQueryClient();
+ const q=sessionId?`?session_id=${sessionId}`:'';
+ const [big,setBig]=useState<string|null>(null);
+ // Shown at once, saved behind it; the project list catches up on its next read.
+ const [local,setLocal]=useState({agent_browser:!!project.agent_browser,agent_browser_visible:!!project.agent_browser_visible});
+ useEffect(()=>{setLocal({agent_browser:!!project.agent_browser,agent_browser_visible:!!project.agent_browser_visible})},[project.id,project.agent_browser,project.agent_browser_visible]);
+ const shots=useQuery({queryKey:['tenant',tenant?.id,`/projects/${project.id}/browser-shots${q}`],enabled:!!tenant&&local.agent_browser,refetchInterval:6000,queryFn:({signal})=>api.get<{name:string;modified:string}[]>(path(`/projects/${project.id}/browser-shots${q}`),signal)});
+ async function set(fields:{agent_browser?:boolean;agent_browser_visible?:boolean}){setLocal(v=>({...v,...fields}));try{await api.put(path(`/projects/${project.id}/settings`),fields);await client.invalidateQueries({queryKey:['tenant',tenant?.id]});notify(fields.agent_browser===false?'Agents no longer get a browser':'Saved')}catch(e){setLocal({agent_browser:!!project.agent_browser,agent_browser_visible:!!project.agent_browser_visible});notify((e as Error).message)}}
+ const src=(n:string)=>`/api${path(`/projects/${project.id}/browser-shot?name=${encodeURIComponent(n)}${sessionId?`&session_id=${sessionId}`:''}`)}`;
+ return <div className="agent-browser">
+  <label className="toggle-row compact"><div><strong><Bot size={12}/> Let agents use a browser</strong><p>Each editing turn gets Playwright's browser tools: the agent opens the page, clicks through, reads the console and takes screenshots. Needs Node.js; the first turn downloads it.</p></div><input type="checkbox" role="switch" checked={local.agent_browser} onChange={e=>set({agent_browser:e.target.checked})}/></label>
+  {local.agent_browser&&<label className="toggle-row compact"><div><strong><Eye size={12}/> Show the agent's browser window</strong><p>Watch it work instead of running it hidden.</p></div><input type="checkbox" role="switch" checked={local.agent_browser_visible} onChange={e=>set({agent_browser_visible:e.target.checked})}/></label>}
+  {local.agent_browser&&(shots.data?.length?<div className="agent-shots">{shots.data.slice(0,12).map(s=><button key={s.name} title={`${s.name} · ${new Date(s.modified).toLocaleTimeString()}`} onClick={()=>setBig(s.name)}><img src={src(s.name)} alt={s.name} loading="lazy"/></button>)}</div>:<p className="muted small">The agent's screenshots appear here.</p>)}
+  {big&&<div className="shot-viewer" role="dialog" aria-label={big} onClick={()=>setBig(null)}><img src={src(big)} alt={big}/><span>{big}</span></div>}
+ </div>;
+}
+
+export function Preview({projectId,sessionId,devCommand,project}:{projectId:string;sessionId?:string;devCommand:string;project?:Project}){
  const {tenant,path,notify}=useWorkspace();
  const q=sessionId?`?session_id=${sessionId}`:'';
  const dev=useQuery({queryKey:['tenant',tenant?.id,`/projects/${projectId}/devserver${q}`],enabled:!!tenant,refetchInterval:4000,queryFn:({signal})=>api.get<DevStatus>(path(`/projects/${projectId}/devserver${q}`),signal)});
@@ -23,6 +43,7 @@ export function Preview({projectId,sessionId,devCommand}:{projectId:string;sessi
  const go=(u:string)=>{const v=u.trim();if(!v)return;setUrl(/^https?:\/\//.test(v)?v:`http://${v}`);setNonce(n=>n+1)};
  const running=!!dev.data?.running;
  return <div className="preview-panel">
+  {project&&<AgentBrowser project={project} sessionId={sessionId}/>}
   <div className="devserver-bar"><Terminal size={12}/><input aria-label="Dev server command" placeholder="npm run dev" value={command} onChange={e=>setCommand(e.target.value)} disabled={running}/>{running?<><button title="Restart" aria-label="Restart dev server" disabled={working!==''} onClick={()=>control('restart')}><RotateCcw size={12}/></button><button title="Stop" aria-label="Stop dev server" disabled={working!==''} onClick={()=>control('stop')}><Square size={12}/>Stop{dev.data?.port?` :${dev.data.port}`:''}</button></>:<button className="primary" title="Start the dev server in this session's folder" aria-label="Start dev server" disabled={working!==''||!command.trim()} onClick={()=>control('start')}><Play size={12}/>Start</button>}<button className="icon-button" title="Show output" aria-label="Show dev server output" onClick={()=>setShowLog(v=>!v)}><Terminal size={12}/></button></div>
   {devError&&<p className="thread-error">{devError}</p>}
   {showLog&&<pre className="devserver-log">{dev.data?.output||(dev.data?.exit_code!=null?`Exited with code ${dev.data.exit_code}.`:'No output yet.')}</pre>}

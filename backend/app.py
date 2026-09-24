@@ -75,6 +75,10 @@ def create_app(directory=None, broker=None):
 
     app = FastAPI(title='Frontier Harness', version='1.0.0', lifespan=lifespan)
     app.state.store, app.state.runner = store, runner
+    token_file = store.directory/'mcp-token'
+    if not token_file.exists():
+        token_file.write_text(secrets.token_urlsafe(32), encoding='utf-8')
+    app.state.mcp_token = token_file.read_text(encoding='utf-8').strip()
     BINARY_ATTACHMENTS = {'.mp4','.mov','.webm','.mkv','.avi','.mp3','.wav','.m4a','.ogg','.zip','.tar','.gz','.7z','.sqlite','.db','.parquet'}
     # What this process actually bound at start; the flag may already say otherwise for the next start.
     app.state.bound_remote = remote.enabled(store.directory) and os.environ.get('HARNESS_DATA_DIR') is not None
@@ -117,6 +121,14 @@ def create_app(directory=None, broker=None):
         return JSONResponse({'detail':str(exc)},status_code=502)
 
     def user(request):
+        # A program run by this Windows user (Frontier's MCP server) authenticates with the local
+        # access token in the data folder, and only over loopback: a LAN client never can.
+        local = request.headers.get('x-frontier-token')
+        if local and request.client and request.client.host in ('127.0.0.1', '::1') and hmac.compare_digest(local, app.state.mcp_token):
+            with store.db() as db:
+                owner = db.execute('SELECT id,username FROM users ORDER BY rowid LIMIT 1').fetchone()
+            if owner:
+                return {'id': owner['id'], 'username': owner['username']}
         token = request.cookies.get('harness_session', '')
         digest = hashlib.sha256(token.encode()).hexdigest()
         with store.db() as db:
