@@ -164,4 +164,6 @@ def test_agents_can_use_the_users_own_browser_with_its_token_kept_secret(tmp_pat
         browser = next(s for s in extras['mcp_servers'] if s['name'] == 'frontier-browser')
         assert browser['env']['PLAYWRIGHT_MCP_EXTENSION_TOKEN'] == 'tok-123'
         assert extras['approval']['token'] == 'turn-token'  # The browser's token must not replace the turn's own.
+        c.put(f'/api/t/{t}/projects/{p["id"]}/settings', json={'agent_browser_token': 'PLAYWRIGHT_MCP_EXTENSION_TOKEN=tok-456'})
+        assert c.app.state.store.decrypt(c.app.state.store.get(t, 'projects', p['id'])['agent_browser_token']) == 'tok-456'  # The whole line, as the extension shows it.
         assert not c.put(f'/api/t/{t}/projects/{p["id"]}/settings', json={'agent_browser_token': ''}).json()['agent_browser_token_set']

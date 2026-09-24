@@ -611,7 +611,8 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
             runner.select(tenant_id,payload.default_model_id)
         fields=payload.model_dump(exclude_unset=True)  # Only what was sent; a toggle elsewhere must not wipe the rest.
         if 'agent_browser_token' in fields:
-            token=(fields.pop('agent_browser_token') or '').strip()
+            # The extension shows it as PLAYWRIGHT_MCP_EXTENSION_TOKEN=<token>; either form may be pasted.
+            token=(fields.pop('agent_browser_token') or '').strip().removeprefix('PLAYWRIGHT_MCP_EXTENSION_TOKEN=').strip().strip('"'')
             project['agent_browser_token']=store.encrypt(token) if token else None
         project.update(fields)
         return shown(store.put(tenant_id,'projects',project))
