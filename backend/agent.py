@@ -17,19 +17,17 @@ import os
 import re
 import secrets
 import sys
-import time
 from pathlib import Path
 
 from . import adaptive, board, gitops, localhealth, push, sandbox, team as teamwork
 from .adaptive import ADAPTIVE, MAX_ESCALATIONS
-from .broker import CLI_TOOLS, ProviderError
+from .broker import CLI_TOOLS, ProviderError, cooling
 from .projects import ProjectFiles
 from .store import TenantIsolationViolationException, now, uid
 
 # What the agent may do to the project this turn. The names are ours; each tool spells the
 # same three postures differently, and broker.agent_argv is the only place that translates.
 MODES = ('read', 'edit', 'auto')
-MODE_LABELS = {'read': 'Read only', 'edit': 'Edit files', 'auto': 'Full auto'}
 # Oldest turns are dropped rather than refusing to continue: a conversation that stops being
 # answerable is worse than one that has forgotten its beginning, and the model is told.
 TRANSCRIPT_LIMIT = 120_000
@@ -240,10 +238,11 @@ def fingerprint(files, tenant_id, project_id, session_id=None):
     reader's size limit. Switch to a git diff where the folder is a repository if it ever shows.
     """
     entries, _ = files.walk(tenant_id, project_id, session_id)
+    root = files.resolved_root(tenant_id, project_id, session_id)  # Once, not once per file.
     captured = {}
     for entry in entries:
         try:
-            item = files.read(tenant_id, project_id, entry['path'], session_id)
+            item = files.read(tenant_id, project_id, entry['path'], session_id, root=root)
         except ValueError:
             continue  # Unreadable before is unreadable after; it cannot produce a diff either way.
         captured[entry['path']] = (item['hash'], item['content'])
@@ -276,6 +275,28 @@ class AgentRunner:
         self.turn_tokens: dict[str, tuple] = {}
         self.approvals: dict[str, dict] = {}
 
+    def undo_changes(self, tenant_id, project_id, session_id, changes):
+        """Write back each change's recorded before-text, deleting files the turn added. The fallback when there is no checkpoint."""
+        restored = []
+        for change in changes:
+            target = self.files.resolve(tenant_id, project_id, change['path'], session_id)
+            if change['status'] == 'added':
+                if target.is_file():
+                    target.unlink()
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(change['before'] or '', encoding='utf-8')
+            restored.append(change['path'])
+        return restored
+
+    def ensure_idle(self, tenant_id, session_id):
+        if self.busy(tenant_id, session_id):
+            raise ValueError('This conversation is still working. Wait for it to finish or stop it.')
+
+    def active_sessions(self, tenant_id):
+        """The sessions of this workspace with a turn running right now."""
+        return {sid for (tid, sid), task in list(self.turns.items()) if tid == tenant_id and not task.done()}
+
     def busy(self, tenant_id, session_id):
         task = self.turns.get((tenant_id, session_id))
         return bool(task and not task.done())
@@ -285,7 +306,7 @@ class AgentRunner:
         for agent in self.agents(tenant_id):
             if agent['id'] in tried or agent.get('enabled') is False or agent.get('online') is False:
                 continue
-            if self.broker.cooldowns.get((tenant_id, agent['id']), 0) > time.monotonic():
+            if cooling(self.broker, tenant_id, agent['id']):
                 continue
             return agent
         return None
@@ -509,14 +530,13 @@ class AgentRunner:
         # Folder scans read up to thousands of files; off the event loop, so the window stays responsive.
         repo = await asyncio.to_thread(adaptive.repository_signals, self.files, tenant_id, project_id)
         requirements, classified_by = await adaptive.classify(content, repo, classifier, self.store.decrypt)
-        cooling = lambda model_id: self.broker.cooldowns.get((tenant_id, model_id), 0) > time.monotonic()
         # A local model whose server is not running is not available, however good its profile:
         # several can be configured while only one holds the GPU, and a turn sent to a server
         # that is down would fail and escalate to a cloud agent for no reason.
         agents = self.agents(tenant_id)
         online = await localhealth.availability(agents)
         offline = [m for m in agents if online.get(m['id']) is False]
-        chosen, ranked = adaptive.choose(requirements, [m for m in agents if online.get(m['id']) is not False], cooling)
+        chosen, ranked = adaptive.choose(requirements, [m for m in agents if online.get(m['id']) is not False], lambda model_id: cooling(self.broker, tenant_id, model_id))
         if chosen is None:
             raise ProviderError('Adaptive found no agent that can take a turn.' + (' Every local agent is configured but none of their servers is running.' if offline else ' Connect a Claude, Codex or OpenCode agent.'))
         message['routing'] = {'mode': 'adaptive', 'status': 'chosen', 'classified_by': classified_by,
@@ -555,10 +575,10 @@ class AgentRunner:
         board_text = board.render(board.tasks(self.store, tenant_id, project_id))
         environment = ' '.join(filter(None, [environment, sandbox_note(sandbox.policy(project))])) or None
         # Read only cannot change the folder, so it is not read twice to prove that.
-        before = await asyncio.to_thread(fingerprint, self.files, tenant_id, project_id, session_id) if mode != 'read' else {}
         # In a repository, the whole working tree is also checkpointed as hidden git objects, so a
         # turn can be put back exactly, binaries included, without touching the user's branch.
-        before_ref = await self.checkpoint(root, f'Frontier: before turn {message_id}') if mode != 'read' else None
+        before, before_ref = (await asyncio.gather(asyncio.to_thread(fingerprint, self.files, tenant_id, project_id, session_id),
+                                                   self.checkpoint(root, f'Frontier: before turn {message_id}'))) if mode != 'read' else ({}, None)
         status, error, result = 'complete', None, None
         attempts, tried, handoff_text, ranked = [], set(), None, []
         try:
@@ -724,8 +744,7 @@ class AgentRunner:
     async def rewind(self, tenant_id, project_id, session_id, message_id, restore_files=True):
         """Cut the conversation back to before one of the user's messages, and optionally put the
         folder back to how it was then, so that message can be edited and sent again."""
-        if self.busy(tenant_id, session_id):
-            raise ValueError('This conversation is still working. Wait for it to finish or stop it.')
+        self.ensure_idle(tenant_id, session_id)
         session = self.store.get(tenant_id, 'sessions', session_id)
         index = next((i for i, m in enumerate(session['messages']) if m['id'] == message_id and m['role'] == 'user'), None)
         if index is None:
@@ -740,15 +759,7 @@ class AgentRunner:
                 restored = await gitops.rollback(root, first_checkpoint)
             else:
                 for reply in reversed(replies):
-                    for change in reply.get('changes') or []:
-                        target = self.files.resolve(tenant_id, project_id, change['path'], session_id)
-                        if change['status'] == 'added':
-                            if target.is_file():
-                                target.unlink()
-                        else:
-                            target.parent.mkdir(parents=True, exist_ok=True)
-                            target.write_text(change['before'] or '', encoding='utf-8')
-                        restored.append(change['path'])
+                    restored += self.undo_changes(tenant_id, project_id, session_id, reply.get('changes') or [])
         session['messages'] = session['messages'][:index]
         session['queue'] = []
         if session.get('summary') and not any(m['id'] == session['summary']['through'] for m in session['messages']):
@@ -760,8 +771,7 @@ class AgentRunner:
 
     async def remember(self, tenant_id, project_id, session_id):
         """Ask the conversation's agent what this session taught about the project, and keep it on the project."""
-        if self.busy(tenant_id, session_id):
-            raise ValueError('This conversation is still working. Wait for it to finish or stop it.')
+        self.ensure_idle(tenant_id, session_id)
         session = self.store.get(tenant_id, 'sessions', session_id)
         project = self.store.get(tenant_id, 'projects', project_id)
         visible, summary = conversation(session)
@@ -815,8 +825,7 @@ class AgentRunner:
         is sent that instead. The messages stay in the conversation for the user; only the agent
         stops seeing them.
         """
-        if self.busy(tenant_id, session_id):
-            raise ValueError('This conversation is still working. Wait for it to finish or stop it.')
+        self.ensure_idle(tenant_id, session_id)
         session = self.store.get(tenant_id, 'sessions', session_id)
         project = self.store.get(tenant_id, 'projects', project_id)
         visible, summary = conversation(session)
@@ -843,8 +852,7 @@ class AgentRunner:
         the turn created are deleted. Without one, the recorded before-text of each change is
         written back, which covers everything the fingerprint could read.
         """
-        if self.busy(tenant_id, session_id):
-            raise ValueError('This conversation is still working. Wait for it to finish or stop it.')
+        self.ensure_idle(tenant_id, session_id)
         session = self.store.get(tenant_id, 'sessions', session_id)
         message = next((m for m in session['messages'] if m['id'] == message_id), None)
         if message is None or message['role'] != 'assistant':
@@ -856,16 +864,7 @@ class AgentRunner:
         if checkpoint:
             restored = await gitops.restore(root, checkpoint['before'], checkpoint['after'])
         else:
-            restored = []
-            for change in message.get('changes') or []:
-                target = self.files.resolve(tenant_id, project_id, change['path'], session_id)
-                if change['status'] == 'added':
-                    if target.is_file():
-                        target.unlink()
-                else:
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_text(change['before'] or '', encoding='utf-8')
-                restored.append(change['path'])
+            restored = self.undo_changes(tenant_id, project_id, session_id, message.get('changes') or [])
         if not restored:
             raise ValueError('This turn left no file changes to revert.')
         message['reverted_at'] = now()

@@ -1,6 +1,6 @@
 import {useState} from 'react';
 import {useQuery,useQueryClient} from '@tanstack/react-query';
-import {GitBranch,GitCommitHorizontal,Upload,Sparkles,LoaderCircle,RefreshCw,ChevronRight,GitPullRequest,MessageSquarePlus,ExternalLink,CheckCircle2,XCircle,CircleDashed} from 'lucide-react';
+import {GitBranch,GitCommitHorizontal,Upload,Sparkles,LoaderCircle,RefreshCw,ChevronRight,MessageSquarePlus} from 'lucide-react';
 import {useWorkspace} from '../app/context';
 import {api} from '../lib/api';
 import type {GitStatus,GitEntry,ContextChip} from '../types';

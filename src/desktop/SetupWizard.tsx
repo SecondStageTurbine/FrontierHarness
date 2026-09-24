@@ -13,7 +13,7 @@ type Folder={root:string;claude:number;codex:number;project_id:string|null};
 
 /** First run: find the agent tools this computer has, connect them in one go, and say how to get the rest. */
 export function SetupWizard({open,onClose,models}:{open:boolean;onClose:()=>void;models:Model[]}){
- const {path,notify}=useWorkspace(),refresh=useRefresh();
+ const {path,notify,copy}=useWorkspace(),refresh=useRefresh();
  const detect=useQuery({queryKey:['setup-detect'],enabled:open,staleTime:60000,queryFn:({signal})=>api.get<Tool[]>(path('/setup/detect'),signal)});
  const [picks,setPicks]=useState<Record<string,Pick>>({});
  const [results,setResults]=useState<Record<string,Result>>({});
@@ -52,7 +52,7 @@ export function SetupWizard({open,onClose,models}:{open:boolean;onClose:()=>void
      <select aria-label={`${t.label} model`} value={pick.model} onChange={e=>setPicks(p=>({...p,[t.provider]:{...pick,model:e.target.value}}))}>{t.models.map(m=><option key={m} value={m}>{m}</option>)}</select>
      {result&&(result.state==='working'?<LoaderCircle size={14} className="spin"/>:result.state==='ok'?<span className="file-added">Connected</span>:<span className="file-removed" title={result.message}>{(result.message||'Failed').slice(0,120)}</span>)}</div>
     <small className="muted">Sign in once in a terminal if you have not: <code>{t.signin}</code></small></>
-   :<div className="wizard-install"><span>Install it in PowerShell, then sign in once:</span><code>{t.install}</code><code>{t.signin}</code><button className="icon-button" aria-label={`Copy ${t.label} install commands`} onClick={()=>navigator.clipboard.writeText(`${t.install}\n${t.signin}`).then(()=>notify('Commands copied')).catch(()=>notify('Clipboard unavailable'))}><Copy size={13}/></button></div>}
+   :<div className="wizard-install"><span>Install it in PowerShell, then sign in once:</span><code>{t.install}</code><code>{t.signin}</code><button className="icon-button" aria-label={`Copy ${t.label} install commands`} onClick={()=>copy(`${t.install}\n${t.signin}`,'Commands copied')}><Copy size={13}/></button></div>}
   </div>})}</div>}
   {!!history.data?.length&&<section className="wizard-history"><h4>Bring your past conversations</h4><p className="muted small">Claude Code and Codex already have conversations about these folders. Tick the ones to add as projects; their conversations come in as sessions, and the same tool can continue them.</p>
    <div className="wizard-folders">{history.data.map(f=><label key={f.root}><input type="checkbox" checked={!!chosen[f.root]} onChange={e=>setChosen(c=>({...c,[f.root]:e.target.checked}))}/><span title={f.root}>{f.root}</span><small>{[f.claude&&`${f.claude} Claude`,f.codex&&`${f.codex} Codex`].filter(Boolean).join(' · ')}{f.project_id?' · already a project':''}</small></label>)}</div>

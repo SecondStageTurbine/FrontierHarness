@@ -12,8 +12,8 @@ import re
 
 from . import board
 from . import adaptive, gitops
-from .adaptive import ADAPTIVE, TaskRequirements
-from .broker import AgentResult, ProviderError
+from .adaptive import TaskRequirements
+from .broker import AgentResult, ProviderError, cooling as broker_cooling
 from .store import now, uid
 
 MAX_TASKS = 6
@@ -168,7 +168,6 @@ class Team:
         return result.text or ''
 
     async def run(self, conversation_prompt, objective):
-        from .agent import build_prompt  # Late import: agent imports this module.
         session, message = self.state()
         agents = [a for a in self.runner.agents(self.tenant_id) if a.get('enabled', True)]
         team = message['team']
@@ -182,7 +181,7 @@ class Team:
         session, message = self.state()
         team = message['team']
         team.update(status='working', summary=plan['summary'], tasks=plan['tasks'])
-        cooling = lambda mid: self.runner.broker.cooldowns.get((self.tenant_id, mid), 0) > __import__('time').monotonic()
+        cooling = lambda mid: broker_cooling(self.runner.broker, self.tenant_id, mid)
         # Work first, then reviews, so a review knows which model families wrote what it checks.
         for task in sorted(team['tasks'], key=is_review):
             authors = {a['provider'] for t in team['tasks'] if t.get('model_id') and not is_review(t) for a in agents if a['id'] == t['model_id']}

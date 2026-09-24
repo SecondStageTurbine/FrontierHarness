@@ -96,6 +96,22 @@ class Store:
             rows = db.execute('SELECT data FROM entities WHERE tenant_id=? AND kind=? ORDER BY rowid DESC', (tenant_id, kind)).fetchall()
         return [json.loads(r['data']) for r in rows]
 
+    def session_summaries(self, tenant_id):
+        """Each session's identity and last message, read in SQL rather than decoding every message and
+        file diff: for the sidebar and the dashboard, which poll every few seconds."""
+        self.tenant_internal(tenant_id)
+        with self.db() as db:
+            rows = db.execute("""SELECT json_extract(data,'$.id') AS id, json_extract(data,'$.project_id') AS project_id,
+                json_extract(data,'$.name') AS name, json_extract(data,'$.updated_at') AS updated_at,
+                json_extract(data,'$.archived') AS archived, json_extract(data,'$.team_parent') AS team_parent,
+                json_array_length(data,'$.messages') AS count, json_extract(data,'$.messages[#-1].role') AS role,
+                json_extract(data,'$.messages[#-1].status') AS status,
+                substr(coalesce(nullif(json_extract(data,'$.messages[#-1].content'),''),json_extract(data,'$.messages[#-2].content'),''),1,400) AS content
+                FROM entities WHERE tenant_id=? AND kind='sessions' ORDER BY rowid DESC""", (tenant_id,)).fetchall()
+        return [{'id': r['id'], 'project_id': r['project_id'], 'name': r['name'], 'updated_at': r['updated_at'], 'archived': bool(r['archived']),
+                 'team_parent': r['team_parent'], 'messages': [{'role': r['role'], 'status': r['status'], 'content': r['content']}] if r['count'] else []}
+                for r in rows]
+
     def delete(self, tenant_id, kind, entity_id):
         self.get(tenant_id, kind, entity_id)
         with self.db() as db:
@@ -114,8 +130,10 @@ class Store:
 
     def events(self, tenant_id, session_id, after=0):
         run_id = session_id
-        self.get(tenant_id, 'sessions', session_id)
+        self.tenant_internal(tenant_id)
         with self.db() as db:
+            if not db.execute("SELECT 1 FROM entities WHERE tenant_id=? AND kind='sessions' AND id=?", (tenant_id, session_id)).fetchone():
+                raise TenantIsolationViolationException('This resource is unavailable in the current workspace.')
             rows = db.execute('SELECT seq,data FROM events WHERE tenant_id=? AND run_id=? AND seq>? ORDER BY seq LIMIT 500', (tenant_id, run_id, after)).fetchall()
         return [{**json.loads(r['data']), 'seq': r['seq']} for r in rows]
 
@@ -124,6 +142,18 @@ class Store:
 
     def decrypt(self, value):
         return self.cipher.decrypt(value.encode()).decode()
+
+def read_json(path, default=None):
+    """A small settings file, or `default` when it is missing or unreadable."""
+    try:
+        return json.loads(Path(path).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return default
+
+
+def write_json(path, value):
+    Path(path).write_text(json.dumps(value), encoding='utf-8')
+
 
 def public_model(model):
     return {k: v for k, v in model.items() if k != 'encrypted_key'}

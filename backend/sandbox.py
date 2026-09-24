@@ -14,11 +14,12 @@ package managers they run honour those variables; a program written to ignore th
 this part, which is stated wherever it is offered.
 """
 import asyncio
-import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+from .store import read_json, write_json
 
 LOW = 'S-1-16-4096'
 # The services each tool must reach to work at all.
@@ -30,7 +31,6 @@ PROVIDER_HOSTS = {
 }
 # Telemetry the tools send on their own: refused like anything else, but not listed as something the turn needed.
 QUIET = ['*.datadoghq.com', 'sentry.io', '*.sentry.io']
-SUGGESTED = ['registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org', 'github.com', 'codeload.github.com', 'objects.githubusercontent.com']
 
 
 def supported():
@@ -111,10 +111,7 @@ def labelled_record(directory):
 def prepare(directory, root, provider):
     """Label what the confined tool must be able to write, once per path. Returns the environment it needs."""
     record = labelled_record(directory)
-    try:
-        done = set(json.loads(record.read_text(encoding='utf-8')))
-    except (OSError, ValueError):
-        done = set()
+    done = set(read_json(record, []) or [])
     scratch = low_home()
     for sub in ('tmp', 'npm-cache', 'pip-cache', 'uv-cache', 'yarn-cache'):
         (scratch/sub).mkdir(parents=True, exist_ok=True)
@@ -122,7 +119,7 @@ def prepare(directory, root, provider):
         key = str(path.resolve()).lower() if path.exists() else None
         if key and key not in done and label(path):
             done.add(key)
-    record.write_text(json.dumps(sorted(done)), encoding='utf-8')
+    write_json(record, sorted(done))
     return {'TEMP': str(scratch/'tmp'), 'TMP': str(scratch/'tmp'), 'npm_config_cache': str(scratch/'npm-cache'),
             'PIP_CACHE_DIR': str(scratch/'pip-cache'), 'UV_CACHE_DIR': str(scratch/'uv-cache'), 'YARN_CACHE_FOLDER': str(scratch/'yarn-cache')}
 

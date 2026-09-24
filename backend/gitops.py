@@ -7,6 +7,7 @@ from `status` and no checkpoints; every other feature keeps working without it.
 import asyncio
 import os
 import re
+import functools
 import shutil
 import tempfile
 from pathlib import Path
@@ -22,6 +23,7 @@ class GitError(ValueError):
     pass
 
 
+@functools.cache
 def available():
     return shutil.which('git') is not None
 
@@ -67,7 +69,7 @@ async def status(root):
     top = await toplevel(root)
     if not top:
         return {'repo': False, 'available': available()}
-    raw = await run(root, 'status', '--porcelain=v1', '-z', '--branch', '--untracked-files=all')
+    raw, head = await asyncio.gather(run(root, 'status', '--porcelain=v1', '-z', '--branch', '--untracked-files=all'), has_head(root))
     tokens = raw.split('\0')
     header = tokens.pop(0) if tokens and tokens[0].startswith('## ') else '## HEAD (no branch)'
     # A repository with no commits reports '## No commits yet on main'; the branch is the last word there.
@@ -88,7 +90,7 @@ async def status(root):
         entries.append({'path': path, 'staged': x not in ' ?', 'unstaged': y != ' ' or x == '?',
                         'status': STATUS_WORDS.get(y if y not in ' ' else x, 'modified') if x != '?' else 'untracked'})
     return {'repo': True, 'available': True, 'root': top, 'branch': branch, 'upstream': upstream,
-            'ahead': ahead, 'behind': behind, 'entries': entries, 'has_head': await has_head(root)}
+            'ahead': ahead, 'behind': behind, 'entries': entries, 'has_head': head}
 
 
 async def diff(root, path, staged=False):

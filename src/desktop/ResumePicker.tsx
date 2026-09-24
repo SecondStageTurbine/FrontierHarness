@@ -3,7 +3,7 @@ import {useQuery} from '@tanstack/react-query';
 import {LoaderCircle} from 'lucide-react';
 import {useWorkspace} from '../app/context';
 import {Modal} from '../components/ui';
-import {api} from '../lib/api';
+import {api,date} from '../lib/api';
 import type {Session} from '../types';
 
 type CliConversation={source:'claude'|'codex';key:string;name:string;first:string;created_at:string;updated_at:string;messages:number;session_id:string|null};
@@ -24,7 +24,7 @@ export function ResumePicker({open,projectId,onClose,onResumed}:{open:boolean;pr
    <div className="resume-list" role="listbox" aria-label="Command line conversations">{list.data.map(c=><button key={`${c.source}:${c.key}`} role="option" aria-selected={false} disabled={!!busy} onClick={()=>pick(c)}>
     <span className={`resume-source ${c.source}`}>{c.source==='claude'?'Claude':'Codex'}</span>
     <span className="resume-text"><strong>{c.name}</strong>{c.first!==c.name&&<small>{c.first}</small>}</span>
-    <span className="resume-meta">{busy===c.key?<LoaderCircle size={13} className="spin"/>:<>{new Date(c.updated_at).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}<small>{c.messages} messages{c.session_id?' · imported':''}</small></>}</span>
+    <span className="resume-meta">{busy===c.key?<LoaderCircle size={13} className="spin"/>:<>{date(c.updated_at)}<small>{c.messages} messages{c.session_id?' · imported':''}</small></>}</span>
    </button>)}</div>}
   {error&&<p className="error-text">{error}</p>}
  </Modal>;

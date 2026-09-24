@@ -71,9 +71,6 @@ class TenantInput(StrictModel):
     memory_auto: bool = False
     worktree_cleanup_days: int | None = Field(default=None, ge=0, le=365)  # Remove archived sessions' worktrees after this many days.
 
-class TenantContext(TenantInput):
-    tenant_id: str
-
 class LoginInput(StrictModel):
     username: str = Field(min_length=3, max_length=80)
     password: str = Field(min_length=12, max_length=200)

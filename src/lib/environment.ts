@@ -6,6 +6,7 @@ function read():Env|null{try{return JSON.parse(localStorage.getItem(KEY)||'null'
 export const environment=read();
 const LOCAL=['/environments','/env/','/auth/','/logout','/remote','/push','/tray','/password'];
 export const apiBase=(path:string)=>environment&&!LOCAL.some(p=>path.startsWith(p))?`/api/env/${environment.id}`:'/api';
+export const apiUrl=(path:string)=>apiBase(path)+path;
 /** Things that act on the computer in front of you (terminal, folder picker, opening an editor) are off while on another machine. */
 export const onThisComputer=!environment;
 export function switchEnvironment(next:Env|null){

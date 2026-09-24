@@ -10,7 +10,7 @@ type Status={enabled:boolean;listening:boolean;addresses:string[];port:number|nu
 
 /** Reaching this Frontier from a phone or another computer on the same network or tailnet. */
 export default function Remote(){
- const {notify}=useWorkspace();const client=useQueryClient();
+ const {notify,copy}=useWorkspace();const client=useQueryClient();
  const q=useQuery({queryKey:['remote'],queryFn:({signal})=>api.get<Status>('/remote',signal)});
  const [password,setPassword]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[restart,setRestart]=useState(false);
  const s=q.data;
@@ -27,7 +27,7 @@ export default function Remote(){
    <p className="muted">{s.has_password?`Signed in as ${s.username}. Other devices sign in with that name and the password below.`:`This window signs in on its own; ${s.username} has no password yet. Set one so another device can sign in.`}</p>
    <form onSubmit={setPass} className="form-grid"><Field label={s.has_password?'New password':'Password'} hint="At least 12 characters."><input type="password" autoComplete="new-password" minLength={12} required value={password} onChange={e=>setPassword(e.target.value)}/></Field><div className="actions"><button className="primary" disabled={busy||password.length<12}>{s.has_password?'Change password':'Set password'}</button></div></form>
    <h3><Globe size={16}/> Addresses</h3>
-   {!s.enabled?<p className="muted">Turn remote access on to see where to connect.</p>:!s.addresses.length?<p className="muted">No network address found on this machine.</p>:<ul className="address-list">{s.addresses.map(a=>{const url=`http://${a}:${s.port??''}`;return <li key={a}><code>{url}</code><button className="icon-button" aria-label={`Copy ${url}`} onClick={()=>navigator.clipboard.writeText(url).then(()=>notify('Address copied')).catch(()=>notify('Clipboard unavailable'))}><Copy size={13}/></button></li>})}</ul>}
+   {!s.enabled?<p className="muted">Turn remote access on to see where to connect.</p>:!s.addresses.length?<p className="muted">No network address found on this machine.</p>:<ul className="address-list">{s.addresses.map(a=>{const url=`http://${a}:${s.port??''}`;return <li key={a}><code>{url}</code><button className="icon-button" aria-label={`Copy ${url}`} onClick={()=>copy(url,'Address copied')}><Copy size={13}/></button></li>})}</ul>}
    <p className="muted small">The connection is plain HTTP, so use it on a network you trust or over a tailnet such as Tailscale, whose address appears above when it is running. In a browser the terminal, updates and desktop notifications are unavailable; everything else works, on a phone too.</p>
    <Phone listening={s.enabled&&s.listening}/>
   </>}

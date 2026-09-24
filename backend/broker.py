@@ -47,6 +47,10 @@ TURN_TIMEOUT = 5400
 # move to the next login instead of stopping. Matched text is classified and then dropped.
 LIMIT_PHRASES = ('usage limit', 'rate limit', 'rate_limit', 'limit reached', 'quota', 'too many requests', 'out of credit', 'insufficient_quota')
 
+def cooling(broker, tenant_id, model_id):
+    """Whether a login ran out of usage recently and is being given a rest."""
+    return broker.cooldowns.get((tenant_id, model_id), 0) > time.monotonic()
+
 class ProviderError(RuntimeError):
     def __init__(self, message, retryable=False, exhausted=False):
         super().__init__(message)
@@ -433,7 +437,7 @@ class ModelBroker:
         siblings = [m for m in self.store.list(tenant_id, 'models')
                     if m['id'] != config['id'] and m['provider'] == config['provider'] and m['model_name'] == config['model_name']]
         ordered = [config] + sorted(siblings, key=lambda m: m.get('created_at') or '')
-        return sorted(ordered, key=lambda m: self.cooldowns.get((tenant_id, m['id']), 0) > time.monotonic())
+        return sorted(ordered, key=lambda m: cooling(self, tenant_id, m['id']))
 
     async def invoke_agent(self, tenant_id, config, prompt, mode, root, extras=None):
         """Take one turn, trying each connected subscription until one still has usage left."""

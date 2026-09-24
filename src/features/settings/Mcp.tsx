@@ -25,9 +25,8 @@ const blank:Form={name:'',transport:'stdio',command:'',args:'',env:'',url:'',ena
 /** MCP servers the workspace hands to every agent that can take them, and the skills the agents already see. */
 /** Frontier itself as an MCP server: how another agent, an editor or a script adds it. */
 function SelfServer(){
- const {path,notify}=useWorkspace();
+ const {path,copy}=useWorkspace();
  const q=useQuery({queryKey:['mcp-self'],queryFn:({signal})=>api.get<{command:string;args:string[];claude:string;codex:string;json:unknown}>(path('/mcp-self'),signal)});
- const copy=(t:string)=>navigator.clipboard.writeText(t).then(()=>notify('Copied')).catch(()=>notify('Clipboard unavailable'));
  if(!q.data)return null;
  return <section className="self-mcp"><h3><Plug size={16}/> Use Frontier from other agents</h3>
   <p className="muted">Frontier is also an MCP server. Another agent, an editor or a script can list your projects and conversations, send a message to any agent here and wait for its reply, read a project's git changes, and catch up on what happened. It works while Frontier is running, and only for programs run by you on this computer.</p>

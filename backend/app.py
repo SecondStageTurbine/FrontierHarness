@@ -3,7 +3,6 @@ import asyncio
 import base64
 import hashlib
 import hmac
-import io
 import json
 import os
 import secrets
@@ -13,12 +12,10 @@ import httpx
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlparse
 from fastapi import FastAPI, Request, Response, HTTPException, UploadFile, File, Form
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
-from pydantic import ValidationError
 from .schemas import LoginInput, TenantInput, ModelConfig, SUBSCRIPTION_PROVIDERS, PasswordInput, RemoteInput, PushInput, EnvironmentInput
 from . import automations, remote, devserver, push, environments
 from starlette.background import BackgroundTask
@@ -304,12 +301,7 @@ def create_app(directory=None, broker=None):
     @app.put('/api/push')
     def push_set(payload:PushInput, request:Request):
         user(request)
-        fields = payload.model_dump(exclude_unset=True, exclude={'new_topic'})
-        if payload.new_topic:
-            fields['topic'] = None  # A new random topic: anyone subscribed to the old one stops receiving.
-            settings = push.config(store.directory); settings['topic'] = None
-            (Path(store.directory)/'push.json').write_text(json.dumps(settings), encoding='utf-8')
-        settings = push.save(store.directory, **{k: v for k, v in fields.items() if k != 'topic'})
+        settings = push.save(store.directory, **payload.model_dump(exclude_unset=True))
         return {**settings, 'subscribe_url': f'{settings["server"]}/{settings["topic"]}'}
 
     @app.post('/api/push/test')

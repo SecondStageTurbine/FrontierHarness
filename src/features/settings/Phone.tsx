@@ -10,7 +10,7 @@ const EVENTS:[string,string][]=[['done','A turn finished'],['failed','A turn sto
 
 /** Pair a phone by scanning a code, and send it notifications. Shown in Remote access. */
 export function Phone({listening}:{listening:boolean}){
- const {notify}=useWorkspace();const client=useQueryClient();
+ const {notify,copy}=useWorkspace();const client=useQueryClient();
  const [pairing,setPairing]=useState<{urls:string[];expires:number}|null>(null),[address,setAddress]=useState(0);
  const [error,setError]=useState(''),[busy,setBusy]=useState('');
  const push=useQuery({queryKey:['push'],queryFn:({signal})=>api.get<Push>('/push',signal)});
@@ -26,7 +26,7 @@ export function Phone({listening}:{listening:boolean}){
    {pairing&&url?<div className="pair-box"><Qr text={url} label="Pairing code for your phone"/><div>
      {pairing.urls.length>1&&<select aria-label="Address" value={address} onChange={e=>setAddress(Number(e.target.value))}>{pairing.urls.map((u,i)=><option key={u} value={i}>{new URL(u).host}</option>)}</select>}
      <small className="muted">Expires {new Date(pairing.expires).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}. If the phone cannot open it, try another address; a phone on mobile data needs a tailnet such as Tailscale.</small>
-     <div className="actions"><button onClick={()=>navigator.clipboard.writeText(url).then(()=>notify('Pairing link copied')).catch(()=>notify('Clipboard unavailable'))}><Copy size={13}/>Copy link</button><button onClick={()=>setPairing(null)}>Done</button></div>
+     <div className="actions"><button onClick={()=>copy(url,'Pairing link copied')}><Copy size={13}/>Copy link</button><button onClick={()=>setPairing(null)}>Done</button></div>
      <small className="muted">The link also pairs another computer's Frontier: paste it in Settings → Environments there.</small></div></div>
    :<button disabled={busy!==''} onClick={()=>act('pair',async()=>{const r=await api.post<{urls:string[];expires_in:number}>('/remote/pair');if(!r.urls.length)throw new Error('No network address found to pair over.');setAddress(0);setPairing({urls:r.urls,expires:Date.now()+r.expires_in*1000})})}><QrCode size={14}/>Show pairing code</button>}
   </>}
@@ -38,7 +38,7 @@ export function Phone({listening}:{listening:boolean}){
    {p.enabled&&p.subscribe_url&&<>
     <div className="pair-box"><Qr text={p.subscribe_url} label="Topic to subscribe to in ntfy"/><div>
      <code className="push-topic">{p.subscribe_url}</code>
-     <div className="actions"><button onClick={()=>navigator.clipboard.writeText(p.subscribe_url!).then(()=>notify('Topic copied')).catch(()=>notify('Clipboard unavailable'))}><Copy size={13}/>Copy</button>
+     <div className="actions"><button onClick={()=>copy(p.subscribe_url!,'Topic copied')}><Copy size={13}/>Copy</button>
       <button disabled={busy!==''} onClick={()=>act('test',async()=>{await api.post('/push/test');notify('Test notification sent')})}><Send size={13}/>Send a test</button>
       <button disabled={busy!==''} title="Anyone who knows the topic can read the notifications. A new one cuts off every device subscribed to the old." onClick={()=>save({new_topic:true})}><RefreshCw size={13}/>New topic</button></div>
      <small className="muted">The topic name is the key: keep it private. Notifications name the agent, the project and the session.</small></div></div>

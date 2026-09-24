@@ -6,7 +6,7 @@ import json
 import os
 import re
 from pathlib import Path
-from fastapi import Request, Response, HTTPException
+from fastapi import Request, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse, FileResponse
 from .schemas import (ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput, GitPaths, CommitInput, FileWrite,
                       McpServerInput, ApprovalDecision, ApprovalRequest, FanoutInput, AutomationInput, ProjectSettings, PrCreateInput,
@@ -19,7 +19,6 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from .adaptive import ADAPTIVE
 from .agent import context_usage
-from .broker import CLI_TOOLS
 
 def attachment_note(store,tenant_id,root,attachment_ids):
     """Write each named attachment into the folder the agent works in so it can open the actual file.
@@ -79,6 +78,8 @@ def context_note(files,tenant_id,project_id,session_id,chips):
             parts.append(f'{label}:\n```\n{chip.text[:12000]}\n```')
     return ('\n\nREFERENCED CONTEXT (the user pointed at these while writing the message):\n'+'\n\n'.join(parts)) if parts else ''
 
+STATE_RANK={'working':3,'waiting':2,'done':1}  # Which state a project shows when its sessions differ.
+
 def session_sidebar_state(session,active_sessions):
     """Small status model for the desktop rail: working, waiting, done, or quiet."""
     if session.get('id') in active_sessions:
@@ -129,14 +130,24 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         scoped(request,tenant_id)
         return store.list(tenant_id,'projects')
 
+    def writer_for(tenant_id,project_id,session_id):
+        """The agent that writes a commit message, a pull request or a summary for this conversation."""
+        return runner.writer(tenant_id,store.get(tenant_id,'sessions',session_id) if session_id else {'messages':[]},store.get(tenant_id,'projects',project_id))
+
     @app.get('/api/t/{tenant_id}/dashboard')
     async def dashboard(tenant_id:str,request:Request):
         """Every project at a glance: what its agents are doing, its dev server, its branch, its board, and when it last moved."""
         scoped(request,tenant_id)
-        projects=store.list(tenant_id,'projects')
-        sessions=store.list(tenant_id,'sessions')
-        tasks=store.list(tenant_id,'board')
-        active={sid for (tid,sid),task in list(runner.turns.items()) if tid==tenant_id and not task.done()}
+        projects,sessions,tasks=await asyncio.to_thread(lambda:(store.list(tenant_id,'projects'),store.session_summaries(tenant_id),store.list(tenant_id,'board')))
+        active=runner.active_sessions(tenant_id)
+        by_project,task_counts={},{}
+        for s in sessions:
+            if not s.get('team_parent') and not s.get('archived'):
+                by_project.setdefault(s['project_id'],[]).append(s)
+        for t in tasks:
+            counts=task_counts.setdefault(t.get('project_id'),dict.fromkeys(board.STATUSES,0))
+            if t.get('status') in counts:
+                counts[t['status']]+=1
         async def git(root):
             try:
                 found=await asyncio.wait_for(gitops.status(root),5)
@@ -144,18 +155,17 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
                 return None
             return {'branch':found['branch'],'changes':len(found['entries']),'ahead':found['ahead'],'behind':found['behind']} if found.get('repo') else None
         gits=await asyncio.gather(*(git(p['root']) if Path(p['root']).is_dir() else asyncio.sleep(0) for p in projects))
-        rank={'working':3,'waiting':2,'done':1}
         rows=[]
         for project,repo in zip(projects,gits):
-            mine=[s for s in sessions if s.get('project_id')==project['id'] and not s.get('team_parent') and not s.get('archived')]
+            mine=by_project.get(project['id'],[])
             states=[st for st in (session_sidebar_state(s,active) for s in mine) if st]
             latest=max(mine,key=lambda s:s.get('updated_at') or '',default=None)
             reply=next((m for m in reversed((latest or {}).get('messages') or []) if m.get('content')),None)
             server=devserver.get(project['root'])
             dev={k:v for k,v in server.status().items() if k!='output'} if server else {'running':False}
-            counts={status:sum(1 for t in tasks if t.get('project_id')==project['id'] and t.get('status')==status) for status in board.STATUSES}
+            counts=task_counts.get(project['id'])or dict.fromkeys(board.STATUSES,0)
             rows.append({'id':project['id'],'name':project['name'],'root':project['root'],'missing':not Path(project['root']).is_dir(),
-                         'state':max(states,key=rank.get) if states else None,'working':sum(1 for s in states if s=='working'),
+                         'state':max(states,key=STATE_RANK.get) if states else None,'working':sum(1 for s in states if s=='working'),
                          'sessions':len(mine),'last_activity':(latest or {}).get('updated_at') or project.get('updated_at'),
                          'last_session':{'id':latest['id'],'name':latest['name'],'snippet':' '.join((reply or {}).get('content','').split())[:160]} if latest else None,
                          'dev':{**dev,'command':project.get('dev_command')},'git':repo,'board':counts})
@@ -165,28 +175,19 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
     def activity(tenant_id:str,request:Request):
         """Conversation status for the sidebar, across projects."""
         scoped(request,tenant_id)
-        active=[]
-        active_sessions=set()
-        for (tid,session_id),task in list(runner.turns.items()):
-            if tid!=tenant_id or task.done():
-                continue
-            try:
-                session=store.get(tenant_id,'sessions',session_id)
-            except TenantIsolationViolationException:
-                continue
-            active_sessions.add(session_id)
-            active.append({'project_id':session['project_id'],'session_id':session_id})
+        summaries=store.session_summaries(tenant_id)
+        active_sessions=runner.active_sessions(tenant_id)
+        active=[{'project_id':s['project_id'],'session_id':s['id']} for s in summaries if s['id'] in active_sessions]
         sessions=[]
         project_states={}
-        priority={'working':3,'waiting':2,'done':1}
-        for session in store.list(tenant_id,'sessions'):
+        for session in summaries:
             state=session_sidebar_state(session,active_sessions)
             if not state:
                 continue
             item={'project_id':session['project_id'],'session_id':session['id'],'state':state}
             sessions.append(item)
             current=project_states.get(session['project_id'])
-            if not current or priority[state]>priority[current]:
+            if not current or STATE_RANK[state]>STATE_RANK[current]:
                 project_states[session['project_id']]=state
         projects=[{'project_id':project_id,'state':state} for project_id,state in project_states.items()]
         return {'active':active,'sessions':sessions,'projects':projects}
@@ -308,7 +309,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         diff=await gitops.staged_diff(root)
         if not diff.strip():
             raise ValueError('Stage some changes first.')
-        config=runner.writer(tenant_id,store.get(tenant_id,'sessions',session_id) if session_id else {'messages':[]},store.get(tenant_id,'projects',project_id))
+        config=writer_for(tenant_id,project_id,session_id)
         prompt=('Write a git commit message for the staged diff below. Reply with the message only: a summary line '
                 'under 72 characters, then optionally a blank line and a short body in plain sentences. No code fences, '
                 'no preamble, and do not run any commands.\n\n'+diff)
@@ -469,17 +470,18 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         projects={p['id']:p['name'] for p in store.list(tenant_id,'projects')}
         by_model,by_day,by_project={},{},{}
         totals={'turns':0,'input_tokens':0,'output_tokens':0,'cost':0.0,'seconds':0}
-        def bump(bucket,key,label,message,seconds):
-            row=bucket.setdefault(key,{'key':key,'label':label,'turns':0,'input_tokens':0,'output_tokens':0,'cost':0.0,'seconds':0})
+        def add(row,message,seconds):
             row['turns']+=1;row['input_tokens']+=message.get('input_tokens') or 0;row['output_tokens']+=message.get('output_tokens') or 0
             row['cost']+=message.get('cost') or 0.0;row['seconds']+=seconds
+        def bump(bucket,key,label,message,seconds):
+            add(bucket.setdefault(key,{'key':key,'label':label,'turns':0,'input_tokens':0,'output_tokens':0,'cost':0.0,'seconds':0}),message,seconds)
         for session in store.list(tenant_id,'sessions'):
             for message in session.get('messages') or []:
                 if message.get('role')!='assistant' or not message.get('finished_at'):
                     continue
                 try:
-                    finished=datetime.fromisoformat(message['finished_at'].replace('Z','+00:00'))
-                    started=datetime.fromisoformat(message['created_at'].replace('Z','+00:00'))
+                    finished=datetime.fromisoformat(message['finished_at'])
+                    started=datetime.fromisoformat(message['created_at'])
                 except ValueError:
                     continue
                 if finished.tzinfo is None:
@@ -490,8 +492,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
                 bump(by_model,message.get('model_id') or 'unknown',message.get('model_name') or 'Unknown',message,seconds)
                 bump(by_day,finished.date().isoformat(),finished.date().isoformat(),message,seconds)
                 bump(by_project,session['project_id'],projects.get(session['project_id'],'Removed project'),message,seconds)
-                totals['turns']+=1;totals['input_tokens']+=message.get('input_tokens') or 0;totals['output_tokens']+=message.get('output_tokens') or 0
-                totals['cost']+=message.get('cost') or 0.0;totals['seconds']+=seconds
+                add(totals,message,seconds)
         return {'days':days,'totals':totals,'models':sorted(by_model.values(),key=lambda r:-r['turns']),
                 'projects':sorted(by_project.values(),key=lambda r:-r['turns']),'series':sorted(by_day.values(),key=lambda r:r['key'])}
 
@@ -647,7 +648,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
             try:
                 log=await gitops.run(project['root'],'log','--pretty=format:%h%x09%an%x09%cI%x09%s','-n','200')
                 # Filtered here rather than with --since, which git silently ignores for dates it cannot parse.
-                moment=datetime.fromisoformat(since.replace('Z','+00:00'))
+                moment=datetime.fromisoformat(since)
                 for line in log.splitlines():
                     parts=line.split('\t',3)
                     if len(parts)==4 and datetime.fromisoformat(parts[2])>=moment:
@@ -684,19 +685,22 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
                 'json':{'mcpServers':{'frontier':{'command':command,'args':args}}}}
 
     # ── First-run setup: which agent tools this computer has ──
+    def projects_by_folder(tenant_id):
+        return {str(Path(p['root']).resolve()).lower():p for p in store.list(tenant_id,'projects')}
+
     @app.get('/api/t/{tenant_id}/setup/history')
     async def setup_history(tenant_id:str,request:Request):
         """Folders with past Claude and Codex conversations, and whether each is a project here yet."""
         scoped(request,tenant_id)
         folders=await asyncio.to_thread(maintenance.history_folders)
-        known={str(Path(p['root']).resolve()).lower():p['id'] for p in store.list(tenant_id,'projects')}
+        known={key:p['id'] for key,p in projects_by_folder(tenant_id).items()}
         return [{**f,'project_id':known.get(f['root'].lower())} for f in folders]
 
     @app.post('/api/t/{tenant_id}/setup/history')
     async def setup_history_import(tenant_id:str,payload:HistoryImportInput,request:Request):
         """Each chosen folder becomes a project, if it is not one already, and its conversations come in."""
         scoped(request,tenant_id)
-        known={str(Path(p['root']).resolve()).lower():p for p in store.list(tenant_id,'projects')}
+        known=projects_by_folder(tenant_id)
         done=[]
         for root in payload.roots:
             project=known.get(str(Path(root).resolve()).lower()) or files.create(tenant_id,Path(root).name or root,root)
@@ -855,7 +859,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
             session=store.get(tenant_id,'sessions',session_id)
             changed=(session.get('pull_request') or {}).get('number')!=pr['number'] or session['pull_request'].get('state')!=pr['state']
             if changed:
-                session['pull_request']={'number':pr['number'],'url':pr['url'],'state':pr['state'],'title':pr['title']}
+                session['pull_request']=pullrequests.summary(pr)
             if pr['state']=='merged' and not session.get('archived') and not session.get('pinned') and not runner.busy(tenant_id,session_id):
                 # Its branch is in; the conversation settles on its own, as a merged thread would in T3.
                 session['archived']=True
@@ -872,7 +876,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         pr=await pullrequests.create(root,payload.title,payload.body,payload.base,payload.draft,payload.reviewers,payload.labels)
         if session_id and pr:
             session=store.get(tenant_id,'sessions',session_id)
-            session['pull_request']={'number':pr['number'],'url':pr['url'],'state':pr['state'],'title':pr['title']}
+            session['pull_request']=pullrequests.summary(pr)
             store.put(tenant_id,'sessions',session)
             store.event(tenant_id,session_id,'pr.opened',f'Opened pull request #{pr["number"]}.')
         return {'available':True,'pr':pr}
@@ -902,7 +906,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         scoped(request,tenant_id)
         root,pr=await open_pr(tenant_id,project_id,session_id)
         diff=await pullrequests.diff(root,pr['number'])
-        config=runner.writer(tenant_id,store.get(tenant_id,'sessions',session_id) if session_id else {'messages':[]},store.get(tenant_id,'projects',project_id))
+        config=writer_for(tenant_id,project_id,session_id)
         prompt=(f'Review pull request #{pr["number"]} "{pr["title"]}" from its diff below; you may read files in the project for context but change nothing. '
                 'On the first line write exactly one of APPROVE, COMMENT or REQUEST_CHANGES: request changes only for a real defect. Then a blank line, '
                 'then the review in markdown: a one-paragraph summary, then each finding with file and line, what goes wrong and the fix, most serious first. '
@@ -933,10 +937,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
     @app.get('/api/t/{tenant_id}/projects/{project_id}/pr/comments')
     async def pr_comments(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
         scoped(request,tenant_id)
-        root=files.root(tenant_id,project_id,session_id)
-        pr=await pullrequests.current(root)
-        if not pr:
-            raise ValueError('This branch has no pull request.')
+        root,pr=await open_pr(tenant_id,project_id,session_id)
         feedback=await pullrequests.review_comments(root,pr['number'])
         return {**feedback,'pr':pr,'prompt':pullrequests.address_prompt(pr,feedback)}
 
@@ -961,7 +962,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         body=await gitops.run(root,'diff',f'{base}...HEAD')
         if not (log.strip() or stat.strip()):
             raise ValueError('This branch has no commits beyond the base yet. Commit first.')
-        config=runner.writer(tenant_id,store.get(tenant_id,'sessions',session_id) if session_id else {'messages':[]},store.get(tenant_id,'projects',project_id))
+        config=writer_for(tenant_id,project_id,session_id)
         prompt=('Write a pull request title and description for the branch changes below. Reply with the title on the first line, then a blank line, '
                 'then a description in markdown: what changed and why, how it was tested, anything reviewers should look at. No code fences, no preamble, do not run commands.'
                 f'\n\nCOMMITS:\n{log[:4000]}\n\nFILES:\n{stat[:4000]}\n\nDIFF:\n{body[:24000]}')
@@ -1010,7 +1011,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
             if payload.snoozed_until=='':
                 session.pop('snoozed_until',None)
             else:
-                datetime.fromisoformat(payload.snoozed_until.replace('Z','+00:00'))  # Must parse, or it never wakes.
+                datetime.fromisoformat(payload.snoozed_until)  # Must parse, or it never wakes.
                 session['snoozed_until']=payload.snoozed_until
         if payload.name is not None:
             session['auto_named']=False  # A name the user chose is never replaced by the agent's.

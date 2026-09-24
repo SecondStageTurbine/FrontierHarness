@@ -77,39 +77,47 @@ def text_of(content):
     return ''
 
 
-def read_claude(root):
+def claude_folder(root):
     """Claude Code keeps one JSONL per conversation under ~/.claude/projects/<slug>/."""
-    folder = Path.home()/'.claude'/'projects'/claude_slug(root)
+    return Path.home()/'.claude'/'projects'/claude_slug(root)
+
+
+def claude_conversation(file):
+    """One Claude Code conversation file, or None if it is not one someone had."""
+    messages, title, first_at = [], None, None
+    for line in file.read_text(encoding='utf-8', errors='replace').splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        kind = record.get('type')
+        if kind == 'user' and not messages and record.get('entrypoint') == 'sdk-cli':
+            break  # Started by `claude -p`, as Frontier's own turns are: not a conversation someone had.
+        if kind == 'custom-title':
+            title = record.get('customTitle') or record.get('title') or title
+        if record.get('isSidechain') or record.get('isMeta') or kind not in ('user', 'assistant'):
+            continue
+        text = text_of((record.get('message') or {}).get('content')).strip()
+        if not text or text.startswith(('<command-name>', '<local-command', '<system-reminder>')):
+            continue
+        stamp = record.get('timestamp') or now()
+        first_at = first_at or stamp
+        if kind == 'user' and (messages and messages[-1]['role'] == 'user'):
+            continue  # Tool results echo as user records; keep the human's own message.
+        messages.append({'id': uid(), 'role': kind, 'content': text[:40000], 'created_at': stamp,
+                         **({'status': 'complete', 'finished_at': stamp, 'model_name': 'Claude Code (imported)', 'provider': 'claude_cli', 'changes': []} if kind == 'assistant' else {})})
+    if sum(1 for m in messages if m['role'] == 'user') >= 1 and any(m['role'] == 'assistant' for m in messages):
+        return {'source': 'claude', 'key': file.stem, 'name': (title or next(m['content'] for m in messages if m['role'] == 'user').splitlines()[0])[:80],
+                'messages': messages, 'created_at': first_at or now()}
+    return None
+
+
+def read_claude(root):
+    folder = claude_folder(root)
     if not folder.is_dir():
         return []
-    found = []
-    for file in sorted(folder.glob('*.jsonl'), key=lambda f: f.stat().st_mtime):
-        messages, title, first_at = [], None, None
-        for line in file.read_text(encoding='utf-8', errors='replace').splitlines():
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            kind = record.get('type')
-            if kind == 'user' and not messages and record.get('entrypoint') == 'sdk-cli':
-                break  # Started by `claude -p`, as Frontier's own turns are: not a conversation someone had.
-            if kind == 'custom-title':
-                title = record.get('customTitle') or record.get('title') or title
-            if record.get('isSidechain') or record.get('isMeta') or kind not in ('user', 'assistant'):
-                continue
-            text = text_of((record.get('message') or {}).get('content')).strip()
-            if not text or text.startswith(('<command-name>', '<local-command', '<system-reminder>')):
-                continue
-            stamp = record.get('timestamp') or now()
-            first_at = first_at or stamp
-            if kind == 'user' and (messages and messages[-1]['role'] == 'user'):
-                continue  # Tool results echo as user records; keep the human's own message.
-            messages.append({'id': uid(), 'role': kind, 'content': text[:40000], 'created_at': stamp,
-                             **({'status': 'complete', 'finished_at': stamp, 'model_name': 'Claude Code (imported)', 'provider': 'claude_cli', 'changes': []} if kind == 'assistant' else {})})
-        if sum(1 for m in messages if m['role'] == 'user') >= 1 and any(m['role'] == 'assistant' for m in messages):
-            found.append({'source': 'claude', 'key': file.stem, 'name': (title or next(m['content'] for m in messages if m['role'] == 'user').splitlines()[0])[:80],
-                          'messages': messages, 'created_at': first_at or now()})
-    return found
+    found = (claude_conversation(file) for file in sorted(folder.glob('*.jsonl'), key=lambda f: f.stat().st_mtime))
+    return [item for item in found if item]
 
 
 def read_codex(root):
@@ -197,7 +205,11 @@ def cli_conversations(store, tenant_id, project):
 
 def resume_cli(store, tenant_id, project, source, key):
     """One CLI conversation as a session here: imported now, or the one imported before."""
-    item = next((i for i in READERS[source](project['root']) if i['key'] == key), None)
+    if source == 'claude':  # Its file is named by the key: read that one, not every conversation.
+        file = claude_folder(project['root'])/f'{key}.jsonl'
+        item = claude_conversation(file) if Path(key).name == key and file.is_file() else None
+    else:
+        item = next((i for i in READERS[source](project['root']) if i['key'] == key), None)
     if item is None:
         raise LookupError(f'That {source.title()} conversation is no longer on this computer.')
     existing = next((s for s in store.list(tenant_id, 'sessions') if s.get('imported_key') == f'{source}:{key}' and s.get('project_id') == project['id']), None)
@@ -245,8 +257,8 @@ def opencode_default():
     for path in (Path.home()/'.config'/'opencode'/'opencode.json', Path.home()/'.config'/'opencode'/'opencode.jsonc'):
         if path.is_file():
             try:
-                text = re.sub(r'^\s*//.*$', '', path.read_text(encoding='utf-8', errors='replace'), flags=re.M)
-                return json.loads(text).get('model')
+                from .vscode_themes import jsonc
+                return jsonc(path.read_text(encoding='utf-8', errors='replace')).get('model')
             except ValueError:
                 return None
     return None

@@ -6,14 +6,13 @@ From then on this window can switch to that machine: its API calls go through th
 adds the stored session and passes them on, so projects, sessions, agents, files and git all live and
 run on the other machine. Nothing about the other machine is stored here except its address and that session.
 """
-import json
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
 
-from .store import uid
+from .store import read_json, uid, write_json
 
 
 def path_of(directory):
@@ -21,14 +20,11 @@ def path_of(directory):
 
 
 def load(directory):
-    try:
-        return json.loads(path_of(directory).read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        return []
+    return read_json(path_of(directory), [])
 
 
 def save(directory, items):
-    path_of(directory).write_text(json.dumps(items), encoding='utf-8')
+    write_json(path_of(directory), items)
 
 
 def client(timeout=15.0):

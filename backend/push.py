@@ -11,26 +11,25 @@ import threading
 import urllib.request
 from pathlib import Path
 
+from .store import read_json, write_json
+
 EVENTS = ('done', 'failed', 'waiting')
 DEFAULTS = {'enabled': False, 'server': 'https://ntfy.sh', 'topic': None, 'events': list(EVENTS), 'details': False}
 
 
 def config(directory):
-    try:
-        stored = json.loads((Path(directory)/'push.json').read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        stored = {}
-    found = {**DEFAULTS, **{k: v for k, v in stored.items() if k in DEFAULTS}}
-    return found
+    stored = read_json(Path(directory)/'push.json', {}) or {}
+    return {**DEFAULTS, **{k: v for k, v in stored.items() if k in DEFAULTS}}
 
 
-def save(directory, **fields):
+def save(directory, new_topic=False, **fields):
+    """Change the settings. A new topic is a fresh random name: anyone subscribed to the old one stops receiving."""
     current = config(directory)
     current.update({k: v for k, v in fields.items() if k in DEFAULTS and v is not None})
-    if not current['topic']:
+    if new_topic or not current['topic']:
         current['topic'] = 'frontier-' + secrets.token_urlsafe(18).replace('_', 'x').replace('-', 'y')
     current['server'] = (current['server'] or DEFAULTS['server']).rstrip('/')
-    (Path(directory)/'push.json').write_text(json.dumps(current), encoding='utf-8')
+    write_json(Path(directory)/'push.json', current)
     return current
 
 

@@ -11,7 +11,7 @@ const blank=(projectId:string):Form=>({name:'',project_id:projectId,prompt:'',mo
 
 /** Turns that run on their own: on a schedule while Frontier is open, or when a webhook is called. */
 export default function Automations({projects,models,currentProject}:{projects:Project[];models:Model[];currentProject?:Project}){
- const {path,notify}=useWorkspace(),refresh=useRefresh();
+ const {path,notify,copy}=useWorkspace(),refresh=useRefresh();
  const list=useResource<Automation[]>('/automations');
  const agents=models.filter(m=>agentProviders.includes(m.provider));
  const [open,setOpen]=useState(false),[editing,setEditing]=useState<Automation|null>(null),[form,setForm]=useState<Form>(blank(currentProject?.id||projects[0]?.id||'')),[error,setError]=useState(''),[remove,setRemove]=useState<Automation|null>(null),[busy,setBusy]=useState('');
@@ -30,7 +30,7 @@ export default function Automations({projects,models,currentProject}:{projects:P
     <button className="icon-button" title="Run now" aria-label={`Run ${a.name} now`} disabled={busy===a.id} onClick={async()=>{setBusy(a.id);try{await api.post(path(`/automations/${a.id}/run`));await refresh();notify('Run started')}catch(e){notify((e as Error).message)}finally{setBusy('')}}}><Play size={14}/></button>
     <button className="icon-button" aria-label={`Edit ${a.name}`} onClick={()=>edit(a)}><Pencil size={14}/></button><button className="icon-button" aria-label={`Remove ${a.name}`} onClick={()=>setRemove(a)}><Trash2 size={14}/></button></div>
    <p className="automation-prompt">{a.prompt}</p>
-   <dl className="metadata"><dt>Schedule</dt><dd>{a.every?`Every ${a.every} minutes`:a.daily_at?`Daily at ${a.daily_at}`:'Webhook only'}{!a.enabled&&' · disabled'}</dd><dt>Next run</dt><dd>{a.enabled&&a.next_run_at?new Date(a.next_run_at).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'—'}</dd><dt>Last run</dt><dd>{a.last_run_at?`${date(a.last_run_at)} · ${a.last_trigger} · ${a.last_outcome}`:'Never'} · {a.runs||0} total</dd><dt>Webhook</dt><dd className="hook-row"><code>{hookUrl(a)}</code><button className="icon-button" title="Copy webhook URL" aria-label="Copy webhook URL" onClick={()=>navigator.clipboard.writeText(hookUrl(a)).then(()=>notify('Webhook URL copied')).catch(()=>notify('Clipboard unavailable'))}><Copy size={13}/></button></dd></dl>
+   <dl className="metadata"><dt>Schedule</dt><dd>{a.every?`Every ${a.every} minutes`:a.daily_at?`Daily at ${a.daily_at}`:'Webhook only'}{!a.enabled&&' · disabled'}</dd><dt>Next run</dt><dd>{a.enabled&&a.next_run_at?date(a.next_run_at):'—'}</dd><dt>Last run</dt><dd>{a.last_run_at?`${date(a.last_run_at)} · ${a.last_trigger} · ${a.last_outcome}`:'Never'} · {a.runs||0} total</dd><dt>Webhook</dt><dd className="hook-row"><code>{hookUrl(a)}</code><button className="icon-button" title="Copy webhook URL" aria-label="Copy webhook URL" onClick={()=>copy(hookUrl(a),'Webhook URL copied')}><Copy size={13}/></button></dd></dl>
   </article>})}</div>}
   <p className="muted small"><Webhook size={12}/> A webhook is a POST to its URL; the secret in the URL is the whole credential, so treat it like a password. With remote access on, the URL works from other devices.</p>
   <Modal open={open} onClose={()=>setOpen(false)} title={editing?'Edit automation':'New automation'} description="One prompt, sent as a turn whenever it fires."><form onSubmit={save}>{error&&<p className="error-text" role="alert">{error}</p>}

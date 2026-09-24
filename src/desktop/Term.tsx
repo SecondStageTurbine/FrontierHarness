@@ -1,6 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
 import {environment,onThisComputer} from '../lib/environment';
-import {invoke,isTauri} from '@tauri-apps/api/core';
+import {invoke} from '@tauri-apps/api/core';
 import {listen} from '@tauri-apps/api/event';
 import {Terminal} from '@xterm/xterm';
 import {FitAddon} from '@xterm/addon-fit';
@@ -51,7 +51,7 @@ function LocalTerm({cwd,onChip,projectId,sessionId,agents=[]}:{cwd:string;onChip
  const [error,setError]=useState('');
  async function add(){try{wire();const s=await open(cwd);const next=[...(shells.get(cwd)||[]),s];shells.set(cwd,next);setList(next);setActive(s.id);if(env.data?.activate){setTimeout(()=>{void invoke('pty_write',{id:s.id,data:env.data!.activate+'\r'}).catch(()=>{})},600)}}catch(e){setError(String((e as Error).message||e))}}
  function close(id:string){void invoke('pty_close',{id}).catch(()=>{});const s=(shells.get(cwd)||[]).find(x=>x.id===id);s?.term.dispose();const next=(shells.get(cwd)||[]).filter(x=>x.id!==id);shells.set(cwd,next);setList(next);if(active===id)setActive(next.at(-1)?.id||'')}
- useEffect(()=>{if(!list.length&&isTauri())void add()},[cwd]);
+ useEffect(()=>{if(!list.length)void add()},[cwd]);
  useEffect(()=>{
   const el=host.current,s=list.find(x=>x.id===active);if(!el||!s)return;
   el.replaceChildren(s.element);
@@ -60,7 +60,6 @@ function LocalTerm({cwd,onChip,projectId,sessionId,agents=[]}:{cwd:string;onChip
   const ro=new ResizeObserver(refit);ro.observe(el);
   return()=>ro.disconnect();
  },[active,list]);
- if(!isTauri())return <p className="terminal-help">A terminal needs the desktop app. In the browser, run your own checks with the project check runner below.</p>;
  return <div className="term-panel">
   <div className="term-tabs">{list.map(s=><button key={s.id} className={s.id===active?'selected':''} onClick={()=>setActive(s.id)}><span>{s.title}{s.exited!=null?' · exited':''}</span><X size={11} aria-label={`Close ${s.title}`} onClick={e=>{e.stopPropagation();close(s.id)}}/></button>)}<button className="icon-button" title="New terminal" aria-label="New terminal" onClick={add}><Plus size={13}/></button>{agents.length>0&&<span className="term-agent"><button className="icon-button" title="Run an agent's own command line tool here, interactively" aria-label="Run an agent here" onClick={()=>setAgentMenu(v=>!v)}><Bot size={13}/></button>{agentMenu&&<><div className="menu-backdrop" onMouseDown={()=>setAgentMenu(false)}/><div className="context-menu term-agent-menu" role="menu">{[...new Set(agents.map(a=>a.provider))].map(p=><button key={p} type="button" role="menuitem" onClick={()=>{setAgentMenu(false);typeInto(CLI_NAMES[p]||p);notify(`Running ${CLI_NAMES[p]||p} in the terminal`)}}><Bot size={12}/>{CLI_NAMES[p]||p}</button>)}</div></>}</span>}{onChip&&<button className="icon-button" title="Send the selected terminal text to the prompt" aria-label="Reference terminal selection in the prompt" onClick={()=>{const s=list.find(x=>x.id===active);const text=s?.term.getSelection().trim();if(!text){setError('Select some terminal output first.');return}setError('');onChip({kind:'terminal',text:text.slice(0,20000),label:`${s!.title} output`})}}><MessageSquarePlus size={13}/></button>}</div>
   {error&&<p className="thread-error">{error}</p>}

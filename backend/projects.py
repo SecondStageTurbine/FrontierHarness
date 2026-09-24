@@ -27,20 +27,12 @@ TEXT_EXTENSIONS = {'.py','.js','.jsx','.ts','.tsx','.json','.md','.txt','.html',
 # OS resolves '/Temp' against the current drive.
 ROOTED_ARG = re.compile(r'^(?:-{1,2}[A-Za-z][\w-]*=?)?(?:[/\\]|[A-Za-z]:)')
 
-def path_key(path):
-    """Match Windows filesystem identity without changing displayed path spelling."""
-    return path.casefold() if os.name=='nt' else path
-
 def pdf_text(data):
     """Extract a PDF's text. Shared by project files and uploaded attachments."""
     reader=PdfReader(io.BytesIO(data))
     if len(reader.pages)>100:
         raise ValueError('PDFs must contain at most 100 pages.')
     return '\n'.join(page.extract_text() or '' for page in reader.pages)
-
-def read_form(text):
-    """The text a later read() returns: Python decodes files with universal newlines."""
-    return text.replace('\r\n','\n').replace('\r','\n')
 
 class ProjectFiles:
     def __init__(self,store):
@@ -90,11 +82,19 @@ class ProjectFiles:
         project=self.store.get(tenant_id,'projects',project_id)
         return self.store.directory.parent/'Frontier Worktrees'/tenant_id/(re.sub(r'[^\w -]','',project['name'])[:40]+'-'+project_id[:6])/branch.split('/')[-1]
 
-    def resolve(self,tenant_id,project_id,relative,session_id=None):
+    def resolved_root(self,tenant_id,project_id,session_id=None):
         try:
-            root=self.root(tenant_id,project_id,session_id).resolve(strict=True)
+            return self.root(tenant_id,project_id,session_id).resolve(strict=True)
         except OSError:
             raise ValueError('The project folder is unavailable. Reconnect the drive or restore the folder.') from None
+
+    def resolve(self,tenant_id,project_id,relative,session_id=None):
+        return self.resolve_in(self.resolved_root(tenant_id,project_id,session_id),relative)
+
+    @staticmethod
+    def resolve_in(root,relative):
+        """A path inside an already-resolved project root, refused if it is excluded, linked, or leaves the root.
+        Callers touching many files resolve the root once and use this for each."""
         relative=relative.replace('\\','/')
         pieces=relative.split('/')
         if not relative or relative.startswith('/') or any(p in ('','..','.') for p in pieces) or ':' in relative:
@@ -125,6 +125,7 @@ class ProjectFiles:
         root=self.root(tenant_id,project_id,session_id)
         if not root.is_dir():
             raise ValueError('The project folder is unavailable. Reconnect the drive or restore the folder.')
+        base=self.resolved_root(tenant_id,project_id,session_id)
         result=[];refused=[]
         for directory,dirs,files in os.walk(root,followlinks=False):
             keep=[]
@@ -141,7 +142,7 @@ class ProjectFiles:
             for name in sorted(files):
                 relative=(Path(directory)/name).relative_to(root).as_posix()
                 try:
-                    file=self.resolve(tenant_id,project_id,relative,session_id)
+                    file=self.resolve_in(base,relative)
                     if file.is_file():
                         result.append({'path':relative,'size':file.stat().st_size,'text':file.suffix in TEXT_EXTENSIONS or name in ('Dockerfile','Makefile','LICENSE')})
                 except (ValueError,OSError) as exc:
@@ -262,8 +263,8 @@ class ProjectFiles:
             found.append({'file':file.name,'names':names})
         return found
 
-    def read(self,tenant_id,project_id,relative,session_id=None):
-        file=self.resolve(tenant_id,project_id,relative,session_id)
+    def read(self,tenant_id,project_id,relative,session_id=None,root=None):
+        file=self.resolve_in(root,relative) if root else self.resolve(tenant_id,project_id,relative,session_id)
         if not file.is_file():
             raise ValueError('This file is no longer available.')
         try:

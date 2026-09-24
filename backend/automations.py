@@ -5,7 +5,6 @@ half minute, and a run that was missed while Frontier was closed happens once on
 wake rather than being replayed for every missed slot.
 """
 import asyncio
-import json
 from datetime import datetime, timedelta
 
 from .store import now, uid
@@ -64,7 +63,7 @@ async def housekeeping(store, runner, tenant_id):
         until = session.get('snoozed_until')
         if until:
             try:
-                if datetime.fromisoformat(until.replace('Z', '+00:00')) <= moment:
+                if datetime.fromisoformat(until) <= moment:
                     session.pop('snoozed_until', None)
                     changed = True
             except ValueError:
@@ -72,7 +71,7 @@ async def housekeeping(store, runner, tenant_id):
                 changed = True
         if limit and not session.get('archived') and not session.get('pinned') and session.get('messages') and not runner.busy(tenant_id, session['id']):
             try:
-                updated = datetime.fromisoformat(session['updated_at'].replace('Z', '+00:00'))
+                updated = datetime.fromisoformat(session['updated_at'])
             except (ValueError, KeyError):
                 updated = None
             if updated and updated.tzinfo is None:
@@ -89,7 +88,7 @@ async def housekeeping(store, runner, tenant_id):
         cleanup = tenant.get('worktree_cleanup_days')
         if cleanup is not None and session.get('archived') and session.get('worktree') and not runner.busy(tenant_id, session['id']):
             try:
-                archived_at = datetime.fromisoformat(session['updated_at'].replace('Z', '+00:00'))
+                archived_at = datetime.fromisoformat(session['updated_at'])
                 if archived_at.tzinfo is None:
                     archived_at = archived_at.replace(tzinfo=moment.tzinfo)
             except (ValueError, KeyError):

@@ -67,6 +67,11 @@ async def current(root):
     return found
 
 
+def summary(pr):
+    """What a session remembers about its pull request."""
+    return {'number': pr['number'], 'url': pr['url'], 'state': pr['state'], 'title': pr['title']}
+
+
 async def open_prs(root):
     out, _, _ = await run(root, 'pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,title,url,headRefName,baseRefName')
     return json.loads(out or '[]')
