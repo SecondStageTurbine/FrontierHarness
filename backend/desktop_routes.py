@@ -13,7 +13,7 @@ from .schemas import (ProjectInput, SessionInput, SessionPatch, InstructionInput
                       DevServerInput, RewindInput, ImportInput, CloneInput, CatchupInput, ResumeCliInput, BoardTaskInput, BoardTaskPatch)
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
-from . import gitops, automations, pullrequests, devserver, maintenance, board
+from . import gitops, automations, pullrequests, devserver, maintenance, board, skill_catalog
 import secrets
 from datetime import datetime, timedelta, timezone
 from .adaptive import ADAPTIVE
@@ -127,6 +127,38 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
     def list_projects(tenant_id:str,request:Request):
         scoped(request,tenant_id)
         return store.list(tenant_id,'projects')
+
+    @app.get('/api/t/{tenant_id}/dashboard')
+    async def dashboard(tenant_id:str,request:Request):
+        """Every project at a glance: what its agents are doing, its dev server, its branch, its board, and when it last moved."""
+        scoped(request,tenant_id)
+        projects=store.list(tenant_id,'projects')
+        sessions=store.list(tenant_id,'sessions')
+        tasks=store.list(tenant_id,'board')
+        active={sid for (tid,sid),task in list(runner.turns.items()) if tid==tenant_id and not task.done()}
+        async def git(root):
+            try:
+                found=await asyncio.wait_for(gitops.status(root),5)
+            except (gitops.GitError,OSError,TimeoutError):
+                return None
+            return {'branch':found['branch'],'changes':len(found['entries']),'ahead':found['ahead'],'behind':found['behind']} if found.get('repo') else None
+        gits=await asyncio.gather(*(git(p['root']) if Path(p['root']).is_dir() else asyncio.sleep(0) for p in projects))
+        rank={'working':3,'waiting':2,'done':1}
+        rows=[]
+        for project,repo in zip(projects,gits):
+            mine=[s for s in sessions if s.get('project_id')==project['id'] and not s.get('team_parent') and not s.get('archived')]
+            states=[st for st in (session_sidebar_state(s,active) for s in mine) if st]
+            latest=max(mine,key=lambda s:s.get('updated_at') or '',default=None)
+            reply=next((m for m in reversed((latest or {}).get('messages') or []) if m.get('content')),None)
+            server=devserver.get(project['root'])
+            dev={k:v for k,v in server.status().items() if k!='output'} if server else {'running':False}
+            counts={status:sum(1 for t in tasks if t.get('project_id')==project['id'] and t.get('status')==status) for status in board.STATUSES}
+            rows.append({'id':project['id'],'name':project['name'],'root':project['root'],'missing':not Path(project['root']).is_dir(),
+                         'state':max(states,key=rank.get) if states else None,'working':sum(1 for s in states if s=='working'),
+                         'sessions':len(mine),'last_activity':(latest or {}).get('updated_at') or project.get('updated_at'),
+                         'last_session':{'id':latest['id'],'name':latest['name'],'snippet':' '.join((reply or {}).get('content','').split())[:160]} if latest else None,
+                         'dev':{**dev,'command':project.get('dev_command')},'git':repo,'board':counts})
+        return sorted(rows,key=lambda r:r['last_activity'] or '',reverse=True)
 
     @app.get('/api/t/{tenant_id}/activity')
     def activity(tenant_id:str,request:Request):
@@ -393,13 +425,35 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
             body=re.sub(r'^---.*?---\s*','',text,flags=re.S)
             return next((line.strip() for line in body.splitlines() if line.strip() and not line.startswith('#')),'')[:200]
         for scope,base in [('project',Path(root)),('user',Path.home())]:
-            for provider,folder in [('claude','.claude'),('codex','.codex'),('gemini','.gemini')]:
+            for provider,folder in [('claude','.claude'),('codex','.codex'),('codex','.agents'),('gemini','.gemini')]:
                 home=base/folder
                 for skill in sorted((home/'skills').glob('*/SKILL.md')) if (home/'skills').is_dir() else []:
                     found.append({'name':skill.parent.name,'kind':'skill','scope':scope,'provider':provider,'description':describe(skill),'path':str(skill)})
                 for command in sorted((home/'commands').glob('*.md')) if (home/'commands').is_dir() else []:
                     found.append({'name':command.stem,'kind':'command','scope':scope,'provider':provider,'description':describe(command),'path':str(command)})
         return found
+
+    # ── Skills Frontier can install into a project ──
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/skill-catalog')
+    def skill_catalog_list(tenant_id:str,project_id:str,request:Request):
+        scoped(request,tenant_id)
+        return skill_catalog.listing(files.root(tenant_id,project_id,None))
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/skill-catalog/{name}')
+    def skill_catalog_install(tenant_id:str,project_id:str,name:str,request:Request):
+        scoped(request,tenant_id)
+        try:
+            return skill_catalog.install(files.root(tenant_id,project_id,None),name)
+        except KeyError:
+            raise HTTPException(404,'No such skill in the catalog.') from None
+
+    @app.delete('/api/t/{tenant_id}/projects/{project_id}/skill-catalog/{name}')
+    def skill_catalog_remove(tenant_id:str,project_id:str,name:str,request:Request):
+        scoped(request,tenant_id)
+        try:
+            return skill_catalog.remove(files.root(tenant_id,project_id,None),name)
+        except KeyError:
+            raise HTTPException(404,'No such skill in the catalog.') from None
 
     @app.get('/api/t/{tenant_id}/projects/{project_id}/skills')
     def skills(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):

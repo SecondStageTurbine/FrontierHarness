@@ -4,6 +4,7 @@ import {useWorkspace,useResource,useRefresh} from '../../app/context';
 import {Field,Modal,Confirm,PageHeading} from '../../components/ui';
 import {api} from '../../lib/api';
 import type {McpServer,Skill,Project} from '../../types';
+import {SkillCatalog} from './SkillCatalog';
 import {useQuery} from '@tanstack/react-query';
 
 type Form={name:string;transport:'stdio'|'http';command:string;args:string;env:string;url:string;enabled:boolean};
@@ -58,6 +59,8 @@ export default function Mcp({project}:{project?:Project}){
   {!project?<p className="muted">Open a project to see what its agents find.</p>:skills.isPending?<p className="muted">Looking…</p>:!skills.data?.length?<p className="muted">Nothing found. Claude reads <code>.claude/skills/&lt;name&gt;/SKILL.md</code> and <code>.claude/commands/&lt;name&gt;.md</code> in the project and in your home folder; Codex and Gemini read the same layout under <code>.codex</code> and <code>.gemini</code>.</p>:
    <div className="skill-list">{skills.data.map(s=><div key={s.path} className="skill-row"><span className={`skill-kind ${s.kind}`}>{s.kind==='command'?'/':<Terminal size={11}/>}</span><div><strong>{s.kind==='command'?`/${s.name}`:s.name}</strong>{s.description&&<p>{s.description}</p>}</div><small>{s.provider} · {s.scope}</small></div>)}</div>}
   <p className="muted small">Type <code>/</code> at the start of the composer to pick a command; the agent runs it as its own slash command.</p>
+  <h3 id="skills-catalog"><Sparkles size={16}/> Skills catalog{project&&<span className="muted"> · install into {project.name}</span>}</h3>
+  {project?<SkillCatalog project={project}/>:<p className="muted">Open a project to install skills into it.</p>}
   <Modal open={open} onClose={()=>setOpen(false)} title={editing?'Edit MCP server':'Add MCP server'} description="Given to every agent on every turn in this workspace."><form onSubmit={save}>{error&&<p className="error-text" role="alert">{error}</p>}
    <div className="form-grid"><Field label="Name" hint="Letters, digits, dashes."><input required pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" maxLength={60} value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="graft"/></Field><Field label="Transport"><select value={form.transport} onChange={e=>setForm({...form,transport:e.target.value as 'stdio'|'http'})}><option value="stdio">Command (stdio)</option><option value="http">HTTP endpoint</option></select></Field></div>
    {form.transport==='stdio'?<><Field label="Command"><input required value={form.command} onChange={e=>setForm({...form,command:e.target.value})} placeholder="npx"/></Field><Field label="Arguments" hint="Space separated."><input value={form.args} onChange={e=>setForm({...form,args:e.target.value})} placeholder="-y @scope/server"/></Field><Field label="Environment" hint="One KEY=value per line. Stored in plain text on this device, so keep secrets in the tool's own config where you can."><textarea rows={3} value={form.env} onChange={e=>setForm({...form,env:e.target.value})}/></Field></>

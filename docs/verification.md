@@ -504,3 +504,13 @@ checked in the browser suite through `window.open`; in the desktop shell they op
 named `popout-*`, which the capability file now covers; that path was compiled but not opened here,
 because running a second copy of Frontier would hand off to the one in use. 147 tests and the
 browser suite pass.
+
+Version 0.15.0 adds the projects dashboard, starter prompts and the skills catalog. The dashboard
+endpoint was checked with a busy and a quiet project and with a real dev server process: it reports
+the running server and the port it printed, and stops it. Building it found that a repository with
+no commits yet reported its branch as "No" (git prints "## No commits yet on main"); the branch is now
+read correctly, in the Git panel too. The catalog was checked installing a skill to both
+`.claude/skills` and `.agents/skills`, where Frontier's own skill listing then finds it for Claude and
+for Codex (`.agents/skills` is where Codex looks in a repository), refusing to overwrite or delete a
+copy edited in the project, and removing an unedited one. The browser suite picks a starter prompt,
+installs a skill from the catalog, and opens a project from the dashboard. 150 tests pass.

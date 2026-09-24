@@ -151,6 +151,14 @@ Right-click a session to rename, pin, archive, or snooze it for an hour or until
 
 Closing the window keeps Frontier running in the system tray: automations keep firing, finished turns still notify you, and the tray icon's menu offers **Open Frontier** and **Quit Frontier**. A left click on the icon reopens the window. **Settings → General → Window** turns this off, after which closing the window quits. Launching Frontier while it is already running brings the existing window to the front instead of starting a second copy.
 
+### Projects dashboard
+
+**All projects** in the sidebar shows every project as a card, most recently active first: whether its agents are working, need you, or are up to date; the last session and the last thing said in it; its git branch and uncommitted changes; its open board tasks; and its dev server, with start, stop, restart and open-in-browser. Click a project or its last session to go there.
+
+### Starter prompts and the skills catalog
+
+A new session offers starter prompts by kind of work (Build, Fix, Review, Explore, Tests, Docs & Git); picking one fills the composer with a prompt to finish and send. **Settings → MCP & Skills → Skills catalog** installs curated skills into the open project with one click: writing tests, reviewing changes, systematic debugging, checking in a browser, a security audit, safe refactoring, docs, commit messages, release notes, and explaining the architecture. Each is written to `.claude/skills/<name>/SKILL.md` and `.agents/skills/<name>/SKILL.md`, where Claude Code, Codex and OpenCode find it and use it when a task matches; commit it to share it. Frontier removes only a copy nobody edited.
+
 ### Question cards
 
 When Claude needs a decision only you can make, it pauses and asks in the conversation instead of guessing. The card shows the question, any suggested answers as buttons, and a box for your own; the turn waits, up to an hour, and continues with your answer. **Let it decide** tells it to use its judgement and say what it assumed. Under Edit files this is Claude's own question tool, routed to Frontier; under Read only and Full auto it asks through Frontier's `ask_user` tool. Claude only: the other tools cannot hold a turn open for an answer.
@@ -270,6 +278,7 @@ The Python suite exercises workspace boundaries, a turn's file record, agent swi
 | The approval MCP server Claude calls during a turn | `backend/permission_tool.py` |
 | Frontier's own MCP server for other agents | `backend/frontier_mcp.py` |
 | The project task board | `backend/board.py` |
+| The skills catalog | `backend/skill_catalog.py` |
 | Team mode: plan, delegate, apply, review | `backend/team.py` |
 | Pull requests through the GitHub CLI | `backend/pullrequests.py` |
 | The project's dev server | `backend/devserver.py` |

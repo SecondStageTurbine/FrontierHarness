@@ -194,5 +194,29 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await expect(popup.locator('.task-column.doing')).toContainText('Add a dark theme',{timeout:15000});
  await expect(page.locator('.context-inspector')).toHaveCount(0);
  await popup.close();
+
+ // Starter prompts by task: a Fix prompt fills the composer to edit before sending.
+ await page.locator('.new-session-button').click();
+ await page.locator('.starter-tabs').getByRole('tab',{name:'Fix',exact:true}).click();
+ await page.screenshot({path:'test-results/starters.png'});
+ await page.locator('.starter-prompts .suggestion-grid button',{hasText:'Fix a bug'}).click();
+ await expect(page.getByLabel('Ask Frontier',{exact:true})).toHaveValue(/Reproduce it, find the root cause/);
+ await page.getByLabel('Ask Frontier',{exact:true}).fill('');
+
+ // The skills catalog installs a skill into the project, where the agents find it.
+ await page.locator('.starter-tabs').getByRole('button',{name:'Skills catalog'}).click();
+ await page.getByRole('button',{name:'Install Write tests',exact:true}).click();
+ await expect(page.locator('.catalog-row',{hasText:'Write tests'})).toContainText('Installed');
+ await expect(page.locator('.skill-list')).toContainText('write-tests');
+ await page.keyboard.press('Escape');
+
+ // The projects dashboard: every project with its state, last session and dev server.
+ await page.getByRole('button',{name:'All projects'}).click();
+ const card=page.locator('.dashboard-card',{hasText:'Authentication project'});
+ await expect(card).toContainText('No dev server command');
+ await expect(card.locator('.dashboard-last')).toContainText('Style the button, but ask me first.');
+ await page.screenshot({path:'test-results/dashboard.png'});
+ await card.locator('.dashboard-name').click();
+ await expect(page.locator('.projects-dashboard')).toHaveCount(0);
  expect(errors).toEqual([]);
 });

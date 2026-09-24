@@ -70,7 +70,8 @@ async def status(root):
     raw = await run(root, 'status', '--porcelain=v1', '-z', '--branch', '--untracked-files=all')
     tokens = raw.split('\0')
     header = tokens.pop(0) if tokens and tokens[0].startswith('## ') else '## HEAD (no branch)'
-    branch = re.sub(r'\.\.\..*$', '', header[3:]).split(' ')[0]
+    # A repository with no commits reports '## No commits yet on main'; the branch is the last word there.
+    branch = re.sub(r'\.\.\..*$', '', header[3:].replace('No commits yet on ', '')).split(' ')[0]
     ahead = int(m.group(1)) if (m := re.search(r'ahead (\d+)', header)) else 0
     behind = int(m.group(1)) if (m := re.search(r'behind (\d+)', header)) else 0
     upstream = m.group(1) if (m := re.search(r'\.\.\.(\S+)', header)) else None
@@ -86,7 +87,7 @@ async def status(root):
             i += 1  # The original name follows as its own token; the panel shows where it is now.
         entries.append({'path': path, 'staged': x not in ' ?', 'unstaged': y != ' ' or x == '?',
                         'status': STATUS_WORDS.get(y if y not in ' ' else x, 'modified') if x != '?' else 'untracked'})
-    return {'repo': True, 'available': True, 'root': top, 'branch': branch.replace('No commits yet on ', ''), 'upstream': upstream,
+    return {'repo': True, 'available': True, 'root': top, 'branch': branch, 'upstream': upstream,
             'ahead': ahead, 'behind': behind, 'entries': entries, 'has_head': await has_head(root)}
 
 
