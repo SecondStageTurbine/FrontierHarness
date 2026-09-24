@@ -33,6 +33,8 @@ MODE_LABELS = {'read': 'Read only', 'edit': 'Edit files', 'auto': 'Full auto'}
 # Oldest turns are dropped rather than refusing to continue: a conversation that stops being
 # answerable is worse than one that has forgotten its beginning, and the model is told.
 TRANSCRIPT_LIMIT = 120_000
+# The shortest time an agent gets for one turn, in any project. Engine builds and test gates run long.
+MIN_TURN_MINUTES = 90
 HANDOVER = (
     'You are continuing a conversation that a different agent was handling. The conversation so '
     'far follows. Your working directory is the project it concerns and is the shared state '
@@ -457,7 +459,8 @@ class AgentRunner:
         token = secrets.token_urlsafe(24)
         self.turn_tokens[token] = (tenant_id, project_id, session_id, message_id)
         extras = self.extras(tenant_id, token, mode, project)
-        extras['timeout'] = int(project.get('turn_minutes') or 30) * 60
+        # Every project gets at least 90 minutes; a project may ask for more, never less.
+        extras['timeout'] = max(MIN_TURN_MINUTES, int(project.get('turn_minutes') or 0)) * 60
         rules = (self.store.tenant_internal(tenant_id) or {}).get('rules')
         memory = project.get('memory')
         environment = (self.files.python_env(root) or {}).get('note')

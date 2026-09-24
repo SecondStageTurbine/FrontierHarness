@@ -158,7 +158,11 @@ async def test_a_project_can_give_its_turns_more_time(tmp_path):
     agent = ScriptedAgent()
     store, runner, project, session, _ = make(tmp_path, agent)
     project = store.get('tenant-a', 'projects', project['id'])
-    project['turn_minutes'] = 90
+    project['turn_minutes'] = 150
     store.put('tenant-a', 'projects', project)
     await turn(runner, store, 'tenant-a', project, session, 'Long build.', 'claude_cli', 'read')
+    assert agent.calls[-1]['extras']['timeout'] == 150*60
+    project['turn_minutes'] = 20  # Set before the floor existed: raised to the floor, never lower.
+    store.put('tenant-a', 'projects', project)
+    await turn(runner, store, 'tenant-a', project, session, 'Again.', 'claude_cli', 'read')
     assert agent.calls[-1]['extras']['timeout'] == 90*60

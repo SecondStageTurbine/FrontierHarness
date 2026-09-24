@@ -41,7 +41,7 @@ SIGNIN_COMMANDS = {'claude_cli': 'claude', 'codex_cli': 'codex login', 'opencode
 # reset if idling an hour ever costs more than the two seconds a premature retry costs.
 COOLDOWN_SECONDS = 3600
 # An agentic turn reads, edits and runs checks, so it is bounded in minutes rather than seconds.
-TURN_TIMEOUT = 1800
+TURN_TIMEOUT = 5400
 # The only CLI output this module reads rather than discards. A subscription with nothing left
 # is a routine condition, not a broken install, and telling the two apart is what lets a turn
 # move to the next login instead of stopping. Matched text is classified and then dropped.

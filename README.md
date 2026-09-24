@@ -176,7 +176,7 @@ Closing the window keeps Frontier running in the system tray: automations keep f
 - One turn at a time per conversation. A second backend on the same data folder says so and exits. A turn interrupted by a restart is closed out, never replayed: its subprocess died with the application, and whatever it had already written to the folder is still there.
 - The Terminal panel in the desktop app is your own shell, running as you with no restriction beyond your account's. In a browser it falls back to a bounded project check runner: Python pytest, unittest, compileall, and npm test/build/test/lint/typecheck, with a 120-second timeout and no shell operators. Both are separate from the commands an agent runs through its own tool.
 - The approval tool speaks to the backend over loopback with a token minted for that one turn; a webhook's secret is its only credential; remote access is plain HTTP behind the user's password.
-- File views are bounded: up to 2,000 tree entries, UTF-8 text under 300 KB, and text-based PDFs up to 5 MB and 100 pages, read as extracted text. A turn takes at most 30 minutes before it is stopped.
+- File views are bounded: up to 2,000 tree entries, UTF-8 text under 300 KB, and text-based PDFs up to 5 MB and 100 pages, read as extracted text. A turn may run for 90 minutes before it is stopped; Project settings can raise that for a project, up to 8 hours.
 
 Native application state lives under `%LOCALAPPDATA%\dev.frontier.harness`. Managed project folders and worktrees are stored in the adjacent `Frontier Projects` and `Frontier Worktrees` directories, segregated by workspace. Back up the database and `secret.key` together. Deleting workspace records does not delete project folders.
 
