@@ -162,7 +162,8 @@ class Team:
             self.runner.store.event(self.tenant_id, self.session_id, 'team.update', note, message_id=self.message_id)
 
     async def ask_lead(self, prompt):
-        result = await self.runner.broker.invoke_agent(self.tenant_id, self.lead, prompt, 'read', self.root)
+        result = await self.runner.broker.invoke_agent(self.tenant_id, self.lead, prompt, 'read', self.root,
+                                                       self.runner.protections(self.tenant_id, self.project_id))
         self.tokens[0] += result.input_tokens or 0
         self.tokens[1] += result.output_tokens or 0
         return result.text or ''

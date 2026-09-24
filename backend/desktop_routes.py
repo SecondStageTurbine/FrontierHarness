@@ -313,7 +313,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         prompt=('Write a git commit message for the staged diff below. Reply with the message only: a summary line '
                 'under 72 characters, then optionally a blank line and a short body in plain sentences. No code fences, '
                 'no preamble, and do not run any commands.\n\n'+diff)
-        result=await runner.broker.invoke_agent(tenant_id,config,prompt,'read',str(root))
+        result=await runner.broker.invoke_agent(tenant_id,config,prompt,'read',str(root),runner.protections(tenant_id,project_id))
         text=re.sub(r'^```[a-z]*\n|```$','',(result.text or '').strip()).strip()
         if not text:
             raise ValueError(f'{config["name"]} returned no message.')
@@ -666,7 +666,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
             prompt=('The user is coming back to this project. Using only the facts below, write a short catch-up in markdown: '
                     'what was done and by which agent, what changed in the code, what was left unfinished or failed, and the most '
                     'sensible next step. Under 250 words. Do not run commands or change files.\n\nFACTS SINCE '+since+':\n'+facts)
-            reply=await runner.broker.invoke_agent(tenant_id,config,prompt,'read',project['root'])
+            reply=await runner.broker.invoke_agent(tenant_id,config,prompt,'read',project['root'],runner.protections(tenant_id,project['id']))
             result.update(summary=(reply.text or '').strip(),model_name=config['name'])
         return result
 
@@ -911,7 +911,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
                 'On the first line write exactly one of APPROVE, COMMENT or REQUEST_CHANGES: request changes only for a real defect. Then a blank line, '
                 'then the review in markdown: a one-paragraph summary, then each finding with file and line, what goes wrong and the fix, most serious first. '
                 'Do not invent problems; if it is good, say so briefly.\n\nDIFF:\n'+diff)
-        result=await runner.broker.invoke_agent(tenant_id,config,prompt,'read',str(root))
+        result=await runner.broker.invoke_agent(tenant_id,config,prompt,'read',str(root),runner.protections(tenant_id,project_id))
         text=(result.text or '').strip()
         first,_,rest=text.partition('\n')
         event={'APPROVE':'approve','REQUEST_CHANGES':'request_changes','COMMENT':'comment'}.get(first.strip().strip('*').upper().replace(' ','_'))
@@ -966,7 +966,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         prompt=('Write a pull request title and description for the branch changes below. Reply with the title on the first line, then a blank line, '
                 'then a description in markdown: what changed and why, how it was tested, anything reviewers should look at. No code fences, no preamble, do not run commands.'
                 f'\n\nCOMMITS:\n{log[:4000]}\n\nFILES:\n{stat[:4000]}\n\nDIFF:\n{body[:24000]}')
-        result=await runner.broker.invoke_agent(tenant_id,config,prompt,'read',str(root))
+        result=await runner.broker.invoke_agent(tenant_id,config,prompt,'read',str(root),runner.protections(tenant_id,project_id))
         text=(result.text or '').strip()
         title,_,rest=text.partition('\n')
         return {'title':title.strip().lstrip('#').strip()[:200] or current.get('branch'),'body':rest.strip()[:20000],'model_name':config['name']}

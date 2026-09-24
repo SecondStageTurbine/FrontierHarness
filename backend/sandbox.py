@@ -86,8 +86,11 @@ def low_home():
     return base.parent/'LocalLow'/'Frontier'
 
 
-def tool_state(provider):
-    """Where each tool keeps its sessions and sign-in: it must still write there inside the sandbox."""
+def tool_state(provider, login=None):
+    """Where each tool keeps its sessions and sign-in: it must still write there inside the sandbox.
+    A named login keeps all of it in its own folder."""
+    if login:
+        return [Path(login)]
     home = Path.home()
     return {'claude_cli': [home/'.claude', home/'.claude.json'], 'codex_cli': [home/'.codex'],
             'opencode_cli': [home/'.local'/'share'/'opencode', home/'.config'/'opencode', home/'.cache'/'opencode'],
@@ -108,14 +111,14 @@ def labelled_record(directory):
     return Path(directory)/'sandbox-labelled.json'
 
 
-def prepare(directory, root, provider):
+def prepare(directory, root, provider, login=None):
     """Label what the confined tool must be able to write, once per path. Returns the environment it needs."""
     record = labelled_record(directory)
     done = set(read_json(record, []) or [])
     scratch = low_home()
     for sub in ('tmp', 'npm-cache', 'pip-cache', 'uv-cache', 'yarn-cache'):
         (scratch/sub).mkdir(parents=True, exist_ok=True)
-    for path in [Path(root), *tool_state(provider)]:
+    for path in [Path(root), *tool_state(provider, login)]:
         key = str(path.resolve()).lower() if path.exists() else None
         if key and key not in done and label(path):
             done.add(key)

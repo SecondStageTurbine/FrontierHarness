@@ -576,3 +576,12 @@ logins in with different usage (80% and 20% of the session, 60% and 40% of the w
 each pooled window, the earlier reset, and both logins listed; when one login is rate limited, the pool
 is the one that answered and the refusal stays on its own row. Live, this machine's single logins read
 as before. 163 tests and three browser suites pass.
+
+Version 0.19.3 fixes two problems the 0.19.2 review found. A Gemini login with a named account was
+silently ignored and its Sign in button failed: Gemini CLI reads GEMINI_CLI_HOME as its home, which
+Frontier now sets for such a login (checked live: Gemini created its .gemini folder there and asked for
+that login's own sign-in). Under the file sandbox, a named login's folder is now the one kept writable.
+Agent calls outside a conversation turn (commit message, pull request description and review draft,
+catch-up summary, remembering a session, compacting, and the team lead) now carry the project's
+sandbox and its .env protection, as turns do; a test checks the extras such a call receives.
+165 tests pass.

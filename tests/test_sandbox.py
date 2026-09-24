@@ -70,3 +70,43 @@ def test_codex_hands_its_own_sandbox_to_frontiers_and_telemetry_refusals_stay_qu
     net = sandbox.NetworkFilter([])
     net.refuse('http-intake.logs.us5.datadoghq.com'); net.refuse('example.com')
     assert net.blocked == ['example.com']
+
+
+def test_a_named_gemini_login_gets_its_own_home_and_signs_in(tmp_path):
+    from fastapi.testclient import TestClient
+    from backend.app import create_app
+    from backend.broker import account_env
+    from tests.harness import ScriptedAgent
+    from tests.test_api import setup
+    with TestClient(create_app(str(tmp_path/'state'), ScriptedAgent())) as c:
+        t = setup(c)
+        model = c.post(f'/api/t/{t}/models', json={'name': 'Gemini (work)', 'provider': 'gemini_cli', 'model_name': 'gemini-2.5-pro', 'account': 'work'}).json()
+        signin = c.post(f'/api/t/{t}/models/{model["id"]}/signin')
+        assert signin.status_code == 200 and signin.json()['variable'] == 'GEMINI_CLI_HOME' and signin.json()['command'].endswith('gemini')
+    home = tmp_path/'state'/'subscriptions'/t/'gemini_cli'/'work'
+    assert home.is_dir()
+    assert sandbox.tool_state('gemini_cli', str(home)) == [home] and sandbox.tool_state('claude_cli')[0].name == '.claude'
+
+
+def test_agent_calls_outside_a_turn_carry_the_projects_protections(tmp_path):
+    import time
+    from fastapi.testclient import TestClient
+    from backend.app import create_app
+    from tests.harness import ScriptedAgent
+    from tests.test_api import setup, agent as connect_agent
+    agent = ScriptedAgent(reply='- Uses tabs.')
+    with TestClient(create_app(str(tmp_path/'state'), agent)) as c:
+        t = setup(c); a = connect_agent(c, t)
+        root = tmp_path/'project'; root.mkdir()
+        p = c.post(f'/api/t/{t}/projects', json={'name': 'P', 'root': str(root)}).json()
+        c.put(f'/api/t/{t}/projects/{p["id"]}/settings', json={'sandbox': {'network': 'allowlist', 'allow': ['pypi.org']}})
+        s = c.post(f'/api/t/{t}/projects/{p["id"]}/sessions', json={'name': 'Work'}).json()
+        c.post(f'/api/t/{t}/projects/{p["id"]}/sessions/{s["id"]}/instructions', json={'content': 'Format the code.', 'model_id': a, 'mode': 'edit'})
+        for _ in range(200):
+            if c.get(f'/api/t/{t}/projects/{p["id"]}/sessions/{s["id"]}').json()['messages'][-1]['status'] != 'running':
+                break
+            time.sleep(0.02)
+        c.post(f'/api/t/{t}/projects/{p["id"]}/sessions/{s["id"]}/remember')
+    helper = agent.calls[-1]
+    assert helper['mode'] == 'read' and helper['extras']['protect_env'] is True
+    assert helper['extras']['sandbox'] == {'files': False, 'network': 'allowlist', 'allow': ['pypi.org']}

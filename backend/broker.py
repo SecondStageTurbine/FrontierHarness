@@ -34,7 +34,7 @@ CLI_TOOLS = {
 # Each agent tool reads the subscription it is signed in as out of one directory. Pointing that
 # variable at a directory per named account is the whole mechanism behind connecting more than
 # one subscription to the same provider: nothing is copied, and no credential is read here.
-ACCOUNT_HOME_VARS = {'claude_cli': ('CLAUDE_CONFIG_DIR',), 'codex_cli': ('CODEX_HOME',), 'opencode_cli': ('XDG_DATA_HOME',)}
+ACCOUNT_HOME_VARS = {'claude_cli': ('CLAUDE_CONFIG_DIR',), 'codex_cli': ('CODEX_HOME',), 'opencode_cli': ('XDG_DATA_HOME',), 'gemini_cli': ('GEMINI_CLI_HOME',)}
 SIGNIN_COMMANDS = {'claude_cli': 'claude', 'codex_cli': 'codex login', 'opencode_cli': 'opencode auth login', 'gemini_cli': 'gemini'}
 # A spent subscription is skipped for this long before it is tried again. ponytail: a fixed
 # window, because the three CLIs do not report a reset time in any shared form. Parse the real
@@ -464,7 +464,8 @@ class ModelBroker:
         extras, added, net = dict(extras), {}, None
         # Codex under Read only keeps its own read-only sandbox, which is stricter than confining writes to the folder.
         if policy['files'] and not (config['provider'] == 'codex_cli' and mode == 'read'):
-            added.update(await asyncio.to_thread(sandbox.prepare, self.store.directory, root, config['provider']))
+            login = next(iter(account_env(self.store, tenant_id, config).values()), None)
+            added.update(await asyncio.to_thread(sandbox.prepare, self.store.directory, root, config['provider'], login))
             extras.update(argv_prefix=sandbox.launcher(), scratch_dir=added['TEMP'], outer_sandbox=True)
         if policy['network'] != 'open':
             net = sandbox.NetworkFilter(sandbox.PROVIDER_HOSTS.get(config['provider'], []) + sandbox.tool_hosts(extras.get('mcp_servers'))

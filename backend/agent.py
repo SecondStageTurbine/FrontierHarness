@@ -275,6 +275,16 @@ class AgentRunner:
         self.turn_tokens: dict[str, tuple] = {}
         self.approvals: dict[str, dict] = {}
 
+    def protections(self, tenant_id, project_id):
+        """The project's own limits, for agent calls outside a conversation turn (commit messages, pull requests,
+        summaries, the team lead): its sandbox and keeping .env files from Claude, whatever the call is for."""
+        project = self.store.get(tenant_id, 'projects', project_id)
+        found = {'protect_env': bool(project.get('protect_env', True))}
+        confined = sandbox.policy(project)
+        if confined['files'] or confined['network'] != 'open':
+            found['sandbox'] = confined
+        return found
+
     def undo_changes(self, tenant_id, project_id, session_id, changes):
         """Write back each change's recorded before-text, deleting files the turn added. The fallback when there is no checkpoint."""
         restored = []
@@ -782,7 +792,8 @@ class AgentRunner:
                   'conventions, decisions and their reasons, where things live, commands that work, gotchas. Plain bullets, each under '
                   '30 words, nothing about this conversation itself. Reply with the bullets only.\n\n'
                   + (('Summary of earlier messages:\n' + summary + '\n\n') if summary else '') + '\n\n'.join(transcript(visible)))
-        result = await self.broker.invoke_agent(tenant_id, config, prompt, 'read', str(self.files.root(tenant_id, project_id, session_id)))
+        result = await self.broker.invoke_agent(tenant_id, config, prompt, 'read', str(self.files.root(tenant_id, project_id, session_id)),
+                                                self.protections(tenant_id, project_id))
         bullets = [line.strip() for line in (result.text or '').splitlines() if line.strip().startswith(('-', '*', '•'))]
         if not bullets:
             raise ValueError(f'{config["name"]} returned nothing to remember.')
@@ -834,7 +845,8 @@ class AgentRunner:
             raise ValueError('There is nothing to compact yet.')
         config = self.writer(tenant_id, session, project)
         prompt = COMPACT_ASK + ('\n\nSummary of messages compacted earlier:\n' + summary if summary else '') + '\n\n' + '\n\n'.join(transcript(done))
-        result = await self.broker.invoke_agent(tenant_id, config, prompt, 'read', str(self.files.root(tenant_id, project_id, session_id)))
+        result = await self.broker.invoke_agent(tenant_id, config, prompt, 'read', str(self.files.root(tenant_id, project_id, session_id)),
+                                                self.protections(tenant_id, project_id))
         text = (result.text or '').strip()
         if not text:
             raise ValueError(f'{config["name"]} returned no summary.')
