@@ -129,6 +129,7 @@ class ProjectSettings(StrictModel):
     protect_env: bool = True
     dev_command: str | None = Field(default=None, max_length=300)
     memory: str | None = Field(default=None, max_length=20000)
+    turn_minutes: int | None = Field(default=None, ge=5, le=240)
 
 class PrCreateInput(StrictModel):
     title: str = Field(min_length=1, max_length=200)

@@ -52,7 +52,11 @@ COMPACT_ASK = ('Write a handoff summary of the conversation below for an agent t
 # ended their own turn with it, before the installer ran. The host is named so the agent knows.
 HOST = ('You are running inside Frontier, a desktop application; this turn is one of its subprocesses. '
         'Stopping, killing, reinstalling or updating Frontier ends this turn before anything after it runs. '
-        'If asked to install or update Frontier, build it and tell the user to run the installer themselves.')
+        'If asked to install or update Frontier, build it and tell the user to run the installer themselves. '
+        'Your turn ends the moment you give your final reply, and you cannot send anything afterwards: there is no '
+        '"I will report back". Anything you start in the background, a build, a test run, an editor in batch mode, is '
+        'stopped when your turn ends. Run long commands to completion inside this turn and report their actual result; '
+        'if something truly cannot finish in this turn, say plainly that it did not finish and what the user should check.')
 # Verified against Codex 0.155: workspace-write keeps every .git directory read-only whatever
 # writable_roots says, and its restricted token cannot reach the credential store a push needs.
 # Claude's acceptEdits has no one to approve a shell command. So the agent is told, rather than
@@ -412,7 +416,8 @@ class AgentRunner:
                 classifier = self.store.get(tenant_id, 'models', tenant['router_model_id'])
             except Exception:
                 classifier = None  # A classifier that was disconnected is not a reason to refuse a turn.
-        repo = adaptive.repository_signals(self.files, tenant_id, project_id)
+        # Folder scans read up to thousands of files; off the event loop, so the window stays responsive.
+        repo = await asyncio.to_thread(adaptive.repository_signals, self.files, tenant_id, project_id)
         requirements, classified_by = await adaptive.classify(content, repo, classifier, self.store.decrypt)
         cooling = lambda model_id: self.broker.cooldowns.get((tenant_id, model_id), 0) > time.monotonic()
         # A local model whose server is not running is not available, however good its profile:
@@ -452,11 +457,12 @@ class AgentRunner:
         token = secrets.token_urlsafe(24)
         self.turn_tokens[token] = (tenant_id, project_id, session_id, message_id)
         extras = self.extras(tenant_id, token, mode, project)
+        extras['timeout'] = int(project.get('turn_minutes') or 30) * 60
         rules = (self.store.tenant_internal(tenant_id) or {}).get('rules')
         memory = project.get('memory')
         environment = (self.files.python_env(root) or {}).get('note')
         # Read only cannot change the folder, so it is not read twice to prove that.
-        before = fingerprint(self.files, tenant_id, project_id, session_id) if mode != 'read' else {}
+        before = await asyncio.to_thread(fingerprint, self.files, tenant_id, project_id, session_id) if mode != 'read' else {}
         # In a repository, the whole working tree is also checkpointed as hidden git objects, so a
         # turn can be put back exactly, binaries included, without touching the user's branch.
         before_ref = await self.checkpoint(root, f'Frontier: before turn {message_id}') if mode != 'read' else None
@@ -511,7 +517,7 @@ class AgentRunner:
                         continue
                 if not adaptive_turn:
                     break
-                changed = changes_between(before, fingerprint(self.files, tenant_id, project_id, session_id)) if mode != 'read' else []
+                changed = changes_between(before, await asyncio.to_thread(fingerprint, self.files, tenant_id, project_id, session_id)) if mode != 'read' else []
                 reason = adaptive.struggled(result.text if result else '', error, mode, changed)
                 following = adaptive.stronger(ranked, tried) if reason else None
                 attempts.append({'id': config['id'], 'name': config['name'], 'outcome': reason or 'completed',
@@ -544,7 +550,13 @@ class AgentRunner:
             if result is not None and status == 'complete':
                 error = None
             after_ref = await self.checkpoint(root, f'Frontier: after turn {message_id}') if before_ref else None
-            self.finish(tenant_id, project_id, session_id, message_id, status, error, result, before, mode, attempts,
+            after_print = None
+            if mode != 'read':
+                try:
+                    after_print = await asyncio.to_thread(fingerprint, self.files, tenant_id, project_id, session_id)
+                except (OSError, ValueError, asyncio.CancelledError):
+                    after_print = None
+            self.finish(tenant_id, project_id, session_id, message_id, status, error, result, before, mode, attempts, after=after_print,
                         checkpoint={'before': before_ref, 'after': after_ref} if before_ref and after_ref else None)
 
     async def checkpoint(self, root, label):
@@ -553,7 +565,7 @@ class AgentRunner:
         except (gitops.GitError, OSError, asyncio.CancelledError):
             return None  # A folder that is not a repository, or a git that cannot run, simply has no checkpoint.
 
-    def finish(self, tenant_id, project_id, session_id, message_id, status, error, result, before, mode, attempts=(), checkpoint=None):
+    def finish(self, tenant_id, project_id, session_id, message_id, status, error, result, before, mode, attempts=(), checkpoint=None, after=None):
         session = self.store.get(tenant_id, 'sessions', session_id)
         message = next((m for m in session['messages'] if m['id'] == message_id), None)
         if message is None or message['status'] != 'running':
@@ -561,7 +573,7 @@ class AgentRunner:
         changes = []
         if mode != 'read':
             try:
-                changes = changes_between(before, fingerprint(self.files, tenant_id, project_id, session_id))
+                changes = changes_between(before, after if after is not None else fingerprint(self.files, tenant_id, project_id, session_id))
             except (OSError, ValueError):
                 changes = []  # A folder that vanished mid-turn is already reported by the turn itself.
         title, text = take_title(result.text if result else '')

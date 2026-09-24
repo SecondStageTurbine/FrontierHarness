@@ -437,10 +437,11 @@ class ModelBroker:
                 env['OPENCODE_CONFIG_CONTENT'] = json.dumps(mcp_config_for_opencode(servers))
             argv = agent_argv(provider, launch, config['model_name'], mode, root, final, extras)
             try:
-                async with asyncio.timeout(TURN_TIMEOUT):
+                async with asyncio.timeout(extras.get('timeout') or TURN_TIMEOUT):
                     code, out, err = await run_cli(argv, prompt, root, env)
             except TimeoutError:
-                raise ProviderError(f'{CLI_TOOLS[provider][2]} was still working after {TURN_TIMEOUT // 60} minutes and was stopped. Anything it had already written to the folder is still there.') from None
+                limit = (extras.get('timeout') or TURN_TIMEOUT) // 60
+                raise ProviderError(f'{CLI_TOOLS[provider][2]} was still working after {limit} minutes and was stopped. Anything it had already written to the folder is still there. A project whose checks run longer can raise the limit in Project settings.') from None
             try:
                 if provider == 'claude_cli':
                     return read_claude(out, err, code, provider)

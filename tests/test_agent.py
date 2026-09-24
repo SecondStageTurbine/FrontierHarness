@@ -146,3 +146,19 @@ def test_a_folder_read_twice_reports_only_what_actually_moved(tmp_path):
     (folder/'new.txt').write_text('hi', encoding='utf-8')
     changes = changes_between(before, fingerprint(files, 'tenant-a', 'p'))
     assert {(c['path'], c['status']) for c in changes} == {('gone.txt', 'removed'), ('new.txt', 'added')}
+
+
+def test_the_agent_is_told_it_cannot_report_back_after_its_turn():
+    prompt = build_prompt([{'role': 'user', 'content': 'run the gate'}], switched=False, mode='auto')
+    assert 'cannot send anything afterwards' in prompt and 'stopped when your turn ends' in prompt
+
+
+@pytest.mark.asyncio
+async def test_a_project_can_give_its_turns_more_time(tmp_path):
+    agent = ScriptedAgent()
+    store, runner, project, session, _ = make(tmp_path, agent)
+    project = store.get('tenant-a', 'projects', project['id'])
+    project['turn_minutes'] = 90
+    store.put('tenant-a', 'projects', project)
+    await turn(runner, store, 'tenant-a', project, session, 'Long build.', 'claude_cli', 'read')
+    assert agent.calls[-1]['extras']['timeout'] == 90*60
