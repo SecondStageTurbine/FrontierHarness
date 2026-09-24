@@ -4,6 +4,7 @@ import {RefreshCw,ExternalLink,Globe,ArrowRight,Play,Square,RotateCcw,Terminal,S
 import type {Project} from '../types';
 import {useWorkspace} from '../app/context';
 import {api} from '../lib/api';
+import {apiBase} from '../lib/environment';
 
 /** A dev server the project is running, shown in place. Ports are probed on loopback; any URL works too. */
 type DevStatus={root:string;running:boolean;command?:string|null;pid?:number|null;port?:number|null;exit_code?:number|null;output?:string};
@@ -17,7 +18,7 @@ function AgentBrowser({project,sessionId}:{project:Project;sessionId?:string}){
  useEffect(()=>{setLocal({agent_browser:!!project.agent_browser,agent_browser_visible:!!project.agent_browser_visible})},[project.id,project.agent_browser,project.agent_browser_visible]);
  const shots=useQuery({queryKey:['tenant',tenant?.id,`/projects/${project.id}/browser-shots${q}`],enabled:!!tenant&&local.agent_browser,refetchInterval:6000,queryFn:({signal})=>api.get<{name:string;modified:string}[]>(path(`/projects/${project.id}/browser-shots${q}`),signal)});
  async function set(fields:{agent_browser?:boolean;agent_browser_visible?:boolean}){setLocal(v=>({...v,...fields}));try{await api.put(path(`/projects/${project.id}/settings`),fields);await client.invalidateQueries({queryKey:['tenant',tenant?.id]});notify(fields.agent_browser===false?'Agents no longer get a browser':'Saved')}catch(e){setLocal({agent_browser:!!project.agent_browser,agent_browser_visible:!!project.agent_browser_visible});notify((e as Error).message)}}
- const src=(n:string)=>`/api${path(`/projects/${project.id}/browser-shot?name=${encodeURIComponent(n)}${sessionId?`&session_id=${sessionId}`:''}`)}`;
+ const src=(n:string)=>{const p=path(`/projects/${project.id}/browser-shot?name=${encodeURIComponent(n)}${sessionId?`&session_id=${sessionId}`:''}`);return `${apiBase(p)}${p}`};
  return <div className="agent-browser">
   <label className="toggle-row compact"><div><strong><Bot size={12}/> Let agents use a browser</strong><p>Each editing turn gets Playwright's browser tools: the agent opens the page, clicks through, reads the console and takes screenshots. Needs Node.js; the first turn downloads it.</p></div><input type="checkbox" role="switch" checked={local.agent_browser} onChange={e=>set({agent_browser:e.target.checked})}/></label>
   {local.agent_browser&&<label className="toggle-row compact"><div><strong><Eye size={12}/> Show the agent's browser window</strong><p>Watch it work instead of running it hidden.</p></div><input type="checkbox" role="switch" checked={local.agent_browser_visible} onChange={e=>set({agent_browser_visible:e.target.checked})}/></label>}

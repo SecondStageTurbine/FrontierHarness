@@ -3,6 +3,7 @@ import {Clock,Plus,Trash2,Pencil,Play,Webhook,Copy} from 'lucide-react';
 import {useWorkspace,useResource,useRefresh} from '../../app/context';
 import {Field,Modal,Confirm,PageHeading} from '../../components/ui';
 import {api,date} from '../../lib/api';
+import {environment} from '../../lib/environment';
 import {ADAPTIVE,agentProviders,modes,modeLabels,type Automation,type Model,type Project,type Mode} from '../../types';
 
 type Form={name:string;project_id:string;prompt:string;model_id:string;mode:Mode;kind:'every'|'daily'|'hook';every:string;daily_at:string;enabled:boolean};
@@ -19,7 +20,7 @@ export default function Automations({projects,models,currentProject}:{projects:P
   const payload={name:form.name.trim(),project_id:form.project_id,prompt:form.prompt.trim(),model_id:form.model_id,mode:form.mode,every:form.kind==='every'?Number(form.every):null,daily_at:form.kind==='daily'?form.daily_at:null,enabled:form.enabled};
   if(editing)await api.put(path(`/automations/${editing.id}`),payload);else await api.post(path('/automations'),payload);
   setOpen(false);await refresh();notify('Automation saved')}catch(e){setError((e as Error).message)}finally{setBusy('')}}
- const hookUrl=(a:Automation)=>`${location.origin}/api/hooks/${a.id}/${a.secret}`;
+ const hookUrl=(a:Automation)=>`${environment?environment.url:location.origin}/api/hooks/${a.id}/${a.secret}`;
  return <>
   <PageHeading eyebrow="TURNS THAT RUN ON THEIR OWN" title="Automations" description="Each run opens a session in the project and sends the prompt as one turn under the posture you choose. Schedules only fire while Frontier is open."><button className="primary" onClick={()=>edit()} disabled={!projects.length||!agents.length}><Plus size={16}/>New automation</button></PageHeading>
   {!agents.length&&<p className="muted">Connect an agent first.</p>}

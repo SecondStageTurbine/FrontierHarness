@@ -1,6 +1,7 @@
+import {apiBase} from './environment';
 export class ApiError extends Error { constructor(message:string,public status:number,public code?:string){super(message)} }
 export async function request<T>(path:string,options:RequestInit={}):Promise<T>{
-  const response=await fetch('/api'+path,{...options,credentials:'same-origin',headers:{...(options.body instanceof FormData?{}:{'Content-Type':'application/json'}),...options.headers}});
+  const response=await fetch(apiBase(path)+path,{...options,credentials:'same-origin',headers:{...(options.body instanceof FormData?{}:{'Content-Type':'application/json'}),...options.headers}});
   const value=await response.json().catch(()=>({detail:'The server returned an unreadable response.'}));
   if(!response.ok){const detail=Array.isArray(value.detail)?value.detail.map((d:{loc:string[];msg:string})=>`${d.loc.slice(1).join(' ')}: ${d.msg}`).join('; '):value.detail;throw new ApiError(detail||'The request failed. Please retry.',response.status,value.code)}
   return value as T;

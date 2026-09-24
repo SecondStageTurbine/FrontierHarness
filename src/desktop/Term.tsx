@@ -1,4 +1,5 @@
 import {useEffect,useRef,useState} from 'react';
+import {environment,onThisComputer} from '../lib/environment';
 import {invoke,isTauri} from '@tauri-apps/api/core';
 import {listen} from '@tauri-apps/api/event';
 import {Terminal} from '@xterm/xterm';
@@ -33,7 +34,13 @@ async function open(cwd:string):Promise<Shell>{
  return {id,term,fit,element,title:`Shell ${(shells.get(cwd)?.length||0)+1}`};
 }
 
-export function Term({cwd,onChip,projectId,sessionId,agents=[]}:{cwd:string;onChip?:(chip:ContextChip)=>void;projectId?:string;sessionId?:string;agents?:{provider:string;name:string}[]}){
+export function Term(props:{cwd:string;onChip?:(chip:ContextChip)=>void;projectId?:string;sessionId?:string;agents?:{provider:string;name:string}[]}){
+ // The terminal is a shell on the computer in front of you; a project on another machine is not there.
+ if(!onThisComputer)return <p className="inspector-empty">The terminal runs on this computer, and this project is on {environment?.name}. Ask the agent to run commands there, or use a terminal on that machine.</p>;
+ return <LocalTerm {...props}/>;
+}
+
+function LocalTerm({cwd,onChip,projectId,sessionId,agents=[]}:{cwd:string;onChip?:(chip:ContextChip)=>void;projectId?:string;sessionId?:string;agents?:{provider:string;name:string}[]}){
  const host=useRef<HTMLDivElement>(null);
  const {notify}=useWorkspace();
  const env=useResource<{kind:string|null;activate?:string|null;note?:string}>(`/projects/${projectId}/environment${sessionId?`?session_id=${sessionId}`:''}`,!!projectId);

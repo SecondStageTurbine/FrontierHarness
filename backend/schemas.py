@@ -121,6 +121,11 @@ class ContextChip(StrictModel):
     text: str | None = Field(default=None, max_length=20000)
     label: str | None = Field(default=None, max_length=200)
 
+class SandboxSettings(StrictModel):
+    files: bool = False
+    network: Literal['open', 'agent', 'allowlist'] = 'open'
+    allow: list[str] = Field(default_factory=list, max_length=100)
+
 class ProjectSettings(StrictModel):
     default_mode: Mode | None = None
     default_model_id: str | None = Field(default=None, max_length=80)
@@ -132,6 +137,7 @@ class ProjectSettings(StrictModel):
     turn_minutes: int | None = Field(default=None, ge=90, le=480)
     agent_browser: bool = False
     agent_browser_visible: bool = False
+    sandbox: SandboxSettings | None = None
 
 class PrCreateInput(StrictModel):
     title: str = Field(min_length=1, max_length=200)
@@ -258,6 +264,10 @@ class AutomationInput(StrictModel):
 
 class RemoteInput(StrictModel):
     enabled: bool
+
+class EnvironmentInput(StrictModel):
+    name: str = Field(default='', max_length=80)
+    link: str = Field(min_length=10, max_length=500)
 
 class PushInput(StrictModel):
     enabled: bool | None = None

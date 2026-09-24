@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import adaptive, board, gitops, localhealth, push, team as teamwork
+from . import adaptive, board, gitops, localhealth, push, sandbox, team as teamwork
 from .adaptive import ADAPTIVE, MAX_ESCALATIONS
 from .broker import CLI_TOOLS, ProviderError
 from .projects import ProjectFiles
@@ -117,6 +117,20 @@ def browser_server(project):
         args += ['--browser', 'msedge'] + (['--executable-path', edge] if edge else [])
     command, args = (('cmd', ['/c', 'npx', *args]) if os.name == 'nt' else ('npx', args))
     return {'name': 'frontier-browser', 'transport': 'stdio', 'command': command, 'args': args, 'env': {}, 'enabled': True}
+
+
+def sandbox_note(policy):
+    """What the agent is told about Frontier's sandbox, so a refusal is reported rather than worked around."""
+    parts = []
+    if policy['files']:
+        parts.append('You can change files only inside the project folder; anything outside it is read only, and writing there fails with access denied.')
+    if policy['network'] == 'agent':
+        parts.append('Network access is limited to your own AI service; package installs and other downloads are refused by Frontier\'s sandbox (HTTP 403).')
+    elif policy['network'] == 'allowlist':
+        parts.append('Network access is limited to your own AI service and these hosts: ' + (', '.join(policy['allow']) or 'none') + '. Anything else is refused by Frontier\'s sandbox (HTTP 403).')
+    if not parts:
+        return None
+    return 'This turn runs in Frontier\'s sandbox, set by the user. ' + ' '.join(parts) + ' If the sandbox stops something the task needs, say so plainly instead of working around it.'
 
 
 def browser_note(project, root):
@@ -293,6 +307,9 @@ class AgentRunner:
         approval tool that turns a prompt into a card."""
         servers = [s for s in self.store.list(tenant_id, 'mcp_servers') if s.get('enabled', True)]
         extras = {'mcp_servers': servers, 'protect_env': bool((project or {}).get('protect_env', True))}
+        confined = sandbox.policy(project)
+        if confined['files'] or confined['network'] != 'open':
+            extras['sandbox'] = confined
         if (project or {}).get('agent_browser') and not any(s['name'] == 'frontier-browser' for s in servers):
             extras['mcp_servers'] = servers + [browser_server(project)]
         port = os.environ.get('HARNESS_DESKTOP_PORT')
@@ -536,6 +553,7 @@ class AgentRunner:
         memory = project.get('memory')
         environment = ' '.join(filter(None, [(self.files.python_env(root) or {}).get('note'), browser_note(project, root)])) or None
         board_text = board.render(board.tasks(self.store, tenant_id, project_id))
+        environment = ' '.join(filter(None, [environment, sandbox_note(sandbox.policy(project))])) or None
         # Read only cannot change the folder, so it is not read twice to prove that.
         before = await asyncio.to_thread(fingerprint, self.files, tenant_id, project_id, session_id) if mode != 'read' else {}
         # In a repository, the whole working tree is also checkpointed as hidden git objects, so a
@@ -678,6 +696,8 @@ class AgentRunner:
                        cost=self.cost(tenant_id, (result.served_by if result else None) or message.get('model_id'), result))
         if attempts and message.get('routing'):
             message['routing']['attempts'] = [{k: v for k, v in a.items() if k != 'reply'} for a in attempts]
+        if result and result.blocked:
+            message['sandbox_blocked'] = result.blocked[:30]
         if session.get('native') and status == 'complete':
             # The tool's own session now holds this turn too; a reply from anyone else means it no longer
             # has the whole conversation, so later turns replay it.

@@ -546,3 +546,25 @@ old note asked for a wide screen. Push notifications were checked live against n
 published on a new random topic was read back with its title, text, tag, priority and link. Web push
 was not used because browsers allow it only on HTTPS, which remote access over a local address is not.
 157 tests pass.
+
+Version 0.19.0 adds environments on other machines and a sandbox, both checked live.
+
+Sandbox. A probe first confirmed that a Windows process can lower its own token to low integrity and
+that its children inherit it: the child could write under LocalLow and was refused in the user profile.
+Claude Code then ran at low integrity in a folder labelled low: it wrote inside the folder and was
+refused outside, but its session file was not written, because ~/.claude was not labelled; Frontier
+therefore labels each tool's own settings folder too. Live, through Frontier, under Full auto, Claude
+and Codex were each asked to write a file in the project, write one in the home folder, and fetch
+example.com: both wrote the first, were denied the second ("Access to the path … is denied"), and the
+third failed with "Tunnel connection failed: 403 Forbidden", with example.com listed on the turn.
+Under Edit files, Codex first failed outright: its own sandbox could not set permissions on
+~/.codex/.sandbox-bin at low integrity. Under Frontier's file sandbox Codex now runs without its own,
+and passed the same three checks. Claude under Edit files wrote in the project and asked, through an
+approval card, before anything else. Claude's own telemetry (datadoghq.com) is refused but not listed.
+
+Environments. A second Frontier on another port stood in for another machine. The browser suite pairs
+it from Settings with its pairing link, switches to it, opens its project, sends a message, and gets the
+reply streamed back through this backend; the conversation is then found on the other machine, and
+switching back shows this machine's projects again. A pairing link works once, only this machine's
+signed-in user can pass calls through, and a forgotten machine can no longer be reached. Two real
+separate computers were not used. 162 tests and three browser suites pass.

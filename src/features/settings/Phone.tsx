@@ -26,7 +26,8 @@ export function Phone({listening}:{listening:boolean}){
    {pairing&&url?<div className="pair-box"><Qr text={url} label="Pairing code for your phone"/><div>
      {pairing.urls.length>1&&<select aria-label="Address" value={address} onChange={e=>setAddress(Number(e.target.value))}>{pairing.urls.map((u,i)=><option key={u} value={i}>{new URL(u).host}</option>)}</select>}
      <small className="muted">Expires {new Date(pairing.expires).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}. If the phone cannot open it, try another address; a phone on mobile data needs a tailnet such as Tailscale.</small>
-     <button onClick={()=>setPairing(null)}>Done</button></div></div>
+     <div className="actions"><button onClick={()=>navigator.clipboard.writeText(url).then(()=>notify('Pairing link copied')).catch(()=>notify('Clipboard unavailable'))}><Copy size={13}/>Copy link</button><button onClick={()=>setPairing(null)}>Done</button></div>
+     <small className="muted">The link also pairs another computer's Frontier: paste it in Settings → Environments there.</small></div></div>
    :<button disabled={busy!==''} onClick={()=>act('pair',async()=>{const r=await api.post<{urls:string[];expires_in:number}>('/remote/pair');if(!r.urls.length)throw new Error('No network address found to pair over.');setAddress(0);setPairing({urls:r.urls,expires:Date.now()+r.expires_in*1000})})}><QrCode size={14}/>Show pairing code</button>}
   </>}
   <h3><BellRing size={16}/> Push notifications</h3>

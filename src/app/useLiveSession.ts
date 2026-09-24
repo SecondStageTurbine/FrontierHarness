@@ -2,6 +2,7 @@ import {useEffect} from 'react';
 import {useQueryClient} from '@tanstack/react-query';
 import {useResource,useWorkspace} from './context';
 import {working,type Session} from '../types';
+import {apiBase} from '../lib/environment';
 
 /** One conversation, kept live while a turn is running.
  *
@@ -18,7 +19,8 @@ export function useLiveSession(projectId?:string,sessionId?:string){
   if(!tenant||!projectId||!sessionId||!live)return;
   let alive=true,timer:ReturnType<typeof setTimeout>|undefined;
   const refresh=()=>{if(alive)void client.invalidateQueries({queryKey:['tenant',tenant.id,route]})};
-  const stream=new EventSource('/api'+path(`${route}/events`));
+  const events=path(`${route}/events`);
+  const stream=new EventSource(apiBase(events)+events);
   stream.onmessage=()=>{if(!timer)timer=setTimeout(()=>{timer=undefined;refresh()},160)};
   stream.addEventListener('done',()=>{stream.close();refresh();
    // The agent wrote to the folder directly, so the file tree is stale the moment a turn ends.

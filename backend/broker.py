@@ -9,7 +9,7 @@ Several subscriptions can be connected to one provider. Each carries an account 
 credential directory this module points the tool at, and a turn moves to the next connected
 account when the selected one answers that its usage window is spent.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import asyncio
 import json
 import os
@@ -61,6 +61,7 @@ class AgentResult:
     served_by: str | None = None  # The model row that answered, when a spent subscription was switched away from.
     session_id: str | None = None  # The tool's own conversation id, for resuming it natively next turn.
     resumed: bool = False  # This turn continued the tool's own session rather than replaying the transcript.
+    blocked: list = field(default_factory=list)  # Hosts the sandbox's network filter refused during the turn.
 
 def is_exhausted(*texts):
     return any(phrase in (text or '').lower() for text in texts for phrase in LIMIT_PHRASES)
@@ -237,6 +238,11 @@ def mcp_config_for_opencode(servers):
                                    else {'type': 'local', 'command': [server['command'], *(server.get('args') or [])], 'environment': server.get('env') or {}, 'enabled': True})
     return {'mcp': entries}
 
+def codex_write_mode(extras):
+    """Codex's own Windows sandbox cannot start at low integrity; under Frontier's file sandbox, which confines
+    writes to the project just as workspace-write does, Codex runs without its own."""
+    return 'danger-full-access' if (extras or {}).get('outer_sandbox') else 'workspace-write'
+
 FRONTIER_TOOLS = ('ask_user', 'board_list', 'board_add', 'board_update')  # Served by permission_tool beside `approve`.
 
 def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None):
@@ -300,13 +306,13 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
             # `exec resume` takes no -C or --sandbox: the working directory is the project, and the
             # sandbox is set through its config key.
             if mode != 'auto':
-                argv += ['-c', 'sandbox_mode=' + toml_value('read-only' if mode == 'read' else 'workspace-write')]
+                argv += ['-c', 'sandbox_mode=' + toml_value('read-only' if mode == 'read' else codex_write_mode(extras))]
             argv += ['exec', 'resume', '--skip-git-repo-check', '--model', model_name, '--output-last-message', str(final_path)]
             argv += ['--dangerously-bypass-approvals-and-sandbox'] if mode == 'auto' else []
             return argv + [extras['resume'], '-']
         argv += ['exec', '--skip-git-repo-check', '--model', model_name, '-C', str(root), '--output-last-message', str(final_path)]
         argv += (['--dangerously-bypass-approvals-and-sandbox'] if mode == 'auto'
-                 else ['--sandbox', 'read-only' if mode == 'read' else 'workspace-write'])
+                 else ['--sandbox', 'read-only' if mode == 'read' else codex_write_mode(extras)])
         return argv + ['-']
     if provider == 'gemini_cli':
         # The conversation arrives on stdin; -p is appended to it. Plan mode is Gemini's read only.
@@ -445,6 +451,35 @@ class ModelBroker:
             return result
 
     async def run_agent(self, tenant_id, config, prompt, mode, root, extras=None):
+        """One turn, inside Frontier's sandbox when the project asks for one: the tool at low integrity so it
+        can write only the project (and its own settings), and its network through a filter."""
+        from . import sandbox
+        policy = (extras or {}).get('sandbox')
+        if not policy or (not policy['files'] and policy['network'] == 'open'):
+            return await self.run_tool(tenant_id, config, prompt, mode, root, extras)
+        extras, added, net = dict(extras), {}, None
+        # Codex under Read only keeps its own read-only sandbox, which is stricter than confining writes to the folder.
+        if policy['files'] and not (config['provider'] == 'codex_cli' and mode == 'read'):
+            added.update(await asyncio.to_thread(sandbox.prepare, self.store.directory, root, config['provider']))
+            extras.update(argv_prefix=sandbox.launcher(), scratch_dir=added['TEMP'], outer_sandbox=True)
+        if policy['network'] != 'open':
+            net = sandbox.NetworkFilter(sandbox.PROVIDER_HOSTS.get(config['provider'], []) + sandbox.tool_hosts(extras.get('mcp_servers'))
+                                        + (policy['allow'] if policy['network'] == 'allowlist' else []))
+            added.update(sandbox.proxy_env(await net.start()))
+        extras['sandbox_env'] = added
+        try:
+            result = await self.run_tool(tenant_id, config, prompt, mode, root, extras)
+        except ProviderError as exc:
+            if net and net.blocked:
+                raise ProviderError(f'{exc} The sandbox refused network access to {", ".join(net.blocked[:8])}.', exc.retryable, exc.exhausted) from None
+            raise
+        finally:
+            if net:
+                await net.stop()
+        result.blocked = list(net.blocked) if net else []
+        return result
+
+    async def run_tool(self, tenant_id, config, prompt, mode, root, extras=None):
         """Launch one agent against the project folder and return what it said.
 
         The folder is the working directory, so the tool's own file and shell tools reach the
@@ -455,7 +490,8 @@ class ModelBroker:
         launch = resolve_cli(provider)
         env = account_env(self.store, tenant_id, config)
         extras = dict(extras or {})
-        with TemporaryDirectory(prefix='frontier-turn-') as scratch:
+        env.update(extras.get('sandbox_env') or {})
+        with TemporaryDirectory(prefix='frontier-turn-', dir=extras.get('scratch_dir')) as scratch:
             final = Path(scratch)/'final.txt'
             servers = extras.get('mcp_servers') or []
             if provider == 'claude_cli' and (servers or extras.get('approval')):
@@ -470,7 +506,7 @@ class ModelBroker:
                 extras['mcp_servers'] = servers
             if provider == 'opencode_cli' and servers:
                 env['OPENCODE_CONFIG_CONTENT'] = json.dumps(mcp_config_for_opencode(servers))
-            argv = agent_argv(provider, launch, config['model_name'], mode, root, final, extras)
+            argv = [*(extras.get('argv_prefix') or []), *agent_argv(provider, launch, config['model_name'], mode, root, final, extras)]
             try:
                 async with asyncio.timeout(extras.get('timeout') or TURN_TIMEOUT):
                     code, out, err = await run_cli(argv, prompt, root, env)

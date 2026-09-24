@@ -17,7 +17,7 @@ export interface CommandResult {id:string; command:string; started_at:string; fi
 export interface ContextChip {kind:'file'|'terminal'|'diff'|'selection'; path?:string|null; start?:number|null; end?:number|null; text?:string|null; label?:string|null}
 export interface TeamTask {id:string; title:string; instructions:string; needs:string[]; agent?:string|null; parallel:boolean; depends_on:string[]; status:'pending'|'working'|'fixing'|'done'|'failed'; session_id?:string|null; model_id?:string|null; model_name?:string|null; report:string; merge?:string|null; changed?:string[]; cross_review?:boolean}
 export interface Team {status:'planning'|'working'|'reviewing'|'fixing'|'done'; lead:string; summary:string; tasks:TeamTask[]; agents?:string[]}
-export interface Message {id:string; role:'user'|'assistant'; content:string; created_at:string; context?:ContextChip[]; team?:Team;
+export interface Message {sandbox_blocked?:string[]; id:string; role:'user'|'assistant'; content:string; created_at:string; context?:ContextChip[]; team?:Team;
  status?:'running'|'complete'|'failed'|'cancelled'; error?:string|null; finished_at?:string|null;
  model_id?:string; model_name?:string; provider?:string; mode?:Mode; switched_from?:string|null;
  changes?:FileChange[]; input_tokens?:number|null; output_tokens?:number|null; cost?:number|null; routing?:Routing; checkpoint?:{before:string;after:string}|null; reverted_at?:string|null}
@@ -29,7 +29,7 @@ export interface Skill {name:string; kind:'skill'|'command'; scope:'project'|'us
 export interface Automation {id:string; name:string; project_id:string; prompt:string; model_id:string; mode:Mode; every?:number|null; daily_at?:string|null; enabled:boolean; secret:string; next_run_at?:string|null; last_run_at?:string|null; last_outcome?:string; last_trigger?:string; last_session_id?:string; runs?:number}
 export interface GitEntry {path:string; status:string; staged:boolean; unstaged:boolean}
 export interface GitStatus {repo:boolean; available:boolean; root?:string; branch?:string; upstream?:string|null; ahead?:number; behind?:number; entries?:GitEntry[]; has_head?:boolean; worktree?:{path:string;branch:string}|null; output?:string}
-export interface Project {id:string; name:string; root:string; created_at:string; last_session_id?:string; last_model_id?:string; last_mode?:Mode; default_mode?:Mode|null; default_model_id?:string|null; worktree_setup?:string|null; worktree_copy?:string[]; protect_env?:boolean; dev_command?:string|null; memory?:string|null; turn_minutes?:number|null; agent_browser?:boolean; agent_browser_visible?:boolean}
+export interface Project {id:string; name:string; root:string; created_at:string; last_session_id?:string; last_model_id?:string; last_mode?:Mode; default_mode?:Mode|null; default_model_id?:string|null; worktree_setup?:string|null; worktree_copy?:string[]; protect_env?:boolean; dev_command?:string|null; memory?:string|null; turn_minutes?:number|null; agent_browser?:boolean; agent_browser_visible?:boolean; sandbox?:{files:boolean;network:'open'|'agent'|'allowlist';allow:string[]}|null}
 export interface ProjectFile {path:string; size:number; text:boolean}
 export interface SessionEvent {seq:number; type:string; message:string; time:string; message_id?:string}
 export interface Tenant {id:string; name:string; environment:string; created_at:string; router_model_id?:string|null; rules?:string|null; auto_archive_days?:number|null; memory_auto?:boolean; worktree_cleanup_days?:number|null}

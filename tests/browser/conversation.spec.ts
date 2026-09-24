@@ -135,7 +135,7 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await page.getByRole('button',{name:'Settings',exact:true}).click();
  expect(Math.abs(await page.locator('.modal.wide').evaluate(el=>el.getBoundingClientRect().width)-after)).toBeLessThan(3);
  const tabs=await page.locator('.desktop-settings nav button').allTextContents();
- expect(tabs).toEqual(['General','Agents & Providers','MCP & Skills','Automations','Usage','Remote access','Workspaces','Security','Developer']);
+ expect(tabs).toEqual(['General','Agents & Providers','MCP & Skills','Automations','Usage','Remote access','Environments','Workspaces','Security','Developer']);
  await page.getByLabel('Rules for every agent',{exact:true}).fill('Always write tests.');
  await page.getByRole('button',{name:'Save workspace settings',exact:true}).click();
  await expect.poll(async()=>(await (await request.get('/api/tenants')).json())[0].rules).toBe('Always write tests.');

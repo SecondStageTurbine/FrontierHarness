@@ -86,6 +86,7 @@ function AgentMessage({message,onInspect,onRevert,approvals=[],onDecide,onOpenSe
   </div>}
   {message.status==='failed'&&<div className="thread-alert"><AlertTriangle size={16}/><div><strong>This turn stopped.</strong><p>{message.error}</p></div></div>}
   {message.status==='cancelled'&&<div className="thread-alert"><Square size={15}/><div><strong>Stopped.</strong><p>{message.error}</p></div></div>}
+  {!!message.sandbox_blocked?.length&&<div className="sandbox-blocked" title="Frontier's sandbox refused these hosts during the turn. Allow them in Project settings if the task needs them."><ShieldQuestion size={13}/><span>Sandbox refused network access to {message.sandbox_blocked.join(', ')}</span></div>}
   {message.status==='complete'&&!changes.length&&message.mode!=='read'&&<div className="thread-completion"><Check size={15}/><span>No files changed.</span></div>}
  </div>;
 }

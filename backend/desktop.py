@@ -40,6 +40,10 @@ def main():
         from backend.frontier_mcp import serve as serve_mcp
         serve_mcp()
         return
+    if len(sys.argv)>2 and sys.argv[1]=='--sandboxed':
+        from backend.sandbox import run_confined
+        run_confined(sys.argv[3:] if sys.argv[2]=='--' else sys.argv[2:])
+        return
     if len(sys.argv)>1 and sys.argv[1]=='--permission-tool':
         from backend.permission_tool import serve
         serve()

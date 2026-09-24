@@ -205,6 +205,17 @@ Frontier is also an MCP server. **Settings → MCP & Skills → Use Frontier fro
 
 **Settings → Automations** runs a prompt on its own: daily at a time, every N minutes, or when a webhook is called. Each run opens a session in the chosen project and sends the prompt as one turn under the posture you set, so the result reads like any other conversation. Schedules fire while Frontier is open or in the tray; a run missed while it was closed happens once at the next start. The webhook is a POST to the URL shown on the card, whose secret is the whole credential.
 
+### Other machines (environments)
+
+**Settings → Environments** pairs another computer running Frontier and lets you work on it from this window. On the other machine, turn on Remote access and press **Show pairing code**, then **Copy link**; paste the link here within ten minutes. Switching to that machine (from Settings, or the machine name at the foot of the sidebar) shows its workspaces, projects and sessions: its agents run there, on its files, with its tools and sign-ins, and replies stream back live. A banner says which machine you are on, with a way back. This backend passes each call on with the session the pairing granted, kept encrypted in the data folder; forgetting the machine removes it. The terminal, the folder picker and Open in editor stay off while on another machine, because they act on the computer in front of you. Both machines need to share a network or a tailnet.
+
+### Sandbox
+
+**Project settings → Sandbox** adds Frontier's own limits around every agent in the project, whatever posture a turn uses and whichever tool takes it.
+
+- **Confine file changes to this folder** (Windows). The agent tool runs at Windows low integrity, a mandatory-integrity level the operating system enforces: it can change the project folder and its own settings folder (where it keeps its sessions and sign-in), and nothing else you own, even under Full auto. Reading is not restricted. The first sandboxed turn labels those folders writable from low integrity, which takes a moment in a large project; package caches and temporary files go under LocalLow. Codex's own Windows sandbox cannot start at low integrity, so under Edit files Codex runs inside Frontier's instead, which confines writes the same way; under Read only it keeps its own, stricter one.
+- **Network**: open, only the agent's own AI service, or the agent's service plus hosts you list (a button adds the common package registries and GitHub). The workspace's MCP servers keep their hosts. Tools and the package managers they run go through a filter in Frontier that refuses everything else; each turn lists the hosts it refused. This part relies on the proxy settings every mainstream tool honours; a program deliberately written to ignore them is not stopped by it.
+
 ### Remote access
 
 **Settings → Remote access** lets a browser on another device on your network or tailnet use this Frontier. Turn it on, set a password for your user, restart Frontier, and open one of the listed addresses. The connection is plain HTTP, so use it on a network you trust or over Tailscale. In a browser the terminal, updater and desktop notifications are unavailable; everything else works.
@@ -298,6 +309,8 @@ The Python suite exercises workspace boundaries, a turn's file record, agent swi
 | Scheduled and webhook turns, idle archiving | `backend/automations.py` |
 | Remote access and tray flags | `backend/remote.py` |
 | Push notifications through ntfy | `backend/push.py` |
+| Other machines, paired and passed through | `backend/environments.py` |
+| The sandbox: low integrity and the network filter | `backend/sandbox.py` |
 | Workspace-scoped persistence and encryption | `backend/store.py` |
 | Project file reading, writing, search and the user's own checks | `backend/projects.py` |
 | Authenticated HTTP API and replayable SSE | `backend/app.py` |

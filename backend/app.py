@@ -19,8 +19,9 @@ from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
-from .schemas import LoginInput, TenantInput, ModelConfig, SUBSCRIPTION_PROVIDERS, PasswordInput, RemoteInput, PushInput
-from . import automations, remote, devserver, push
+from .schemas import LoginInput, TenantInput, ModelConfig, SUBSCRIPTION_PROVIDERS, PasswordInput, RemoteInput, PushInput, EnvironmentInput
+from . import automations, remote, devserver, push, environments
+from starlette.background import BackgroundTask
 from .store import Store, TenantIsolationViolationException, uid, now, public_model
 from .agent import AgentRunner
 from . import localhealth
@@ -228,6 +229,46 @@ def create_app(directory=None, broker=None):
         user(request)
         remote.set_tray_enabled(store.directory, payload.enabled)
         return {'enabled': payload.enabled}
+
+    # ── Other machines: pair once, then pass this window's calls through to them ──
+    @app.get('/api/environments')
+    async def environments_list(request:Request):
+        user(request)
+        return await asyncio.gather(*(environments.status(store, item) for item in environments.load(store.directory)))
+
+    @app.post('/api/environments')
+    async def environments_add(payload:EnvironmentInput, request:Request):
+        user(request)
+        return await environments.pair(store, payload.name, payload.link)
+
+    @app.delete('/api/environments/{env_id}')
+    def environments_remove(env_id:str, request:Request):
+        user(request)
+        environments.remove(store.directory, env_id)
+        return {'ok': True}
+
+    @app.api_route('/api/env/{env_id}/{rest:path}', methods=['GET','POST','PUT','PATCH','DELETE'])
+    async def environment_proxy(env_id:str, rest:str, request:Request):
+        """This window's API call, made on another machine with the session stored for it. Streams, so live turn events keep flowing."""
+        user(request)
+        item = environments.find(store.directory, env_id)
+        if not item:
+            raise HTTPException(404, 'That machine is no longer set up here. Switch back to this computer.')
+        http = environments.client(timeout=None)
+        headers = {k: v for k, v in request.headers.items() if k.lower() in ('content-type', 'accept', 'last-event-id')}
+        try:
+            upstream = await http.send(http.build_request(request.method, f'{item["url"]}/api/{rest}', params=request.query_params, content=await request.body(),
+                                                          headers=headers, cookies={'harness_session': store.decrypt(item['token'])}), stream=True)
+        except httpx.HTTPError:
+            await http.aclose()
+            return JSONResponse({'detail': f'{item["name"]} is not reachable at {item["url"]}. Check that Frontier is running there with remote access on.'}, status_code=502)
+        if upstream.status_code == 401:
+            await upstream.aclose(); await http.aclose()
+            return JSONResponse({'detail': f'{item["name"]} no longer accepts this computer\'s session. Pair it again from Settings, Environments.', 'code': 'environment_signed_out'}, status_code=409)
+        async def close():
+            await upstream.aclose(); await http.aclose()
+        passed = {k: v for k, v in upstream.headers.items() if k.lower() in ('content-type', 'cache-control', 'content-encoding', 'content-disposition')}
+        return StreamingResponse(upstream.aiter_raw(), status_code=upstream.status_code, headers=passed, background=BackgroundTask(close))
 
     # ── A phone: signing in by QR code, and push notifications ──
     pairings = {}  # sha256(token) -> (user id, expiry). In memory: a restart simply voids unused codes.
