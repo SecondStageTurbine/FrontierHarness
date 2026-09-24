@@ -10,7 +10,7 @@ from fastapi import Request, Response, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse, FileResponse
 from .schemas import (ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput, GitPaths, CommitInput, FileWrite,
                       McpServerInput, ApprovalDecision, ApprovalRequest, FanoutInput, AutomationInput, ProjectSettings, PrCreateInput,
-                      DevServerInput, RewindInput, ImportInput, CloneInput, CatchupInput, ResumeCliInput, BoardTaskInput, BoardTaskPatch, HistoryImportInput)
+                      DevServerInput, RewindInput, ImportInput, CloneInput, CatchupInput, ResumeCliInput, BoardTaskInput, BoardTaskPatch, HistoryImportInput, PrReviewInput, PrEditInput, PrMergeInput)
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
 from . import gitops, automations, pullrequests, devserver, maintenance, board, skill_catalog
@@ -862,13 +862,66 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
     async def pr_create(tenant_id:str,project_id:str,payload:PrCreateInput,request:Request,session_id:str|None=None):
         scoped(request,tenant_id)
         root=files.root(tenant_id,project_id,session_id)
-        pr=await pullrequests.create(root,payload.title,payload.body,payload.base,payload.draft)
+        pr=await pullrequests.create(root,payload.title,payload.body,payload.base,payload.draft,payload.reviewers,payload.labels)
         if session_id and pr:
             session=store.get(tenant_id,'sessions',session_id)
             session['pull_request']={'number':pr['number'],'url':pr['url'],'state':pr['state'],'title':pr['title']}
             store.put(tenant_id,'sessions',session)
             store.event(tenant_id,session_id,'pr.opened',f'Opened pull request #{pr["number"]}.')
         return {'available':True,'pr':pr}
+
+    async def open_pr(tenant_id,project_id,session_id):
+        root=files.root(tenant_id,project_id,session_id)
+        pr=await pullrequests.current(root)
+        if not pr:
+            raise ValueError('This branch has no pull request.')
+        return root,pr
+
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/pr/options')
+    async def pr_options(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        return await pullrequests.options(files.root(tenant_id,project_id,session_id))
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/pr/review')
+    async def pr_review(tenant_id:str,project_id:str,payload:PrReviewInput,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        root,pr=await open_pr(tenant_id,project_id,session_id)
+        await pullrequests.review(root,pr['number'],payload.event,payload.body)
+        return {'pr':await pullrequests.current(root)}
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/pr/review/draft')
+    async def pr_review_draft(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
+        """A review of the pull request's diff, written by an agent under Read only, for the user to edit and submit."""
+        scoped(request,tenant_id)
+        root,pr=await open_pr(tenant_id,project_id,session_id)
+        diff=await pullrequests.diff(root,pr['number'])
+        config=runner.writer(tenant_id,store.get(tenant_id,'sessions',session_id) if session_id else {'messages':[]},store.get(tenant_id,'projects',project_id))
+        prompt=(f'Review pull request #{pr["number"]} "{pr["title"]}" from its diff below; you may read files in the project for context but change nothing. '
+                'On the first line write exactly one of APPROVE, COMMENT or REQUEST_CHANGES: request changes only for a real defect. Then a blank line, '
+                'then the review in markdown: a one-paragraph summary, then each finding with file and line, what goes wrong and the fix, most serious first. '
+                'Do not invent problems; if it is good, say so briefly.\n\nDIFF:\n'+diff)
+        result=await runner.broker.invoke_agent(tenant_id,config,prompt,'read',str(root))
+        text=(result.text or '').strip()
+        first,_,rest=text.partition('\n')
+        event={'APPROVE':'approve','REQUEST_CHANGES':'request_changes','COMMENT':'comment'}.get(first.strip().strip('*').upper().replace(' ','_'))
+        return {'event':event or 'comment','body':(rest if event else text).strip()[:60000],'model_name':config['name']}
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/pr/edit')
+    async def pr_edit(tenant_id:str,project_id:str,payload:PrEditInput,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        root,pr=await open_pr(tenant_id,project_id,session_id)
+        await pullrequests.edit(root,pr['number'],payload.add_reviewers,payload.remove_reviewers,payload.add_labels,payload.remove_labels,payload.base)
+        return {'pr':await pullrequests.current(root)}
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/pr/merge')
+    async def pr_merge(tenant_id:str,project_id:str,payload:PrMergeInput,request:Request,session_id:str|None=None):
+        scoped(request,tenant_id)
+        root,pr=await open_pr(tenant_id,project_id,session_id)
+        await pullrequests.merge(root,pr['number'],payload.method,payload.auto,payload.delete_branch,payload.disable_auto)
+        if session_id:
+            text=('Turned off auto-merge' if payload.disable_auto else f'Turned on auto-merge ({payload.method})' if payload.auto else f'Merged ({payload.method})')+f' for pull request #{pr["number"]}.'
+            store.event(tenant_id,session_id,'pr.merge',text)
+        return {'pr':await pullrequests.current(root)}
 
     @app.get('/api/t/{tenant_id}/projects/{project_id}/pr/comments')
     async def pr_comments(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):

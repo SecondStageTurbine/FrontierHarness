@@ -33,5 +33,6 @@ export interface Project {id:string; name:string; root:string; created_at:string
 export interface ProjectFile {path:string; size:number; text:boolean}
 export interface SessionEvent {seq:number; type:string; message:string; time:string; message_id?:string}
 export interface Tenant {id:string; name:string; environment:string; created_at:string; router_model_id?:string|null; rules?:string|null; auto_archive_days?:number|null; memory_auto?:boolean; worktree_cleanup_days?:number|null}
-export interface PullRequest {number:number; title:string; url:string; state:string; draft:boolean; review?:string|null; base?:string; head?:string; checks:{success:number;failure:number;pending:number}; additions?:number; deletions?:number; author?:string}
+export interface PullRequest {number:number; title:string; url:string; state:string; draft:boolean; review?:string|null; base?:string; head?:string; checks:{success:number;failure:number;pending:number}; additions?:number; deletions?:number; author?:string; labels?:string[]; requested?:string[]; reviews?:{author:string|null;state:string}[]; auto_merge?:string|null; mergeable?:string|null; merge_state?:string|null;
+ stack?:{below:{number:number;title:string;url:string;headRefName:string}[];above:{number:number;title:string;url:string;headRefName:string}[];root_base?:string}}
 export const working=(m?:Message)=>m?.role==='assistant'&&m.status==='running';

@@ -136,8 +136,27 @@ class ProjectSettings(StrictModel):
 class PrCreateInput(StrictModel):
     title: str = Field(min_length=1, max_length=200)
     body: str = Field(default='', max_length=20000)
-    base: str | None = Field(default=None, max_length=120)
+    base: str | None = Field(default=None, max_length=200)
     draft: bool = False
+    reviewers: list[str] = Field(default_factory=list, max_length=20)
+    labels: list[str] = Field(default_factory=list, max_length=30)
+
+class PrReviewInput(StrictModel):
+    event: Literal['approve', 'comment', 'request_changes']
+    body: str = Field(default='', max_length=60000)
+
+class PrEditInput(StrictModel):
+    add_reviewers: list[str] = Field(default_factory=list, max_length=20)
+    remove_reviewers: list[str] = Field(default_factory=list, max_length=20)
+    add_labels: list[str] = Field(default_factory=list, max_length=30)
+    remove_labels: list[str] = Field(default_factory=list, max_length=30)
+    base: str | None = Field(default=None, max_length=200)
+
+class PrMergeInput(StrictModel):
+    method: Literal['squash', 'merge', 'rebase'] = 'squash'
+    auto: bool = False
+    delete_branch: bool = False
+    disable_auto: bool = False
 
 class DevServerInput(StrictModel):
     action: Literal['start', 'stop', 'restart', 'kill_port']

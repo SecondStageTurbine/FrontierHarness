@@ -3,7 +3,8 @@ import {useQuery,useQueryClient} from '@tanstack/react-query';
 import {GitBranch,GitCommitHorizontal,Upload,Sparkles,LoaderCircle,RefreshCw,ChevronRight,GitPullRequest,MessageSquarePlus,ExternalLink,CheckCircle2,XCircle,CircleDashed} from 'lucide-react';
 import {useWorkspace} from '../app/context';
 import {api} from '../lib/api';
-import type {GitStatus,GitEntry,ContextChip,PullRequest} from '../types';
+import type {GitStatus,GitEntry,ContextChip} from '../types';
+import {PullRequests} from './PullRequestPanel';
 
 /** The repository behind this conversation: its branch, what is staged, and the user's own commit and push. */
 export function GitPanel({projectId,sessionId,busy,onChip,onCompose}:{projectId:string;sessionId?:string;busy:boolean;onChip?:(chip:ContextChip)=>void;onCompose?:(text:string)=>void}){
@@ -47,31 +48,6 @@ export function GitPanel({projectId,sessionId,busy,onChip,onCompose}:{projectId:
 }
 
 /** The branch's pull request through gh: open one, watch its checks and review, hand review comments to the agent. */
-function PullRequests({projectId,sessionId,branch,upstream,onCompose}:{projectId:string;sessionId?:string;branch:string;upstream:string|null;onCompose?:(text:string)=>void}){
- const {tenant,path,notify}=useWorkspace();const client=useQueryClient();
- const q=sessionId?`?session_id=${sessionId}`:'';
- const key=['tenant',tenant?.id,`/projects/${projectId}/pr${q}`];
- const pr=useQuery({queryKey:key,enabled:!!tenant,refetchInterval:60000,queryFn:({signal})=>api.get<{available:boolean;pr:PullRequest|null;error?:string}>(path(`/projects/${projectId}/pr${q}`),signal)});
- const [open,setOpen]=useState(false),[title,setTitle]=useState(''),[body,setBody]=useState(''),[draft,setDraft]=useState(false),[working,setWorking]=useState(''),[error,setError]=useState('');
- async function act<T>(what:string,run:()=>Promise<T>){setWorking(what);setError('');try{return await run()}catch(e){setError((e as Error).message)}finally{setWorking('')}}
- if(pr.isPending)return null;
- const d=pr.data;
- if(!d?.available)return <div className="pr-section"><GitPullRequest size={13}/><span>Install the GitHub CLI and run gh auth login to open pull requests from here.</span></div>;
- if(d.error&&!d.pr)return <div className="pr-section"><GitPullRequest size={13}/><span>{d.error}</span></div>;
- if(d.pr){const p=d.pr;const checks=p.checks;const review=p.review==='approved'?'approved':p.review==='changes_requested'?'changes requested':p.review==='review_required'?'review required':p.review||'no review yet';
-  return <div className={`pr-section has-pr ${p.state}`}><div className="pr-head"><GitPullRequest size={13}/><a href={p.url} target="_blank" rel="noreferrer"><strong>#{p.number}</strong> {p.title}</a><span className={`pr-state ${p.state}`}>{p.draft?'draft':p.state}</span></div>
-   <div className="pr-meta"><span title="Checks">{checks.failure?<XCircle size={12} className="file-removed"/>:checks.pending?<CircleDashed size={12}/>:<CheckCircle2 size={12} className="file-added"/>}{checks.success+checks.failure+checks.pending?`${checks.success} passed${checks.failure?`, ${checks.failure} failed`:''}${checks.pending?`, ${checks.pending} pending`:''}`:'no checks'}</span><span>{review}</span>{p.additions!=null&&<span><em className="file-added">+{p.additions}</em> <em className="file-removed">−{p.deletions}</em></span>}</div>
-   {error&&<p className="thread-error">{error}</p>}
-   <div className="git-actions">{onCompose&&p.state==='open'&&<button disabled={working!==''} onClick={()=>act('comments',async()=>{const r=await api.get<{prompt:string;comments:unknown[];reviews:unknown[]}>(path(`/projects/${projectId}/pr/comments${q}`));if(!r.comments.length&&!r.reviews.length){notify('No review comments yet');return}onCompose(r.prompt);notify('Review comments are in the composer')})}>{working==='comments'?<LoaderCircle size={13} className="spin"/>:<MessageSquarePlus size={13}/>}Address review comments</button>}<button onClick={()=>window.open(p.url,'_blank')}><ExternalLink size={13}/>Open on GitHub</button><button className="icon-button" title="Refresh" aria-label="Refresh pull request" onClick={()=>pr.refetch()}><RefreshCw size={12} className={pr.isFetching?'spin':''}/></button></div>
-  </div>;}
- return <div className="pr-section"><div className="pr-head"><GitPullRequest size={13}/><span>No pull request for <code>{branch}</code>{upstream?'':' (not pushed yet)'}</span>{!open&&<button onClick={()=>setOpen(true)} disabled={!branch||branch==='HEAD'}>Create pull request</button>}</div>
-  {open&&<div className="pr-form">{error&&<p className="thread-error">{error}</p>}<input aria-label="Pull request title" placeholder="Title" value={title} onChange={e=>setTitle(e.target.value)}/><textarea aria-label="Pull request description" rows={4} placeholder="Description (markdown)" value={body} onChange={e=>setBody(e.target.value)}/>
-   <div className="git-actions"><button disabled={working!==''} title="Ask the agent to draft the title and description from the branch's commits and diff" onClick={()=>act('draft',async()=>{const r=await api.post<{title:string;body:string;model_name:string}>(path(`/projects/${projectId}/pr/description${q}`));setTitle(r.title);setBody(r.body);notify(`${r.model_name} drafted the description`)})}>{working==='draft'?<LoaderCircle size={13} className="spin"/>:<Sparkles size={13}/>}Write description</button>
-    <label className="pr-draft"><input type="checkbox" checked={draft} onChange={e=>setDraft(e.target.checked)}/>Draft</label>
-    <button className="primary" disabled={!title.trim()||working!==''} onClick={()=>act('create',async()=>{await api.post(path(`/projects/${projectId}/pr${q}`),{title:title.trim(),body,draft});setOpen(false);await client.invalidateQueries({queryKey:key});notify('Pull request opened')})}>{working==='create'?<LoaderCircle size={13} className="spin"/>:<GitPullRequest size={13}/>}Push and open</button><button onClick={()=>setOpen(false)}>Cancel</button></div></div>}
- </div>;
-}
-
 export function UnifiedDiff({text}:{text:string}){
  const lines=text.split('\n');
  if(!text.trim())return <p className="inspector-empty">No differences.</p>;

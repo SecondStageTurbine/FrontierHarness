@@ -237,5 +237,36 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await expect(page.locator('.projects-dashboard')).toBeVisible();
  await page.keyboard.press('Control+Shift+KeyD');
  await expect(page.locator('.projects-dashboard')).toBeVisible();  // The old binding no longer toggles it.
+ await page.keyboard.press('Control+Alt+KeyP');
+
+ // Pull requests, against a stand-in for gh: labels, reviewers, the stack, a review drafted and submitted, auto-merge.
+ const pr={number:11,title:'Auth on the API',url:'https://github.com/me/app/pull/11',state:'open',draft:false,review:'review_required',base:'api',head:'auth',
+  checks:{success:3,failure:0,pending:1},additions:40,deletions:3,labels:['backend'],requested:['ana'],reviews:[{author:'bo',state:'commented'}],auto_merge:null,mergeable:'mergeable',merge_state:'blocked',
+  stack:{below:[{number:10,title:'Base API',url:'u10',headRefName:'api'}],above:[{number:12,title:'Login page',url:'u12',headRefName:'login'}],root_base:'main'}};
+ const sent:{url:string;body:unknown}[]=[];
+ await page.route(/\/git(\?|$)/,r=>r.fulfill({json:{repo:true,available:true,branch:'auth',upstream:'origin/auth',ahead:0,behind:0,entries:[],has_head:true}}));
+ await page.route(/\/pr\/options/,r=>r.fulfill({json:{repo:'me/app',default_branch:'main',labels:[{name:'backend',color:'1d76db'},{name:'security',color:'d93f0b'}],people:['ana','bo'],bases:[{branch:'main',title:'The default branch',number:null},{branch:'api',title:'Base API',number:10}]}}));
+ await page.route(/\/pr\/review\/draft/,r=>r.fulfill({json:{event:'request_changes',body:'The token is never checked.',model_name:'Claude'}}));
+ await page.route(/\/pr\/(review|edit|merge)(\?|$)/,r=>{sent.push({url:r.request().url(),body:r.request().postDataJSON()});return r.fulfill({json:{pr}})});
+ await page.route(/\/pr(\?|$)/,r=>r.fulfill({json:{available:true,pr}}));
+ await page.locator('.new-session-button').click();
+ await page.keyboard.press('Control+Shift+KeyG');
+ const prBox=page.locator('.pr-section.has-pr');
+ await expect(prBox).toContainText('#11');
+ await expect(prBox.locator('.pr-stack')).toContainText('main');
+ await expect(prBox.locator('.pr-stack')).toContainText('#12');
+ await expect(prBox.locator('.pr-chips')).toContainText('backend');
+ await prBox.getByRole('button',{name:'Review…'}).click();
+ await prBox.getByRole('button',{name:'Draft with an agent'}).click();
+ await expect(prBox.getByLabel('Review',{exact:true})).toHaveValue('The token is never checked.');
+ await prBox.getByRole('button',{name:'Submit review'}).click();
+ await prBox.getByRole('button',{name:'Reviewers & labels…'}).click();
+ await prBox.locator('.pr-labels button',{hasText:'security'}).click();
+ await prBox.getByRole('button',{name:'Merge…'}).click();
+ await page.screenshot({path:'test-results/pull-request.png'});
+ await prBox.getByRole('button',{name:'Merge when ready'}).click();
+ await expect.poll(()=>sent.length).toBe(3);
+ expect(sent.map(s=>s.body)).toEqual([{event:'request_changes',body:'The token is never checked.'},{add_labels:['security']},{method:'squash',auto:true,delete_branch:false}]);
+ await page.unrouteAll({behavior:'ignoreErrors'});
  expect(errors).toEqual([]);
 });

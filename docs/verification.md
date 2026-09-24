@@ -525,3 +525,13 @@ conversations in once. Installed themes are found from each editor's extension m
 imports a theme file with comments and a trailing comma and checks the page background becomes the
 theme's, then rebinds All projects to Ctrl Alt P and checks the new keys work and the old ones no
 longer do. 152 tests pass.
+
+Version 0.17.0 widens pull request work. Every action is a gh command, and tests pin each one's exact
+arguments: `gh pr review N --approve | --comment | --request-changes --body`, `gh pr edit N
+--add-reviewer/--remove-reviewer/--add-label/--remove-label/--base`, `gh pr merge N --squash|--merge|--rebase
+[--auto] [--delete-branch]`, `gh pr merge N --disable-auto`, and `gh pr create --base --reviewer --label`.
+A stack is worked out from the open pull requests: following base branches down to the default branch,
+and finding the ones based on this branch. Against this repository on GitHub, the read-only calls ran
+live (labels, people who can review, open pull requests, the default branch). Nothing was opened,
+reviewed or merged on a real repository; the browser suite drives the panel against a stand-in for gh
+and checks the review, label and auto-merge requests it sends. 155 tests pass.
