@@ -370,3 +370,55 @@ def subscription_limits(force=False):
         if result is not None:
             found.append(result)
     return found
+
+
+# ── First run: folders the agent tools already have conversations about ──
+
+def history_folders(limit=30):
+    """Folders Claude Code and Codex hold conversations about, newest first, counting only conversations
+    someone had (not ones started by `claude -p` or `codex exec`, which is how Frontier's own turns run).
+    Only the head of each file is read, so this stays quick however long the histories are."""
+    found = {}
+    def note(cwd, source, stamp):
+        if not cwd:
+            return
+        try:
+            path = Path(cwd)
+            if not path.is_dir():
+                return
+            key = str(path.resolve()).lower()
+        except OSError:
+            return
+        row = found.setdefault(key, {'root': str(path.resolve()), 'claude': 0, 'codex': 0, 'last': 0})
+        row[source] += 1
+        row['last'] = max(row['last'], stamp)
+    claude = Path.home()/'.claude'/'projects'
+    for file in claude.glob('*/*.jsonl') if claude.is_dir() else []:
+        try:
+            with file.open(encoding='utf-8', errors='replace') as handle:
+                for _, line in zip(range(40), handle):
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if record.get('type') == 'user' and record.get('cwd'):
+                        if record.get('entrypoint') != 'sdk-cli':
+                            note(record['cwd'], 'claude', file.stat().st_mtime)
+                        break
+        except OSError:
+            continue
+    codex = Path.home()/'.codex'/'sessions'
+    for file in codex.rglob('*.jsonl') if codex.is_dir() else []:
+        try:
+            with file.open(encoding='utf-8', errors='replace') as handle:
+                head = json.loads(handle.readline() or '{}')
+        except (OSError, json.JSONDecodeError):
+            continue
+        meta = head.get('payload') or {}
+        if head.get('type') == 'session_meta' and meta.get('originator') != 'codex_exec':
+            note(meta.get('cwd'), 'codex', file.stat().st_mtime)
+    import tempfile
+    home, temp = str(Path.home().resolve()).lower(), str(Path(tempfile.gettempdir()).resolve()).lower()
+    # A conversation started in the home folder, or in a throwaway temporary folder, is not a project.
+    rows = [r for key, r in found.items() if key != home and not key.startswith(temp)]
+    return sorted(rows, key=lambda r: r['last'], reverse=True)[:limit]

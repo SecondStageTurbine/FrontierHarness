@@ -514,3 +514,14 @@ read correctly, in the Git panel too. The catalog was checked installing a skill
 for Codex (`.agents/skills` is where Codex looks in a repository), refusing to overwrite or delete a
 copy edited in the project, and removing an unedited one. The browser suite picks a starter prompt,
 installs a skill from the catalog, and opens a project from the dashboard. 150 tests pass.
+
+Version 0.16.0 adds rebindable shortcuts, VS Code theme import, and a history step in the first-run
+wizard. The history scan reads only the head of each Claude and Codex file, skips conversations
+started by `claude -p` and `codex exec` (Frontier's own turns), folders that no longer exist, the home
+folder and temporary folders; on this machine it took under a second and listed this repository,
+1clickrag, SAM, PropertyManager and Miq. Importing a folder makes it a project once and brings its
+conversations in once. Installed themes are found from each editor's extension manifests, a theme's
+`include` is merged underneath it, and only files a listed theme names can be read. The browser suite
+imports a theme file with comments and a trailing comma and checks the page background becomes the
+theme's, then rebinds All projects to Ctrl Alt P and checks the new keys work and the old ones no
+longer do. 152 tests pass.

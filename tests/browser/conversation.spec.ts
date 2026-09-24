@@ -218,5 +218,24 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await page.screenshot({path:'test-results/dashboard.png'});
  await card.locator('.dashboard-name').click();
  await expect(page.locator('.projects-dashboard')).toHaveCount(0);
+
+ // A VS Code theme file becomes Frontier's colours.
+ await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await page.locator('.desktop-settings nav button',{hasText:'General'}).click();
+ await page.getByRole('button',{name:/Import a VS Code theme/}).click();
+ await page.locator('input[type=file][accept*=json]').setInputFiles({name:'Ocean.json',mimeType:'application/json',buffer:Buffer.from('{ /* a comment */ "name":"Ocean","type":"dark","colors":{"editor.background":"#0b1d2a","editor.foreground":"#d8e6f0","button.background":"#1f8acb",} }')});
+ await expect(page.locator('.custom-theme')).toContainText('Ocean');
+ expect(await page.evaluate(()=>getComputedStyle(document.documentElement).getPropertyValue('--background').trim())).toBe('#0b1d2a');
+ // A shortcut rebound in Settings works at once.
+ await page.getByRole('button',{name:'Change shortcut for All projects',exact:true}).click();
+ await page.keyboard.press('Control+Alt+KeyP');
+ await expect(page.locator('.shortcut-row',{hasText:'All projects'}).locator('kbd')).toHaveText('Ctrl Alt P');
+ await page.screenshot({path:'test-results/theme-keys.png'});
+ await page.keyboard.press('Escape');
+ await expect(page.locator('.desktop-settings')).toHaveCount(0);
+ await page.keyboard.press('Control+Alt+KeyP');
+ await expect(page.locator('.projects-dashboard')).toBeVisible();
+ await page.keyboard.press('Control+Shift+KeyD');
+ await expect(page.locator('.projects-dashboard')).toBeVisible();  // The old binding no longer toggles it.
  expect(errors).toEqual([]);
 });

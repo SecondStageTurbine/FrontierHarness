@@ -532,3 +532,28 @@ body{overflow:hidden}
 .catalog-row code{font-size:11px;color:var(--subtle)}
 .catalog-row p{margin:3px 0 0;font-size:12px;color:var(--muted)}
 .catalog-actions{display:flex;align-items:center;gap:6px;white-space:nowrap}
+
+/* First-run wizard: past conversations */
+.wizard-history{margin-top:14px;padding-top:12px;border-top:1px solid var(--border)}
+.wizard-history h4{margin:0 0 4px}
+.wizard-folders{display:flex;flex-direction:column;gap:4px;max-height:14rem;overflow:auto;margin:8px 0}
+.wizard-folders label{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;padding:5px 8px;border-radius:6px;background:var(--card);font-size:12.5px}
+.wizard-folders span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,monospace;font-size:11.5px}
+.wizard-folders small{color:var(--subtle);white-space:nowrap}
+/* Keyboard shortcuts */
+.shortcut-list h3{display:flex;align-items:center;gap:8px}
+.shortcut-list h3 .linkish{margin-left:auto;font-size:12px;font-weight:400}
+.shortcut-row{display:grid;grid-template-columns:1fr auto auto auto auto;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)}
+.shortcut-row kbd{font:inherit;font-size:11.5px;padding:2px 8px;border:1px solid var(--border);border-radius:5px;background:var(--elevated);white-space:nowrap}
+.shortcut-row kbd.recording{border-color:var(--primary);color:var(--primary)}
+.shortcut-row button:not(.icon-button){padding:4px 10px}
+.shortcut-row.clash kbd{border-color:var(--warning);color:var(--warning)}
+.shortcut-row small{grid-column:1/-1;color:var(--warning)}
+/* Theme import */
+.theme-options .custom-theme,.theme-options .theme-import-card{border-style:solid}
+.theme-options .theme-import-card{border-style:dashed}
+.theme-import-bar{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.theme-import-bar .file-search{flex:1}
+.theme-import-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:6px;max-height:55vh;overflow:auto}
+.theme-import-list button{display:grid;grid-template-columns:auto 1fr;grid-template-rows:auto auto;column-gap:8px;justify-content:start;text-align:left;padding:8px 10px}
+.theme-import-list button small{grid-column:2;color:var(--subtle);font-weight:400;overflow:hidden;text-overflow:ellipsis}

@@ -44,7 +44,7 @@ The installer installs WebView2 if it is missing; that step needs internet acces
 
 ## Connecting agents
 
-On first run, **Set up your agents** looks for Claude Code, Codex, OpenCode and Gemini CLI on this computer, shows where each is and its version, offers the model identifiers each accepts (Codex's are read from Codex itself), and connects the ones you tick in one go; for a tool that is missing it shows the install and sign-in commands. **Settings → Agents & Providers → Run the setup wizard again** reopens it.
+On first run, **Set up your agents** looks for Claude Code, Codex, OpenCode and Gemini CLI on this computer, shows where each is and its version, offers the model identifiers each accepts (Codex's are read from Codex itself), and connects the ones you tick in one go; for a tool that is missing it shows the install and sign-in commands. **Settings → Agents & Providers → Run the setup wizard again** reopens it. Below the tools, **Bring your past conversations** lists the folders Claude Code and Codex already have conversations about, with how many each holds; tick them and each becomes a project with its conversations imported, ready for the same tool to continue.
 
 
 On a fresh installation, open **Settings → Agents & Providers → Connect model**. Choose **Claude subscription**, **Codex subscription**, **Gemini CLI** or **OpenCode subscription** to run a model without any API key: Frontier runs the agent command line tool you already have installed, and that tool signs in with your own subscription. Install the tool, sign in once in a terminal, then connect a model whose identifier is the name the tool accepts, such as `sonnet` for Claude or `opencode-go/glm-5.3` for OpenCode. There is no key, endpoint or per-token rate to enter. **Test connection** confirms the tool runs; a sign-in problem surfaces on the first request.
@@ -150,6 +150,12 @@ Right-click a project for **Project settings**: the default agent and posture fo
 Right-click a session to rename, pin, archive, or snooze it for an hour or until tomorrow morning; **Remember this session** asks the agent for a few facts worth keeping and adds them to the project memory. Pinned sessions stay at the top; archived and snoozed ones move to their own lists at the bottom of the sidebar. **Settings → General → Workspace** can archive sessions idle for a number of days on its own, optionally remembering them first, remove the worktrees of archived sessions after a number of days while keeping their branches, and holds the **rules** every agent in the workspace is given at the top of every turn. A session whose pull request merges archives itself the next time the Changes panel looks. **Settings → General** also sets the interface size, spellcheck in the composer, and whether the computer is kept awake while an agent or automation works. A turn that finishes while Frontier is in the background raises a desktop notification with a short chime; **Settings → General** turns the chime or the notification off.
 
 Closing the window keeps Frontier running in the system tray: automations keep firing, finished turns still notify you, and the tray icon's menu offers **Open Frontier** and **Quit Frontier**. A left click on the icon reopens the window. **Settings → General → Window** turns this off, after which closing the window quits. Launching Frontier while it is already running brings the existing window to the front instead of starting a second copy.
+
+### Keyboard shortcuts and VS Code themes
+
+**Settings → General → Keyboard shortcuts** lists every shortcut: new session, search, focus the composer, the sidebar, each panel (Files, Changes, Terminal, Preview, Tasks), all projects, resume from CLI, and settings. Press **Change** and then the new keys to rebind one, the cross to clear it, or the arrow to put it back; a clash is flagged. The defaults follow VS Code where there is one (Ctrl B, Ctrl Shift E, Ctrl Shift G, Ctrl `, Ctrl ,).
+
+**Import a VS Code theme**, beside the built-in themes, lists the colour themes installed in VS Code, VS Code Insiders, Cursor, Windsurf and VSCodium, or takes a theme's .json file. Frontier maps the theme's editor, sidebar, widget, border, link, button and terminal colours onto its own, and keeps the result as a theme you can switch back to or remove.
 
 ### Projects dashboard
 

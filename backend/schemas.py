@@ -154,6 +154,9 @@ class CatchupInput(StrictModel):
 class ImportInput(StrictModel):
     sources: list[Literal['claude', 'codex']] = Field(default_factory=lambda: ['claude', 'codex'], min_length=1)
 
+class HistoryImportInput(StrictModel):
+    roots: list[str] = Field(min_length=1, max_length=50)
+
 class ResumeCliInput(StrictModel):
     source: Literal['claude', 'codex']
     key: str = Field(min_length=1, max_length=200)

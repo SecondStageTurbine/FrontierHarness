@@ -10,10 +10,11 @@ from fastapi import Request, Response, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse, FileResponse
 from .schemas import (ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput, GitPaths, CommitInput, FileWrite,
                       McpServerInput, ApprovalDecision, ApprovalRequest, FanoutInput, AutomationInput, ProjectSettings, PrCreateInput,
-                      DevServerInput, RewindInput, ImportInput, CloneInput, CatchupInput, ResumeCliInput, BoardTaskInput, BoardTaskPatch)
+                      DevServerInput, RewindInput, ImportInput, CloneInput, CatchupInput, ResumeCliInput, BoardTaskInput, BoardTaskPatch, HistoryImportInput)
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
 from . import gitops, automations, pullrequests, devserver, maintenance, board, skill_catalog
+from . import vscode_themes as vscode_themes_module
 import secrets
 from datetime import datetime, timedelta, timezone
 from .adaptive import ADAPTIVE
@@ -683,6 +684,41 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
                 'json':{'mcpServers':{'frontier':{'command':command,'args':args}}}}
 
     # ── First-run setup: which agent tools this computer has ──
+    @app.get('/api/t/{tenant_id}/setup/history')
+    async def setup_history(tenant_id:str,request:Request):
+        """Folders with past Claude and Codex conversations, and whether each is a project here yet."""
+        scoped(request,tenant_id)
+        folders=await asyncio.to_thread(maintenance.history_folders)
+        known={str(Path(p['root']).resolve()).lower():p['id'] for p in store.list(tenant_id,'projects')}
+        return [{**f,'project_id':known.get(f['root'].lower())} for f in folders]
+
+    @app.post('/api/t/{tenant_id}/setup/history')
+    async def setup_history_import(tenant_id:str,payload:HistoryImportInput,request:Request):
+        """Each chosen folder becomes a project, if it is not one already, and its conversations come in."""
+        scoped(request,tenant_id)
+        known={str(Path(p['root']).resolve()).lower():p for p in store.list(tenant_id,'projects')}
+        done=[]
+        for root in payload.roots:
+            project=known.get(str(Path(root).resolve()).lower()) or files.create(tenant_id,Path(root).name or root,root)
+            imported=await asyncio.to_thread(maintenance.import_history,store,tenant_id,project)
+            done.append({'project_id':project['id'],'name':project['name'],'imported':len(imported)})
+        return done
+
+    @app.get('/api/t/{tenant_id}/themes/vscode')
+    async def vscode_themes(tenant_id:str,request:Request):
+        scoped(request,tenant_id)
+        return await asyncio.to_thread(vscode_themes_module.installed)
+
+    @app.get('/api/t/{tenant_id}/themes/vscode/theme')
+    async def vscode_theme(tenant_id:str,path:str,request:Request):
+        scoped(request,tenant_id)
+        try:
+            return await asyncio.to_thread(vscode_themes_module.load,path)
+        except KeyError:
+            raise HTTPException(404,'That theme is not one of the installed themes.') from None
+        except (OSError,ValueError) as exc:
+            raise HTTPException(422,f'The theme file could not be read: {exc}') from None
+
     @app.get('/api/t/{tenant_id}/setup/detect')
     async def setup_detect(tenant_id:str,request:Request):
         scoped(request,tenant_id)
