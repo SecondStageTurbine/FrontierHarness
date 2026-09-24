@@ -143,3 +143,16 @@ def test_a_spent_single_login_rests_and_an_echoed_prompt_is_not_read_as_exhausti
     prompt = 'USER:\nWhy do we hit the rate limit and the quota so often?'
     echoed = 'codex\nuser\n' + prompt + '\nERROR: stream disconnected'
     assert 'quota' not in strip_echo(echoed, prompt) and 'stream disconnected' in strip_echo(echoed, prompt)
+
+
+def test_the_team_lead_sees_every_agent_with_where_it_runs_and_what_it_is_good_at(monkeypatch):
+    from backend import team, localhealth
+    monkeypatch.setattr(localhealth, 'local_providers', lambda: {'prometheus': 'http://127.0.0.1:8080/v1'})
+    agents = [{'id': 'a', 'name': 'GPT-6-Astra', 'provider': 'codex_cli', 'model_name': 'gpt-6-astra'},
+              {'id': 'q', 'name': 'Qwen 3.8 27B', 'provider': 'opencode_cli', 'model_name': 'prometheus/Prometheus'},
+              {'id': 'h', 'name': 'Haiku', 'provider': 'claude_cli', 'model_name': 'haiku'}]
+    text = team.roster(agents, {'offline': [{'name': 'Gemma local'}]}, agents[0])
+    assert 'GPT-6-Astra: Codex, model gpt-6-astra; cloud, high cost' in text and '(you, the lead)' in text
+    assert 'Qwen 3.8 27B: OpenCode, model prometheus/Prometheus; local on this computer, no usage cost' in text
+    assert 'Haiku: Claude Code' in text and 'Offline right now, so not on the team: Gemma local.' in text
+    assert 'not from your own model family' in team.PLAN_ASK and 'local agents' in team.PLAN_ASK

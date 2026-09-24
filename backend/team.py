@@ -11,9 +11,9 @@ import json
 import re
 
 from . import board
-from . import adaptive, gitops
+from . import adaptive, gitops, localhealth
 from .adaptive import TaskRequirements
-from .broker import AgentResult, ProviderError, cooling as broker_cooling
+from .broker import CLI_TOOLS, AgentResult, ProviderError, cooling as broker_cooling
 from .store import now, uid
 
 MAX_TASKS = 6
@@ -31,8 +31,28 @@ PLAN_ASK = (
     'and no dependencies run at the same time in separate copies of the folder, so give them disjoint files. Put shared '
     'groundwork first with "parallel": false. Every task must be doable by an agent that has not read this conversation, '
     'so its instructions must stand alone. A review task is always given to a different model family from you and from '
-    'the agents whose work it checks, and you review again at the end, so the work gets two independent reviews.'
+    'the agents whose work it checks, and you review again at the end, so the work gets two independent reviews.\n'
+    'Staff the team from the whole roster below, not from your own model family: every tool and every local model on it '
+    'is available. Match each task to the agent whose strengths fit it; give simple, well-specified tasks to cheaper and '
+    'local agents (a local one runs on this computer at no usage cost) and keep the strongest for the hard ones. Name an '
+    'agent only when you have a reason; otherwise leave "agent" null and Frontier picks the cheapest one whose strengths '
+    'cover the task\'s "needs".'
 )
+
+
+def roster(agents, online, lead):
+    """The connected agents as the lead is shown them: tool, model, where it runs, cost, and what it is best at."""
+    lines = []
+    for agent in agents:
+        cap = adaptive.profile(agent) or {}
+        local = localhealth.server_for(agent) is not None or cap.get('location') == 'local'
+        best = sorted((c for c in CAPABILITIES if c != 'speed'), key=lambda c: -cap.get(c, 0))[:3]
+        where = 'local on this computer, no usage cost' if local else f'cloud, {cap.get("cost_class", "unknown")} cost'
+        lines.append(f'- {agent["name"]}: {CLI_TOOLS.get(agent["provider"], ("", "", agent["provider"]))[2]}, model {agent.get("model_name")}; {where}; '
+                     f'best at {", ".join(f"{c} {cap.get(c, 0)}" for c in best)}; speed {cap.get("speed", 5)}' + (' (you, the lead)' if agent['id'] == lead['id'] else ''))
+    offline = [a['name'] for a in online.get('offline', [])]
+    return ('CONNECTED AGENTS (strengths are 0 to 10):\n' + '\n'.join(lines)
+            + (f'\nOffline right now, so not on the team: {", ".join(offline)}.' if offline else ''))
 REVIEW_ASK = (
     'You are the lead. Your workers have finished; their reports and the resulting diff of the project are below. '
     'Judge whether the request is now done. Reply with ONLY a JSON object inside a ```json fence: '
@@ -170,12 +190,17 @@ class Team:
 
     async def run(self, conversation_prompt, objective):
         session, message = self.state()
-        agents = [a for a in self.runner.agents(self.tenant_id) if a.get('enabled', True)]
+        connected = [a for a in self.runner.agents(self.tenant_id) if a.get('enabled', True)]
+        # A local agent whose server is not running cannot take a task; the lead is told who is out.
+        up = await localhealth.availability(connected)
+        agents = [a for a in connected if up.get(a['id']) is not False]
+        # A local agent costs nothing to run, so assignment counts it as free, whatever its tool's default says.
+        agents = [{**a, 'cost_class': 'free'} if localhealth.server_for(a) and not a.get('cost_class') else a for a in agents]
         team = message['team']
         team.update(status='planning', lead=self.lead['name'], agents=[a['name'] for a in agents])
         self.save(message, session, f'{self.lead["name"]} is planning the work.')
-        roster = 'CONNECTED AGENTS: ' + ', '.join(a['name'] for a in agents)
-        raw = await self.ask_lead(conversation_prompt + '\n\n' + PLAN_ASK + '\n' + roster)
+        listing = roster(agents, {'offline': [a for a in connected if up.get(a['id']) is False]}, self.lead)
+        raw = await self.ask_lead(conversation_prompt + '\n\n' + PLAN_ASK + '\n' + listing)
         plan = normalise_plan(parse_json(raw))
         if not plan['tasks']:
             raise ProviderError(f'{self.lead["name"]} did not return a plan the team could run. Its reply: {raw[:600]}')

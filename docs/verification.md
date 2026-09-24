@@ -641,3 +641,10 @@ Workspace servers now run their tools unasked in Codex under Edit files and Full
 the refusal for tools that are not read-only), and a project's agent browser replaces a plain Playwright
 server in the workspace so an agent is offered one browser, the one the project chose. Live: Codex used a
 workspace Playwright server under Edit files to read a local page's title, heading and console errors.
+
+Version 0.20.4: a team led by GPT-6-Astra named only Codex models for its tasks. The lead had been given
+the roster as bare names. It now sees each agent's tool, model, where it runs (local on this computer at no
+usage cost, or cloud and its cost class), its three strongest capabilities with scores, and its speed,
+and is told to staff from the whole roster, send simple tasks to cheaper and local agents, and leave the
+agent unnamed unless it has a reason. Local agents whose server is down are left off the team and listed
+as offline; a local agent is counted as free when tasks are assigned.
