@@ -13,6 +13,7 @@ attempt fails or the agent says it cannot, a stronger one continues the same tur
 handoff. A manual choice is never second-guessed.
 """
 import asyncio
+import logging
 import os
 import re
 import secrets
@@ -357,8 +358,8 @@ class AgentRunner:
         if confined['files'] or confined['network'] != 'open':
             extras['sandbox'] = confined
         if (project or {}).get('agent_browser') and not any(s['name'] == 'frontier-browser' for s in servers):
-            token = (project or {}).get('agent_browser_token')
-            extras['mcp_servers'] = servers + [browser_server(project, self.store.decrypt(token) if token else None)]
+            sealed = (project or {}).get('agent_browser_token')  # Not `token`: that name is this turn's own token.
+            extras['mcp_servers'] = servers + [browser_server(project, self.store.decrypt(sealed) if sealed else None)]
         port = os.environ.get('HARNESS_DESKTOP_PORT')
         if port:
             # Frontier's own tools: under Edit files the approval card; in every posture the question
@@ -710,6 +711,7 @@ class AgentRunner:
         except Exception:
             # A turn runs detached, so an unexpected failure has nowhere else to surface. The
             # message has to close, or the conversation stays busy forever.
+            logging.getLogger('frontier.agent').exception('A turn stopped unexpectedly')
             status, error = 'failed', 'The turn stopped unexpectedly. Anything the agent had already written to the folder is still there.'
         finally:
             self.turn_tokens.pop(token, None)

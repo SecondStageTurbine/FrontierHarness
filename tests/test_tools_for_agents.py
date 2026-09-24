@@ -141,7 +141,8 @@ def test_the_browser_tools_never_wait_on_an_approval_card(tmp_path):
     assert '--allowedTools' not in agent_argv('claude_cli', ['claude'], 'sonnet', 'edit', tmp_path, tmp_path/'f', {'mcp_servers': []})
 
 
-def test_agents_can_use_the_users_own_browser_with_its_token_kept_secret(tmp_path):
+def test_agents_can_use_the_users_own_browser_with_its_token_kept_secret(tmp_path, monkeypatch):
+    monkeypatch.setenv('HARNESS_DESKTOP_PORT', '8765')
     project = {'root': str(tmp_path), 'agent_browser': True, 'agent_browser_mode': 'mine', 'agent_browser_channel': 'msedge'}
     server = browser_server(project, token='tok-123')
     assert '--extension' in server['args'] and server['args'][server['args'].index('--browser')+1] == 'msedge' and '--isolated' not in server['args']
@@ -162,4 +163,5 @@ def test_agents_can_use_the_users_own_browser_with_its_token_kept_secret(tmp_pat
         extras = c.app.state.runner.extras(t, 'turn-token', 'edit', stored)
         browser = next(s for s in extras['mcp_servers'] if s['name'] == 'frontier-browser')
         assert browser['env']['PLAYWRIGHT_MCP_EXTENSION_TOKEN'] == 'tok-123'
+        assert extras['approval']['token'] == 'turn-token'  # The browser's token must not replace the turn's own.
         assert not c.put(f'/api/t/{t}/projects/{p["id"]}/settings', json={'agent_browser_token': ''}).json()['agent_browser_token_set']

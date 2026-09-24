@@ -627,3 +627,9 @@ browser at all. Live: Codex opened a local page through Frontier's browser and r
 heading and console error, with the screenshot saved. The extension-mode server was started and listed
 its 25 tools; connecting to the user's browser needs the extension installed there, which was not done on
 this machine. 173 tests and three browser suites pass.
+
+Version 0.20.1 fixes a regression in 0.20.0 that the browser suite caught after 0.20.0 was published:
+with the agent browser on, the variable holding the browser extension's token shadowed the turn's own
+token, so approval cards, question cards and the task board failed for that project ("The turn stopped
+unexpectedly"). A test now checks the turn keeps its own token. The release script now runs the Python
+tests and the browser suites first and stops on any failure.
