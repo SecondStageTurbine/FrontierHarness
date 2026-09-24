@@ -7,7 +7,7 @@ wake rather than being replayed for every missed slot.
 import asyncio
 from datetime import datetime, timedelta
 
-from .store import now, uid
+from .store import TenantIsolationViolationException, now, uid
 
 TICK_SECONDS = 30
 
@@ -36,19 +36,26 @@ def due(automation, at=None):
 
 async def run(store, runner, tenant_id, automation, trigger='schedule'):
     """Open a session in the automation's project and send its prompt as one turn."""
-    project = store.get(tenant_id, 'projects', automation['project_id'])
-    name = f'⏱ {automation["name"]} · {datetime.now().strftime("%b %d %H:%M")}'
-    session = store.put(tenant_id, 'sessions', {'id': uid(), 'project_id': project['id'], 'name': name, 'messages': [], 'commands': [],
-                                                'created_at': now(), 'updated_at': now(), 'automation_id': automation['id'], 'auto_named': False})
+    session = None
     try:
+        project = store.get(tenant_id, 'projects', automation['project_id'])
+        if automation['model_id'] != 'adaptive':
+            store.get(tenant_id, 'models', automation['model_id'])  # A removed agent fails here, before a session is opened.
+        name = f'⏱ {automation["name"]} · {datetime.now().strftime("%b %d %H:%M")}'
+        session = store.put(tenant_id, 'sessions', {'id': uid(), 'project_id': project['id'], 'name': name, 'messages': [], 'commands': [],
+                                                    'created_at': now(), 'updated_at': now(), 'automation_id': automation['id'], 'auto_named': False})
         runner.send(tenant_id, project['id'], session['id'], automation['prompt'], automation['model_id'], automation['mode'])
         outcome = 'started'
-    except (ValueError, FileNotFoundError) as exc:
+    except TenantIsolationViolationException:
+        outcome = 'failed: its project or its agent was removed. Edit the automation to choose others.'
+    except Exception as exc:
         outcome = f'failed: {exc}'
-        store.event(tenant_id, session['id'], 'turn.failed', str(exc))
+        if session:
+            store.event(tenant_id, session['id'], 'turn.failed', str(exc))
+    # Whatever happened, the schedule moves on, so a failure is tried again at its next time, not every tick.
     fresh = store.get(tenant_id, 'automations', automation['id'])
-    fresh.update(last_run_at=now(), last_outcome=outcome, last_session_id=session['id'], last_trigger=trigger,
-                 next_run_at=stamp(next_run(fresh)), runs=(fresh.get('runs') or 0) + 1)
+    fresh.update(last_run_at=now(), last_outcome=outcome, last_session_id=session['id'] if session else fresh.get('last_session_id'),
+                 last_trigger=trigger, next_run_at=stamp(next_run(fresh)), runs=(fresh.get('runs') or 0) + 1)
     store.put(tenant_id, 'automations', fresh)
     return session
 
@@ -114,12 +121,18 @@ async def scheduler(store, runner, stop):
             with store.db() as db:
                 tenants = [row['id'] for row in db.execute('SELECT id FROM tenants').fetchall()]
             for tenant_id in tenants:
-                await housekeeping(store, runner, tenant_id)
+                try:
+                    await housekeeping(store, runner, tenant_id)
+                except Exception:
+                    pass  # One workspace's housekeeping must not stop another's.
                 for automation in store.list(tenant_id, 'automations'):
-                    if due(automation) and not runner.busy_anywhere(tenant_id, automation['project_id']):
-                        await run(store, runner, tenant_id, automation)
+                    try:
+                        if due(automation) and not runner.busy_anywhere(tenant_id, automation['project_id']):
+                            await run(store, runner, tenant_id, automation)
+                    except Exception:
+                        pass  # One bad automation must not stop the others; its own run records the failure.
         except Exception:
-            pass  # One bad automation must not stop the loop; its own run records the failure.
+            pass  # The store itself failed; the next tick tries again.
         try:
             await asyncio.wait_for(stop.wait(), TICK_SECONDS)
         except TimeoutError:

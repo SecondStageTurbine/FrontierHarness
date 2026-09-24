@@ -585,3 +585,23 @@ Agent calls outside a conversation turn (commit message, pull request descriptio
 catch-up summary, remembering a session, compacting, and the team lead) now carry the project's
 sandbox and its .env protection, as turns do; a test checks the extras such a call receives.
 165 tests pass.
+
+Version 0.19.4 fixes the nine problems the whole-codebase review found.
+- Sandbox escape: a file-sandboxed agent can read, so it could read Frontier's local token and call its
+  API to switch its own sandbox off or start a command outside it. Windows does not enforce "no read up"
+  on files (checked: a low-integrity process still read a file labelled so), so the API now refuses
+  low-integrity callers while a sandboxed turn runs, finding the caller's process from the TCP table and
+  reading its token's integrity. Live: Codex under the file sandbox ran a script that read the token and
+  called the API, and got 403 "Frontier's API is closed to sandboxed agents"; the owner's own calls still
+  answered. The turn's own tools use /internal with the turn's token and are unaffected.
+- Automations: one whose project or agent was removed no longer opens empty sessions or stops the
+  scheduler; it records why and waits for its next time. Removing a project removes its automations and
+  board. Each automation and each workspace's housekeeping is isolated from the others' failures.
+- A turn saving routing, a fallback, an escalation, a team checkpoint or a failed resume now writes onto a
+  fresh copy of the conversation, so a rename or a queued message made meanwhile stays.
+- Rewinding past what a tool's own resumed session holds cuts that link, so the next turn replays.
+- Team mode ignores a fix for a task not in the plan, and each worker starts from the lead's folder as it
+  is then, so a task sees what earlier tasks folded back.
+- A spent agent with a single login is given its rest; the output of a failed tool is judged for
+  "out of usage" with the prompt it echoed taken out.
+171 tests pass.

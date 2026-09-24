@@ -557,6 +557,17 @@ class AgentRunner:
                               'attempts': [], 'escalations': 0}
         return self.store.get(tenant_id, 'models', chosen['id']), ranked
 
+    def save_turn(self, tenant_id, session_id, message_id, session_fields=None, **message_fields):
+        """Save fields of the running message (and of the session) onto a fresh read, so whatever the user did
+        meanwhile, a queued message, a rename, a pin, stays. The turn's own copy is updated to match."""
+        fresh = self.store.get(tenant_id, 'sessions', session_id)
+        target = next((m for m in fresh['messages'] if m['id'] == message_id), None)
+        if target is not None:
+            target.update(message_fields)
+        fresh.update(session_fields or {})
+        self.store.put(tenant_id, 'sessions', fresh)
+        return fresh
+
     def bind(self, tenant_id, session_id, message_id, config, note):
         """Point the running message at the agent now taking it, and tell the stream."""
         session = self.store.get(tenant_id, 'sessions', session_id)
@@ -594,7 +605,7 @@ class AgentRunner:
         try:
             if adaptive_turn:
                 config, ranked = await self.route(tenant_id, project_id, session, message)
-                self.store.put(tenant_id, 'sessions', session)
+                self.save_turn(tenant_id, session_id, message_id, routing=message['routing'])
                 session, message = self.bind(tenant_id, session_id, message_id, config,
                                              f'Adaptive chose {config["name"]}: {message["routing"]["chosen"]["because"]}.')
             elif (await localhealth.availability([config])).get(config['id']) is False:
@@ -603,7 +614,8 @@ class AgentRunner:
             if message.get('team'):
                 # The lead plans and reviews under Read only; its workers take the real posture.
                 message['team']['checkpoint'] = before_ref
-                self.store.put(tenant_id, 'sessions', session)
+                session = self.save_turn(tenant_id, session_id, message_id, team=message['team'])
+                message = next(m for m in session['messages'] if m['id'] == message_id)
                 visible, summary = conversation(session)
                 objective = next(m['content'] for m in reversed(session['messages']) if m['role'] == 'user')
                 lead_prompt = build_prompt(visible, False, None, 'read', summary, rules=rules, memory=memory, environment=environment, board=board_text)
@@ -631,7 +643,7 @@ class AgentRunner:
                             if exc.exhausted:
                                 raise
                             session['native'] = None
-                            self.store.put(tenant_id, 'sessions', session)
+                            self.save_turn(tenant_id, session_id, message_id, session_fields={'native': None})
                             self.store.event(tenant_id, session_id, 'turn.agent', f'{config["name"]} could not resume its own session ({exc}); the conversation is replayed instead.', message_id=message_id)
                     if result is None:
                         result = await self.broker.invoke_agent(tenant_id, config, prompt, mode, root, extras)
@@ -648,7 +660,7 @@ class AgentRunner:
                         rounds += 1
                         attempts.append({'id': config['id'], 'name': config['name'], 'outcome': 'out of usage', 'reply': ''})
                         message['routing'].update(attempts=attempts, fallbacks=message['routing'].get('fallbacks', 0) + 1)
-                        self.store.put(tenant_id, 'sessions', session)
+                        self.save_turn(tenant_id, session_id, message_id, routing=message['routing'])
                         handoff_text = adaptive.render_handoff(adaptive.handoff(session, message, attempts))
                         spent = config['name']
                         config = following
@@ -666,7 +678,7 @@ class AgentRunner:
                 # Escalate: a stronger agent continues this same turn, told what happened so far.
                 message['routing'].update(attempts=attempts, escalations=message['routing'].get('escalations', 0) + 1)
                 message['changes'] = changed
-                self.store.put(tenant_id, 'sessions', session)
+                self.save_turn(tenant_id, session_id, message_id, routing=message['routing'], changes=changed)
                 handoff_text = adaptive.render_handoff(adaptive.handoff(session, message, attempts))
                 config = self.store.get(tenant_id, 'models', following['id'])
                 session, message = self.bind(tenant_id, session_id, message_id, config, f'Escalating to {config["name"]}: {reason}.')
@@ -772,6 +784,9 @@ class AgentRunner:
                     restored += self.undo_changes(tenant_id, project_id, session_id, reply.get('changes') or [])
         session['messages'] = session['messages'][:index]
         session['queue'] = []
+        if (session.get('native') or {}).get('upto', 0) > index:
+            # The tool's own session still remembers the turns rewound away; later turns replay the transcript instead.
+            session['native'] = None
         if session.get('summary') and not any(m['id'] == session['summary']['through'] for m in session['messages']):
             session['summary'] = None
         session['updated_at'] = now()

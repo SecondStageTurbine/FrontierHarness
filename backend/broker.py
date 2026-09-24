@@ -70,6 +70,13 @@ class AgentResult:
 def is_exhausted(*texts):
     return any(phrase in (text or '').lower() for text in texts for phrase in LIMIT_PHRASES)
 
+def strip_echo(text, prompt):
+    """Output with the prompt, and any line of it, taken out."""
+    if not text or not prompt:
+        return text
+    lines = {line.strip() for line in prompt.splitlines() if line.strip()}
+    return '\n'.join(line for line in text.replace(prompt, '').splitlines() if line.strip() not in lines)
+
 def cli_exit_error(provider, code, out, err):
     """Why a tool stopped, when it left nothing readable behind. Output can echo the prompt, so
     it is classified here and the message says only what the user can act on."""
@@ -426,6 +433,7 @@ class ModelBroker:
         # ponytail: in process, because a lost cooldown costs one two-second probe against a
         # subscription that turns out to still be spent. Move it to the store if that ever shows.
         self.cooldowns = {}
+        self.confined = 0  # Turns running under the file sandbox; while any do, the API checks its callers' integrity.
 
     def accounts_for(self, tenant_id, config):
         """Every connected subscription that can take this turn, the selected one first.
@@ -446,9 +454,11 @@ class ModelBroker:
             try:
                 result = await self.run_agent(tenant_id, candidate, prompt, mode, root, extras)
             except ProviderError as exc:
+                if exc.exhausted:
+                    # Rested even when it is the last login, so Adaptive and the fallback stop picking a spent agent first.
+                    self.cooldowns[(tenant_id, candidate['id'])] = time.monotonic() + COOLDOWN_SECONDS
                 if not exc.exhausted or index == len(candidates)-1:
                     raise
-                self.cooldowns[(tenant_id, candidate['id'])] = time.monotonic() + COOLDOWN_SECONDS
                 continue
             self.cooldowns.pop((tenant_id, candidate['id']), None)
             result.served_by = candidate['id']
@@ -472,6 +482,7 @@ class ModelBroker:
                                         + (policy['allow'] if policy['network'] == 'allowlist' else []))
             added.update(sandbox.proxy_env(await net.start()))
         extras['sandbox_env'] = added
+        self.confined += 1 if extras.get('outer_sandbox') else 0
         try:
             result = await self.run_tool(tenant_id, config, prompt, mode, root, extras)
         except ProviderError as exc:
@@ -479,6 +490,7 @@ class ModelBroker:
                 raise ProviderError(f'{exc} The sandbox refused network access to {", ".join(net.blocked[:8])}.', exc.retryable, exc.exhausted) from None
             raise
         finally:
+            self.confined -= 1 if extras.get('outer_sandbox') else 0
             if net:
                 await net.stop()
         result.blocked = list(net.blocked) if net else []
@@ -515,6 +527,8 @@ class ModelBroker:
             try:
                 async with asyncio.timeout(extras.get('timeout') or TURN_TIMEOUT):
                     code, out, err = await run_cli(argv, prompt, root, env)
+                # A tool may echo the conversation; words like 'quota' in it must not read as the tool running out.
+                err = strip_echo(err, prompt)
             except TimeoutError:
                 limit = (extras.get('timeout') or TURN_TIMEOUT) // 60
                 raise ProviderError(f'{CLI_TOOLS[provider][2]} was still working after {limit} minutes and was stopped. Anything it had already written to the folder is still there. A project whose checks run longer can raise the limit in Project settings.') from None
@@ -529,12 +543,12 @@ class ModelBroker:
                 logging.getLogger('frontier.broker').warning('%s turn failed (exit %s). stderr tail: %s', CLI_TOOLS[provider][2], code, ' '.join((err or '')[-1500:].split()))
                 raise
             if code != 0:
-                raise cli_exit_error(provider, code, out, err)
+                raise cli_exit_error(provider, code, strip_echo(out, prompt), err)
             if provider == 'opencode_cli':
                 return read_opencode(out, err, provider)
             text = final.read_text(encoding='utf-8') if final.is_file() else ''
             if not text.strip():
-                if is_exhausted(out, err):
+                if is_exhausted(strip_echo(out, prompt), err):
                     raise exhausted_error(provider)
                 raise ProviderError(f'{CLI_TOOLS[provider][2]} returned no final message. Confirm the subscription is signed in.')
             # Codex reports only a combined token total, so usage stays unreported.

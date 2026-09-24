@@ -60,6 +60,50 @@ def lower_integrity():
         raise ctypes.WinError(ctypes.get_last_error())
 
 
+def peer_integrity(client_port, server_port):
+    """The integrity level (as a RID: low 0x1000, medium 0x2000) of the local process on the other end of
+    a loopback TCP connection, found through the TCP table and that process's token. None if unknown."""
+    import ctypes
+    import ctypes.wintypes as w
+    import socket
+    iphlp, kernel, advapi = (ctypes.WinDLL(n, use_last_error=True) for n in ('iphlpapi', 'kernel32', 'advapi32'))
+    size = w.DWORD(0)
+    iphlp.GetExtendedTcpTable(None, ctypes.byref(size), False, 2, 5, 0)  # AF_INET, TCP_TABLE_OWNER_PID_ALL
+    buffer = ctypes.create_string_buffer(size.value)
+    if iphlp.GetExtendedTcpTable(buffer, ctypes.byref(size), False, 2, 5, 0) != 0:
+        return None
+    count = ctypes.cast(buffer, ctypes.POINTER(w.DWORD))[0]
+    class Row(ctypes.Structure):
+        _fields_ = [('state', w.DWORD), ('local_addr', w.DWORD), ('local_port', w.DWORD), ('remote_addr', w.DWORD), ('remote_port', w.DWORD), ('pid', w.DWORD)]
+    rows = ctypes.cast(ctypes.addressof(buffer) + ctypes.sizeof(w.DWORD), ctypes.POINTER(Row * count)).contents
+    pid = next((r.pid for r in rows if socket.ntohs(r.local_port & 0xFFFF) == client_port and socket.ntohs(r.remote_port & 0xFFFF) == server_port), None)
+    if not pid:
+        return None
+    kernel.OpenProcess.restype = w.HANDLE
+    advapi.OpenProcessToken.argtypes = [w.HANDLE, w.DWORD, ctypes.POINTER(w.HANDLE)]
+    advapi.GetTokenInformation.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD, ctypes.POINTER(w.DWORD)]
+    advapi.GetSidSubAuthorityCount.restype = ctypes.POINTER(ctypes.c_ubyte)
+    advapi.GetSidSubAuthority.restype = ctypes.POINTER(w.DWORD)
+    process = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not process:
+        return None
+    token = w.HANDLE()
+    try:
+        if not advapi.OpenProcessToken(process, 0x0008, ctypes.byref(token)):
+            return None
+        needed = w.DWORD(0)
+        advapi.GetTokenInformation(token, 25, None, 0, ctypes.byref(needed))
+        label = ctypes.create_string_buffer(needed.value)
+        if not advapi.GetTokenInformation(token, 25, label, needed, ctypes.byref(needed)):
+            return None
+        sid = ctypes.cast(label, ctypes.POINTER(ctypes.c_void_p))[0]
+        return advapi.GetSidSubAuthority(ctypes.c_void_p(sid), advapi.GetSidSubAuthorityCount(ctypes.c_void_p(sid))[0] - 1)[0]
+    finally:
+        if token:
+            kernel.CloseHandle(token)
+        kernel.CloseHandle(process)
+
+
 def run_confined(argv):
     """`frontier-backend --sandboxed -- <command…>`: lower integrity, then run the command with this
     process's own standard input and output, and exit with its code."""

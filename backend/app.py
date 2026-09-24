@@ -90,6 +90,14 @@ def create_app(directory=None, broker=None):
                 return JSONResponse({'detail':'Cross-origin API access is blocked.'}, status_code=403)
             if request.headers.get('sec-fetch-site') == 'cross-site':
                 return JSONResponse({'detail':'Cross-site API access is blocked.'},status_code=403)
+            # A file-sandboxed agent can read, so it could find a way to authenticate; the API is closed to
+            # low-integrity callers outright, so it cannot switch its own sandbox off or start a command outside it.
+            # The turn's own tools use /internal, which carries the turn's token and allows only what a turn may do.
+            if getattr(runner.broker, 'confined', 0) and request.client and request.client.host in ('127.0.0.1', '::1'):
+                from . import sandbox
+                level = await asyncio.to_thread(sandbox.peer_integrity, request.client.port, request.url.port or 0)
+                if level is not None and level < 0x2000:
+                    return JSONResponse({'detail':'Frontier\'s API is closed to sandboxed agents.'}, status_code=403)
             length = request.headers.get('content-length')
             if length and int(length) > 52_000_000:
                 return JSONResponse({'detail':'Upload is too large. Maximum 50 MB.'},status_code=413)

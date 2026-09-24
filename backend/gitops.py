@@ -199,7 +199,7 @@ def branch_name(text, suffix):
     return f'frontier/{slug}-{suffix}'
 
 
-async def worktree_add(root, path, branch, copy=()):
+async def worktree_add(root, path, branch, copy=(), start=None):
     """A new worktree on a new branch from the current HEAD, or on the branch if it already exists.
 
     `copy` names ignored files, such as .env, that the user chose to carry into every worktree so
@@ -209,7 +209,8 @@ async def worktree_add(root, path, branch, copy=()):
         raise GitError('Make a first commit in this repository before working in a branch.')
     exists = (await run(root, 'branch', '--list', branch)).strip() != ''
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    args = ['worktree', 'add', str(path), branch] if exists else ['worktree', 'add', '-b', branch, str(path)]
+    # `start` bases a new branch on a given commit (a checkpoint of someone's working tree) instead of HEAD.
+    args = ['worktree', 'add', str(path), branch] if exists else ['worktree', 'add', '-b', branch, str(path), *([start] if start else [])]
     await run(root, *args)
     return hydrate(root, path, copy)
 

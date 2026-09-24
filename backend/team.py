@@ -205,7 +205,8 @@ class Team:
             self.save(message, session, f'{self.lead["name"]} is reviewing the team’s work.')
             verdict = parse_json(await self.ask_lead(await self.review_prompt(objective, team, repo))) or {}
             reply = (verdict.get('reply') or '').strip()
-            fixes = [f for f in (verdict.get('fixes') or []) if isinstance(f, dict) and f.get('task_id') and f.get('instructions')]
+            planned = {t['id'] for t in team['tasks']}
+            fixes = [f for f in (verdict.get('fixes') or []) if isinstance(f, dict) and str(f.get('task_id')) in planned and f.get('instructions')]
             if verdict.get('verdict') == 'fix' and fixes and round_number == 0:
                 session, message = self.state()
                 team = message['team']
@@ -266,7 +267,9 @@ class Team:
                 branch = gitops.branch_name(task['title'] + ' ' + task['model_name'], worker['id'][:6])
                 location = self.runner.files.worktree_location(self.tenant_id, self.project_id, branch)
                 try:
-                    await gitops.worktree_add(project['root'], location, branch, copy=project.get('worktree_copy') or [])
+                    # The worker starts from the lead's folder as it is now, so it sees what earlier tasks have already folded back.
+                    base = await gitops.checkpoint(self.root, f'Frontier: team base for {task["title"]}')
+                    await gitops.worktree_add(project['root'], location, branch, copy=project.get('worktree_copy') or [], start=base)
                     worker['worktree'] = {'path': str(location), 'branch': branch}
                 except gitops.GitError as exc:
                     self.update_task(task_id, f'Could not create a worktree: {exc}', status='failed', report=f'Could not create a worktree: {exc}')

@@ -210,6 +210,11 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
                 db.execute('DELETE FROM events WHERE tenant_id=? AND run_id=?',(tenant_id,s['id']))
         for s in sessions:
             store.delete(tenant_id,'sessions',s['id'])
+        # Its automations, board and scheduled work go with it; left behind they would fail every time they came due.
+        for kind in ('automations','board'):
+            for item in store.list(tenant_id,kind):
+                if item.get('project_id')==project_id:
+                    store.delete(tenant_id,kind,item['id'])
         store.delete(tenant_id,'projects',project_id)
         return {'ok':True}
 

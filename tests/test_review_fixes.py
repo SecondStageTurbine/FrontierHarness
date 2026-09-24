@@ -1,0 +1,145 @@
+"""Fixes for the problems the whole-codebase review found."""
+import asyncio
+import os
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+import pytest
+from fastapi.testclient import TestClient
+from backend import automations, sandbox
+from backend.agent import AgentRunner
+from backend.app import create_app
+from backend.broker import AgentResult, ProviderError, strip_echo
+from tests.harness import ScriptedAgent, open_project, setup_store, turn
+from tests.test_api import setup, agent as connect_agent
+from tests.test_batch12 import repo
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Integrity levels are a Windows mechanism.')
+def test_the_api_knows_a_low_integrity_caller_and_refuses_it_while_a_sandboxed_turn_runs(tmp_path, monkeypatch):
+    server = socket.socket(); server.bind(('127.0.0.1', 0)); server.listen(2)
+    port = server.getsockname()[1]
+    hold = f'import socket,time;s=socket.create_connection(("127.0.0.1",{port}));time.sleep(3)'
+    levels = {}
+    for name, argv in (('low', [*sandbox.launcher(), sys.executable, '-c', hold]), ('normal', [sys.executable, '-c', hold])):
+        child = subprocess.Popen(argv)
+        connection, (host, client_port) = server.accept()
+        levels[name] = sandbox.peer_integrity(client_port, port)
+        connection.close(); child.wait(timeout=10)
+    server.close()
+    assert levels['low'] == 0x1000 and levels['normal'] >= 0x2000
+    # The middleware: with a sandboxed turn running, a low-integrity caller is refused; otherwise nothing changes.
+    with TestClient(create_app(str(tmp_path/'state'), ScriptedAgent()), client=('127.0.0.1', 50000)) as c:
+        setup(c)
+        monkeypatch.setattr(sandbox, 'peer_integrity', lambda client_port, server_port: 0x1000)
+        assert c.get('/api/tenants').status_code == 200  # No sandboxed turn: no check.
+        c.app.state.runner.broker.confined = 1
+        refused = c.get('/api/tenants')
+        assert refused.status_code == 403 and 'sandboxed' in refused.json()['detail']
+        monkeypatch.setattr(sandbox, 'peer_integrity', lambda client_port, server_port: 0x2000)
+        assert c.get('/api/tenants').status_code == 200
+
+
+def test_automations_survive_a_removed_agent_or_project(tmp_path):
+    with TestClient(create_app(str(tmp_path/'state'), ScriptedAgent())) as c:
+        t = setup(c); a = connect_agent(c, t)
+        root = tmp_path/'project'; root.mkdir()
+        p = c.post(f'/api/t/{t}/projects', json={'name': 'P', 'root': str(root)}).json()
+        automation = c.post(f'/api/t/{t}/automations', json={'name': 'Nightly', 'project_id': p['id'], 'model_id': a, 'prompt': 'Run the checks.', 'mode': 'read', 'every': 60, 'enabled': True}).json()
+        store, runner = c.app.state.store, c.app.state.runner
+        store.delete(t, 'models', a)  # The agent it uses is removed.
+        before = len(store.list(t, 'sessions'))
+        assert asyncio.run(automations.run(store, runner, t, store.get(t, 'automations', automation['id']))) is None
+        after = store.get(t, 'automations', automation['id'])
+        assert len(store.list(t, 'sessions')) == before  # No empty session left behind.
+        assert after['last_outcome'].startswith('failed: its project or its agent was removed') and after['next_run_at'] > automations.stamp(automations.datetime.now())
+        # Removing the project removes its automations, so nothing is left to fail.
+        assert c.delete(f'/api/t/{t}/projects/{p["id"]}').status_code == 200
+        assert not [x for x in store.list(t, 'automations') if x['project_id'] == p['id']]
+
+
+def test_a_turn_keeps_what_the_user_changed_while_it_ran(tmp_path):
+    store = setup_store(tmp_path/'state'); folder = tmp_path/'work'; folder.mkdir()
+    async def respond(config, prompt, mode, root):
+        if config['id'] == 'claude_cli':
+            # While this agent works, the user renames the conversation and queues a follow-up.
+            live = store.get('tenant-a', 'sessions', 'session-tenant-a')
+            live['name'] = 'Renamed meanwhile'
+            live.setdefault('queue', []).append({'id': 'q1', 'content': 'And then docs.', 'model_id': 'claude_cli', 'mode': 'read', 'created_at': 'x', 'team': False, 'context': []})
+            store.put('tenant-a', 'sessions', live)
+            raise ProviderError('Claude Code has no usage left.', retryable=True, exhausted=True)
+        return AgentResult('Done by the next agent.', 1, 1)
+    runner = AgentRunner(store, ScriptedAgent(respond=respond))
+    project, session = open_project(store, runner, 'tenant-a', folder)
+    async def scenario():
+        runner.send('tenant-a', project['id'], session['id'], 'Build it.', 'claude_cli', 'edit')
+        await asyncio.gather(runner.turns[('tenant-a', session['id'])], return_exceptions=True)
+    asyncio.run(scenario())
+    final = store.get('tenant-a', 'sessions', session['id'])
+    assert final['name'] == 'Renamed meanwhile'
+    assert final['messages'][1]['content'] == 'Done by the next agent.'
+    assert any(m['content'] == 'And then docs.' for m in final['messages']) or [q['content'] for q in final.get('queue') or []] == ['And then docs.']
+
+
+def test_rewinding_past_the_tools_own_session_cuts_the_link(tmp_path):
+    store = setup_store(tmp_path/'state'); folder = tmp_path/'work'; folder.mkdir()
+    runner = AgentRunner(store, ScriptedAgent())
+    project, session = open_project(store, runner, 'tenant-a', folder)
+    for text in ('One.', 'Two.'):
+        session = asyncio.run(turn(runner, store, 'tenant-a', project, session, text, 'claude_cli', 'read'))
+    session['native'] = {'provider': 'claude_cli', 'id': 'abc', 'upto': 4}
+    store.put('tenant-a', 'sessions', session)
+    asyncio.run(runner.rewind('tenant-a', project['id'], session['id'], session['messages'][2]['id'], restore_files=False))
+    assert store.get('tenant-a', 'sessions', session['id'])['native'] is None
+    # Rewinding only what came after the tool's own session keeps the link.
+    session = asyncio.run(turn(runner, store, 'tenant-a', project, store.get('tenant-a', 'sessions', session['id']), 'Two again.', 'codex_cli', 'read'))
+    session['native'] = {'provider': 'claude_cli', 'id': 'abc', 'upto': 2}
+    store.put('tenant-a', 'sessions', session)
+    asyncio.run(runner.rewind('tenant-a', project['id'], session['id'], session['messages'][2]['id'], restore_files=False))
+    assert store.get('tenant-a', 'sessions', session['id'])['native'] == {'provider': 'claude_cli', 'id': 'abc', 'upto': 2}
+
+
+def test_team_workers_build_on_earlier_tasks_and_a_fix_for_an_unknown_task_is_ignored(tmp_path):
+    seen = {}
+    async def respond(config, prompt, mode, root):
+        if 'reply with ONLY a JSON object' in prompt and '"tasks"' in prompt and 'REPORTS:' not in prompt:
+            return AgentResult('{"summary": "Two steps.", "tasks": [{"id": "a", "title": "Write A", "instructions": "Create a.txt containing A.", "parallel": false},'
+                               '{"id": "b", "title": "Write B", "instructions": "Create b.txt from a.txt.", "parallel": false, "depends_on": ["a"]}]}', 5, 5)
+        if 'REPORTS:' in prompt:
+            return AgentResult('{"verdict": "fix", "fixes": [{"task_id": "zz", "instructions": "Nothing real."}], "reply": "All good."}', 5, 5)
+        if 'YOUR TASK — Write B' in prompt:
+            seen['b saw a.txt'] = (Path(root)/'a.txt').exists()
+            (Path(root)/'b.txt').write_text('B', encoding='utf-8')
+            return AgentResult('Wrote b.txt.', 1, 1)
+        (Path(root)/'a.txt').write_text('A', encoding='utf-8')
+        return AgentResult('Wrote a.txt.', 1, 1)
+    store = setup_store(tmp_path/'state')
+    root = repo(tmp_path)
+    runner = AgentRunner(store, ScriptedAgent(respond=respond))
+    project, session = open_project(store, runner, 'tenant-a', root)
+    async def scenario():
+        runner.send('tenant-a', project['id'], session['id'], 'Create a.txt, then b.txt from it.', 'claude_cli', 'edit', team=True)
+        await asyncio.gather(runner.turns[('tenant-a', session['id'])], return_exceptions=True)
+    asyncio.run(scenario())
+    reply = store.get('tenant-a', 'sessions', session['id'])['messages'][-1]
+    assert reply['status'] == 'complete', reply.get('error')
+    assert reply['content'] == 'All good.'
+    assert seen['b saw a.txt'] is True
+
+
+def test_a_spent_single_login_rests_and_an_echoed_prompt_is_not_read_as_exhaustion(tmp_path):
+    from backend.broker import ModelBroker, cooling
+    store = setup_store(tmp_path/'state')
+    broker = ModelBroker(store)
+    async def spent(*args, **kwargs):
+        raise ProviderError('no usage left', retryable=True, exhausted=True)
+    broker.run_agent = spent
+    config = store.get('tenant-a', 'models', 'claude_cli')
+    with pytest.raises(ProviderError):
+        asyncio.run(broker.invoke_agent('tenant-a', config, 'hi', 'read', str(tmp_path)))
+    assert cooling(broker, 'tenant-a', 'claude_cli')
+    prompt = 'USER:\nWhy do we hit the rate limit and the quota so often?'
+    echoed = 'codex\nuser\n' + prompt + '\nERROR: stream disconnected'
+    assert 'quota' not in strip_echo(echoed, prompt) and 'stream disconnected' in strip_echo(echoed, prompt)
