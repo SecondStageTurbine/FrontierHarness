@@ -99,13 +99,21 @@ def transcript(messages):
     return lines
 
 
-def browser_server(project):
+def browser_server(project, token=None):
     """A real browser the agent can open, click and read, through Playwright's MCP server.
 
-    Screenshots land in .frontier/browser in the project, where the Preview panel shows them. Headed
-    when the user asked to watch; otherwise headless. On Windows npx is a .cmd, so it goes through cmd.
+    Screenshots land in .frontier/browser in the project, where the Preview panel shows them. By default a
+    fresh browser, headed when the user asked to watch and otherwise headless. With "my own browser", it is
+    the Chrome or Edge the user already has open, reached through the Playwright extension, with their tabs
+    and sign-ins; the extension's token, when given, connects without the user approving each time.
+    On Windows npx is a .cmd, so it goes through cmd. Its tools run unasked in every tool, Codex included.
     """
     output = str(Path(project['root'])/'.frontier'/'browser')
+    if project.get('agent_browser_mode') == 'mine':
+        args = ['-y', '@playwright/mcp@latest', '--extension', '--browser', project.get('agent_browser_channel') or 'chrome', '--output-dir', output]
+        command, args = (('cmd', ['/c', 'npx', *args]) if os.name == 'nt' else ('npx', args))
+        return {'name': 'frontier-browser', 'transport': 'stdio', 'command': command, 'args': args, 'trusted': True, 'enabled': True,
+                'env': {'PLAYWRIGHT_MCP_EXTENSION_TOKEN': token} if token else {}}
     args = ['-y', '@playwright/mcp@latest', '--isolated', '--output-dir', output] + ([] if project.get('agent_browser_visible') else ['--headless'])
     if os.name == 'nt':
         # Playwright wants Chrome by default; Edge ships with every Windows 10 and 11, so it is named outright.
@@ -114,7 +122,7 @@ def browser_server(project):
                                       Path(os.environ.get('LOCALAPPDATA', ''))/'Microsoft/Edge/Application/msedge.exe') if p.is_file()), None)
         args += ['--browser', 'msedge'] + (['--executable-path', edge] if edge else [])
     command, args = (('cmd', ['/c', 'npx', *args]) if os.name == 'nt' else ('npx', args))
-    return {'name': 'frontier-browser', 'transport': 'stdio', 'command': command, 'args': args, 'env': {}, 'enabled': True}
+    return {'name': 'frontier-browser', 'transport': 'stdio', 'command': command, 'args': args, 'env': {}, 'trusted': True, 'enabled': True}
 
 
 def sandbox_note(policy):
@@ -137,8 +145,15 @@ def browser_note(project, root):
     from . import devserver
     server = devserver.get(root)
     where = f' The project\'s dev server is running at http://localhost:{server.port}/.' if server and server.status()['running'] and server.port else ''
+    if project.get('agent_browser_mode') == 'mine':
+        return ("The user's own browser, with their open tabs and the sites they are signed in to, is available through the "
+                'frontier-browser tools (list and select tabs, navigate, click, type, read the page, console messages, screenshots).'
+                + where + ' Use these tools for any web page, not another browser or computer-use tool. It is their real browser: '
+                'work in the tab you need, open new tabs rather than navigating away from theirs, do not close their tabs or '
+                'change their settings, and do only what the task asks on sites where they are signed in.')
     return ('A real browser is available through the frontier-browser tools (navigate, click, type, read the page, console '
-            'messages, screenshots).' + where + ' After changing anything a user sees, open it, check the console for errors, '
+            'messages, screenshots).' + where + ' Use these tools for any web page, not another browser or computer-use tool. '
+            'After changing anything a user sees, open it, check the console for errors, '
             'take a screenshot, and report what you saw, not what you expect.')
 
 
@@ -342,7 +357,8 @@ class AgentRunner:
         if confined['files'] or confined['network'] != 'open':
             extras['sandbox'] = confined
         if (project or {}).get('agent_browser') and not any(s['name'] == 'frontier-browser' for s in servers):
-            extras['mcp_servers'] = servers + [browser_server(project)]
+            token = (project or {}).get('agent_browser_token')
+            extras['mcp_servers'] = servers + [browser_server(project, self.store.decrypt(token) if token else None)]
         port = os.environ.get('HARNESS_DESKTOP_PORT')
         if port:
             # Frontier's own tools: under Edit files the approval card; in every posture the question

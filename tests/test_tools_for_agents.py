@@ -139,3 +139,27 @@ def test_the_browser_tools_never_wait_on_an_approval_card(tmp_path):
         argv = agent_argv('claude_cli', ['claude'], 'sonnet', mode, tmp_path, tmp_path/'f', {'mcp_servers': [server], 'mcp_config': 'm.json', 'approval': {'command': ['x'], 'url': 'u', 'token': 't'}})
         assert argv[argv.index('--allowedTools')+1] == 'mcp__frontier-browser'
     assert '--allowedTools' not in agent_argv('claude_cli', ['claude'], 'sonnet', 'edit', tmp_path, tmp_path/'f', {'mcp_servers': []})
+
+
+def test_agents_can_use_the_users_own_browser_with_its_token_kept_secret(tmp_path):
+    project = {'root': str(tmp_path), 'agent_browser': True, 'agent_browser_mode': 'mine', 'agent_browser_channel': 'msedge'}
+    server = browser_server(project, token='tok-123')
+    assert '--extension' in server['args'] and server['args'][server['args'].index('--browser')+1] == 'msedge' and '--isolated' not in server['args']
+    assert server['env'] == {'PLAYWRIGHT_MCP_EXTENSION_TOKEN': 'tok-123'} and server['trusted']
+    # Codex runs the browser's tools unasked, as it does Frontier's own; otherwise `exec` would refuse every one.
+    argv = agent_argv('codex_cli', ['codex'], 'gpt-6-sol', 'edit', tmp_path, tmp_path/'f', {'mcp_servers': [server]})
+    assert 'mcp_servers.frontier-browser.default_tools_approval_mode="approve"' in argv
+    with TestClient(create_app(str(tmp_path/'state'), ScriptedAgent())) as c:
+        t = setup(c)
+        root = tmp_path/'project'; root.mkdir()
+        p = c.post(f'/api/t/{t}/projects', json={'name': 'P', 'root': str(root)}).json()
+        saved = c.put(f'/api/t/{t}/projects/{p["id"]}/settings', json={'agent_browser': True, 'agent_browser_mode': 'mine', 'agent_browser_token': 'tok-123'}).json()
+        assert 'agent_browser_token' not in saved and saved['agent_browser_token_set'] is True
+        listed = c.get(f'/api/t/{t}/projects').json()[0]
+        assert 'agent_browser_token' not in listed and listed['agent_browser_token_set']
+        stored = c.app.state.store.get(t, 'projects', p['id'])
+        assert stored['agent_browser_token'] != 'tok-123' and c.app.state.store.decrypt(stored['agent_browser_token']) == 'tok-123'
+        extras = c.app.state.runner.extras(t, 'turn-token', 'edit', stored)
+        browser = next(s for s in extras['mcp_servers'] if s['name'] == 'frontier-browser')
+        assert browser['env']['PLAYWRIGHT_MCP_EXTENSION_TOKEN'] == 'tok-123'
+        assert not c.put(f'/api/t/{t}/projects/{p["id"]}/settings', json={'agent_browser_token': ''}).json()['agent_browser_token_set']

@@ -613,3 +613,17 @@ network first, then Tailscale; VPN tunnels, virtual adapters (Hyper-V, VirtualBo
 addresses are left out. On this machine that gives 192.168.1.33 (Ethernet 2) and 100.120.202.35
 (Tailscale), both of which answered /api/health; 10.2.0.2, 192.168.56.1 and 172.26.32.1 are no longer
 offered. A VPN that blocks local-network traffic can still stop the phone; the pairing note says so.
+
+Version 0.20.0 lets agents use the user's own browser. The report: Codex could not read a page the user
+was signed in to. Its turns show Codex reaching for its own Computer Use tool, whose site approval is
+asked interactively; under `codex exec` nobody can answer, so each attempt was recorded as the user
+declining ("Browser use cannot access … because the user denied permission"), and Codex keeps those
+approvals per conversation, so none carried over. The agent browser now has a second mode: the user's own
+Chrome or Edge through Playwright's extension (`@playwright/mcp --extension --browser …`, with the
+extension's token in PLAYWRIGHT_MCP_EXTENSION_TOKEN when given, stored encrypted and never returned by the
+API). Agents are told to use the frontier-browser tools rather than their own. The browser server is also
+passed to Codex as trusted, so `exec` runs its tools unasked; before, Codex could not use Frontier's
+browser at all. Live: Codex opened a local page through Frontier's browser and reported its title,
+heading and console error, with the screenshot saved. The extension-mode server was started and listed
+its 25 tools; connecting to the user's browser needs the extension installed there, which was not done on
+this machine. 173 tests and three browser suites pass.

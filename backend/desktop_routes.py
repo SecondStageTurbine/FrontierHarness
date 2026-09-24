@@ -78,6 +78,11 @@ def context_note(files,tenant_id,project_id,session_id,chips):
             parts.append(f'{label}:\n```\n{chip.text[:12000]}\n```')
     return ('\n\nREFERENCED CONTEXT (the user pointed at these while writing the message):\n'+'\n\n'.join(parts)) if parts else ''
 
+def shown(project):
+    """A project as the interface sees it: a kept secret appears only as whether it is set."""
+    token=project.get('agent_browser_token')
+    return {**{k:v for k,v in project.items() if k!='agent_browser_token'},'agent_browser_token_set':bool(token)}
+
 STATE_RANK={'working':3,'waiting':2,'done':1}  # Which state a project shows when its sessions differ.
 
 def session_sidebar_state(session,active_sessions):
@@ -128,7 +133,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
     @app.get('/api/t/{tenant_id}/projects')
     def list_projects(tenant_id:str,request:Request):
         scoped(request,tenant_id)
-        return store.list(tenant_id,'projects')
+        return [shown(p) for p in store.list(tenant_id,'projects')]
 
     def writer_for(tenant_id,project_id,session_id):
         """The agent that writes a commit message, a pull request or a summary for this conversation."""
@@ -604,8 +609,12 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         project=store.get(tenant_id,'projects',project_id)
         if payload.default_model_id and payload.default_model_id!=ADAPTIVE:
             runner.select(tenant_id,payload.default_model_id)
-        project.update(payload.model_dump(exclude_unset=True))  # Only what was sent; a toggle elsewhere must not wipe the rest.
-        return store.put(tenant_id,'projects',project)
+        fields=payload.model_dump(exclude_unset=True)  # Only what was sent; a toggle elsewhere must not wipe the rest.
+        if 'agent_browser_token' in fields:
+            token=(fields.pop('agent_browser_token') or '').strip()
+            project['agent_browser_token']=store.encrypt(token) if token else None
+        project.update(fields)
+        return shown(store.put(tenant_id,'projects',project))
 
     # ── Screenshots the agent's browser took, newest first ──
     SHOT_TYPES={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp'}

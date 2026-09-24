@@ -18,10 +18,27 @@ function AgentBrowser({project,sessionId}:{project:Project;sessionId?:string}){
  useEffect(()=>{setLocal({agent_browser:!!project.agent_browser,agent_browser_visible:!!project.agent_browser_visible})},[project.id,project.agent_browser,project.agent_browser_visible]);
  const shots=useQuery({queryKey:['tenant',tenant?.id,`/projects/${project.id}/browser-shots${q}`],enabled:!!tenant&&local.agent_browser,refetchInterval:6000,queryFn:({signal})=>api.get<{name:string;modified:string}[]>(path(`/projects/${project.id}/browser-shots${q}`),signal)});
  async function set(fields:{agent_browser?:boolean;agent_browser_visible?:boolean}){setLocal(v=>({...v,...fields}));try{await api.put(path(`/projects/${project.id}/settings`),fields);await client.invalidateQueries({queryKey:['tenant',tenant?.id]});notify(fields.agent_browser===false?'Agents no longer get a browser':'Saved')}catch(e){setLocal({agent_browser:!!project.agent_browser,agent_browser_visible:!!project.agent_browser_visible});notify((e as Error).message)}}
+ const [token,setToken]=useState('');
+ const [mode,setMode]=useState(project.agent_browser_mode||'fresh');
+ useEffect(()=>setMode(project.agent_browser_mode||'fresh'),[project.id,project.agent_browser_mode]);
+ async function saveMode(fields:{agent_browser_mode?:'fresh'|'mine';agent_browser_channel?:'chrome'|'msedge';agent_browser_token?:string}){
+  if(fields.agent_browser_mode)setMode(fields.agent_browser_mode);
+  try{await api.put(path(`/projects/${project.id}/settings`),fields);await client.invalidateQueries({queryKey:['tenant',tenant?.id]});notify('Saved')}catch(e){notify((e as Error).message)}
+ }
  const src=(n:string)=>{const p=path(`/projects/${project.id}/browser-shot?name=${encodeURIComponent(n)}${sessionId?`&session_id=${sessionId}`:''}`);return apiUrl(p)};
  return <div className="agent-browser">
   <label className="toggle-row compact"><div><strong><Bot size={12}/> Let agents use a browser</strong><p>Each editing turn gets Playwright's browser tools: the agent opens the page, clicks through, reads the console and takes screenshots. Needs Node.js; the first turn downloads it.</p></div><input type="checkbox" role="switch" checked={local.agent_browser} onChange={e=>set({agent_browser:e.target.checked})}/></label>
-  {local.agent_browser&&<label className="toggle-row compact"><div><strong><Eye size={12}/> Show the agent's browser window</strong><p>Watch it work instead of running it hidden.</p></div><input type="checkbox" role="switch" checked={local.agent_browser_visible} onChange={e=>set({agent_browser_visible:e.target.checked})}/></label>}
+  {local.agent_browser&&<div className="browser-choice" role="radiogroup" aria-label="Which browser">
+   <label><input type="radio" name="browser-mode" checked={mode==='fresh'} onChange={()=>saveMode({agent_browser_mode:'fresh'})}/><span><strong>A fresh browser</strong><small>Starts clean each turn: nothing signed in, nothing of yours touched.</small></span></label>
+   <label><input type="radio" name="browser-mode" checked={mode==='mine'} onChange={()=>saveMode({agent_browser_mode:'mine'})}/><span><strong>My own Chrome or Edge</strong><small>Your open tabs and the sites you are signed in to. Agents act in your real browser.</small></span></label>
+  </div>}
+  {local.agent_browser&&mode==='mine'&&<div className="browser-mine">
+   <p className="muted small">It connects through Playwright's browser extension. Install it once in the browser you use, then keep that browser open while agents work: <a href="https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm" target="_blank" rel="noreferrer">Playwright extension</a> (Chrome Web Store; Edge installs it from there too).</p>
+   <div className="pr-inline"><label>Browser</label><select aria-label="Your browser" value={project.agent_browser_channel||'chrome'} onChange={e=>saveMode({agent_browser_channel:e.target.value as 'chrome'|'msedge'})}><option value="chrome">Chrome</option><option value="msedge">Microsoft Edge</option></select></div>
+   <div className="pr-inline"><label>Token</label><input type="password" aria-label="Extension token" placeholder={project.agent_browser_token_set?'Saved. Paste a new one to replace it':'Optional: the token from the extension'} value={token} onChange={e=>setToken(e.target.value)}/><button disabled={!token.trim()} onClick={()=>saveMode({agent_browser_token:token.trim()}).then(()=>setToken(''))}>Save</button>{project.agent_browser_token_set&&<button className="linkish" onClick={()=>saveMode({agent_browser_token:''})}>Forget</button>}</div>
+   <p className="muted small">Without a token, the extension asks you to pick a tab and allow the connection at the start of each turn. With its token saved here, agents connect on their own.</p>
+  </div>}
+  {local.agent_browser&&mode==='fresh'&&<label className="toggle-row compact"><div><strong><Eye size={12}/> Show the agent's browser window</strong><p>Watch it work instead of running it hidden.</p></div><input type="checkbox" role="switch" checked={local.agent_browser_visible} onChange={e=>set({agent_browser_visible:e.target.checked})}/></label>}
   {local.agent_browser&&(shots.data?.length?<div className="agent-shots">{shots.data.slice(0,12).map(s=><button key={s.name} title={`${s.name} · ${new Date(s.modified).toLocaleTimeString()}`} onClick={()=>setBig(s.name)}><img src={src(s.name)} alt={s.name} loading="lazy"/></button>)}</div>:<p className="muted small">The agent's screenshots appear here.</p>)}
   {big&&<div className="shot-viewer" role="dialog" aria-label={big} onClick={()=>setBig(null)}><img src={src(big)} alt={big}/><span>{big}</span></div>}
  </div>;

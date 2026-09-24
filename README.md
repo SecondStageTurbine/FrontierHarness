@@ -27,7 +27,7 @@ looked like before and after so any turn can be reverted.
 | **Three postures, approval and question cards** | Read only, Edit files, Full auto, translated into each tool's own flags. Claude asks before running a command, and asks you a question instead of guessing; cards in the conversation answer both. |
 | **Team mode** | A lead plans the work as tasks, Frontier hands each to the agent whose profile fits, workers run in parallel worktrees, their changes are folded back, and the lead reviews and replies. |
 | **Resume from the command line** | Pick up a conversation you started in Claude Code or Codex; the same tool continues its own session with its full memory, and any other agent continues from the transcript. |
-| **Agents that test in a browser** | Turn it on per project and every editing turn gets a real browser: the agent opens the page it changed, clicks through, reads the console and takes screenshots, which appear in the Preview panel. |
+| **Agents that use a browser** | Turn it on per project and every turn gets a real browser: a fresh one to test the page it changed, or your own Chrome or Edge with your tabs and sign-ins. It clicks through, reads the console and takes screenshots, which appear in the Preview panel. |
 
 **Working on a project**
 
@@ -227,7 +227,9 @@ Open a project after six hours or more away and, if anything happened, a strip s
 
 ### A browser for the agent
 
-In the **Preview** panel, **Let agents use a browser** gives every editing turn in that project Playwright's browser tools, driving the Microsoft Edge that ships with Windows. The agent is told to open what it changed, check the console, take a screenshot and report what it saw. Screenshots land in `.frontier/browser` in the project and show in the Preview panel; click one to enlarge it. **Show the agent's browser window** runs it visibly instead of hidden. The browser's tools never wait on an approval card. It needs Node.js; the first turn downloads Playwright's server.
+In the **Preview** panel, **Let agents use a browser** gives every editing turn in that project Playwright's browser tools, driving the Microsoft Edge that ships with Windows. The agent is told to open what it changed, check the console, take a screenshot and report what it saw. Screenshots land in `.frontier/browser` in the project and show in the Preview panel; click one to enlarge it. **Show the agent's browser window** runs it visibly instead of hidden. The browser's tools never wait on an approval card, in Claude, Codex or OpenCode, and agents are told to use them rather than any browser or computer-use tool of their own (Codex's, for one, asks for each site's approval, which nobody can give during a Frontier turn). It needs Node.js; the first turn downloads Playwright's server.
+
+**My own Chrome or Edge** gives agents the browser you already have open instead: your tabs and the sites you are signed in to, so an agent can read a dashboard you are logged in to. It connects through the [Playwright extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm), installed once in that browser, which must be open while agents work. Without a token, the extension asks you to pick a tab and allow each connection; paste the extension's token in the Preview panel, kept encrypted and never shown again, and agents connect on their own. Agents are told it is your real browser: to work in new tabs, not close yours, and do only what the task asks.
 
 ### Frontier as a tool for other agents
 
