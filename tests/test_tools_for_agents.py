@@ -167,3 +167,18 @@ def test_agents_can_use_the_users_own_browser_with_its_token_kept_secret(tmp_pat
         c.put(f'/api/t/{t}/projects/{p["id"]}/settings', json={'agent_browser_token': 'PLAYWRIGHT_MCP_EXTENSION_TOKEN=tok-456'})
         assert c.app.state.store.decrypt(c.app.state.store.get(t, 'projects', p['id'])['agent_browser_token']) == 'tok-456'  # The whole line, as the extension shows it.
         assert not c.put(f'/api/t/{t}/projects/{p["id"]}/settings', json={'agent_browser_token': ''}).json()['agent_browser_token_set']
+
+
+def test_codex_runs_workspace_mcp_tools_once_the_turn_may_act_and_one_browser_is_offered(tmp_path, monkeypatch):
+    added = {'name': 'github', 'transport': 'stdio', 'command': 'npx', 'args': ['-y', 'github-mcp'], 'env': {}}
+    edit = agent_argv('codex_cli', ['codex'], 'gpt-6-sol', 'edit', tmp_path, tmp_path/'f', {'mcp_servers': [added]})
+    read = agent_argv('codex_cli', ['codex'], 'gpt-6-sol', 'read', tmp_path, tmp_path/'f', {'mcp_servers': [added]})
+    assert 'mcp_servers.github.default_tools_approval_mode="approve"' in edit
+    assert 'mcp_servers.github.default_tools_approval_mode="approve"' not in read
+    store = setup_store(tmp_path/'state')
+    store.put('tenant-a', 'mcp_servers', {'id': 'm1', 'name': 'playwright', 'transport': 'stdio', 'command': 'npx', 'args': ['-y', '@playwright/mcp@latest'], 'enabled': True})
+    store.put('tenant-a', 'mcp_servers', {'id': 'm2', 'name': 'github', 'transport': 'stdio', 'command': 'npx', 'args': ['-y', 'github-mcp'], 'enabled': True})
+    runner = AgentRunner(store, ScriptedAgent())
+    names = lambda project: [s['name'] for s in runner.extras('tenant-a', 't', 'edit', project)['mcp_servers']]
+    assert names({'root': str(tmp_path), 'agent_browser': True, 'agent_browser_mode': 'mine'}) == ['github', 'frontier-browser']
+    assert sorted(names({'root': str(tmp_path)})) == ['github', 'playwright']  # Without the project's browser, the workspace's stays.

@@ -359,7 +359,10 @@ class AgentRunner:
             extras['sandbox'] = confined
         if (project or {}).get('agent_browser') and not any(s['name'] == 'frontier-browser' for s in servers):
             sealed = (project or {}).get('agent_browser_token')  # Not `token`: that name is this turn's own token.
-            extras['mcp_servers'] = servers + [browser_server(project, self.store.decrypt(sealed) if sealed else None)]
+            # The project's own browser replaces a plain Playwright server added to the workspace: two browsers let an
+            # agent pick the wrong one (a fresh one instead of the user's own, or the reverse).
+            plain = [s for s in servers if '@playwright/mcp' not in ' '.join([s.get('command') or '', *(s.get('args') or [])])]
+            extras['mcp_servers'] = plain + [browser_server(project, self.store.decrypt(sealed) if sealed else None)]
         port = os.environ.get('HARNESS_DESKTOP_PORT')
         if port:
             # Frontier's own tools: under Edit files the approval card; in every posture the question

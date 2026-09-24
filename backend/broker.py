@@ -310,8 +310,10 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
                 argv += ['-c', f'{key}.command={toml_value(server["command"])}', '-c', f'{key}.args={toml_value(server.get("args") or [])}']
                 if server.get('env'):
                     argv += ['-c', f'{key}.env={toml_value(server["env"])}']
-            if server.get('trusted'):
-                # Exec has no one to approve a tool call, so a server Frontier vouches for runs its tools unasked.
+            if server.get('trusted') or mode != 'read':
+                # Exec has no one to approve a tool call, so under `-a never` Codex refuses any MCP tool that would ask.
+                # Frontier's own servers always run unasked; a server the user added runs unasked once the turn may
+                # act (Edit files, Full auto). Under Read only, only the tools that declare themselves read-only run.
                 argv += ['-c', f'{key}.default_tools_approval_mode="approve"']
         if extras.get('resume'):
             # `exec resume` takes no -C or --sandbox: the working directory is the project, and the

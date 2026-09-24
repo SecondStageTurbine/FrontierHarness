@@ -633,3 +633,11 @@ with the agent browser on, the variable holding the browser extension's token sh
 token, so approval cards, question cards and the task board failed for that project ("The turn stopped
 unexpectedly"). A test now checks the turn keeps its own token. The release script now runs the Python
 tests and the browser suites first and stops on any failure.
+
+Version 0.20.3: Codex refused a workspace MCP server's tools. The user's workspace had a plain Playwright
+server from the catalog; Codex called its browser_tabs and got "MCP tool call requires approval, but
+approval policy is never": under `codex exec -a never`, any MCP tool not declared read-only is refused.
+Workspace servers now run their tools unasked in Codex under Edit files and Full auto (Read only keeps
+the refusal for tools that are not read-only), and a project's agent browser replaces a plain Playwright
+server in the workspace so an agent is offered one browser, the one the project chose. Live: Codex used a
+workspace Playwright server under Edit files to read a local page's title, heading and console errors.
