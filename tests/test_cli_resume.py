@@ -98,3 +98,22 @@ def test_resume_spells_itself_for_each_tool(tmp_path):
     assert 'sandbox_mode="read-only"' in codex and '-C' not in codex
     auto = agent_argv('codex_cli', ['codex'], 'gpt-6-sol', 'auto', tmp_path, tmp_path/'f', {'resume': 'abc'})
     assert '--dangerously-bypass-approvals-and-sandbox' in auto and not any(a.startswith('sandbox_mode') for a in auto)
+
+
+def test_subscription_limits_read_both_plans_and_back_off_when_refused(tmp_path, monkeypatch):
+    home = tmp_path/'home'; (home/'.claude').mkdir(parents=True); (home/'.codex').mkdir()
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: home))
+    monkeypatch.delenv('CLAUDE_CONFIG_DIR', raising=False); monkeypatch.delenv('CODEX_HOME', raising=False)
+    (home/'.claude'/'.credentials.json').write_text(json.dumps({'claudeAiOauth': {'accessToken': 'c'}}), encoding='utf-8')
+    (home/'.codex'/'auth.json').write_text(json.dumps({'tokens': {'access_token': 'x'}}), encoding='utf-8')
+    calls = []
+    def fetch(url, headers):
+        calls.append(url)
+        if 'anthropic' in url:
+            return None, 'rate limited', 120
+        return {'plan_type': 'pro', 'rate_limit': {'primary_window': {'used_percent': 11, 'limit_window_seconds': 604800, 'reset_at': 1790528925}, 'secondary_window': None}}, None, None
+    monkeypatch.setattr(maintenance, 'fetch_json', fetch); monkeypatch.setattr(maintenance, 'LIMITS_CACHE', {})
+    claude, codex = maintenance.subscription_limits()
+    assert claude['error'] == 'rate limited' and codex['plan'] == 'pro' and codex['limits'][0]['label'] == 'Week' and codex['limits'][0]['percent'] == 11
+    maintenance.subscription_limits(force=True)
+    assert sum('anthropic' in u for u in calls) == 1 and sum('chatgpt' in u for u in calls) == 2  # A refusal is waited out, even on refresh.

@@ -668,6 +668,11 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         except LookupError as exc:
             raise HTTPException(404,str(exc)) from None
 
+    @app.get('/api/t/{tenant_id}/providers/limits')
+    async def provider_limits(tenant_id:str,request:Request,refresh:bool=False):
+        scoped(request,tenant_id)
+        return await asyncio.to_thread(maintenance.subscription_limits,refresh)
+
     @app.get('/api/t/{tenant_id}/providers/versions')
     async def provider_versions(tenant_id:str,request:Request):
         scoped(request,tenant_id)

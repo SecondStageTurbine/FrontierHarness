@@ -428,3 +428,25 @@ body{overflow:hidden}
 .resume-text strong,.resume-text small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .resume-text small,.resume-meta small{color:var(--subtle)}
 .resume-meta{display:flex;flex-direction:column;align-items:flex-end;font-size:12px;white-space:nowrap}
+
+/* Subscription usage, in the gutter beside the composer when the window is wide enough */
+.composer-region{position:relative;container-type:inline-size}
+.composer-region>.usage-dock{position:absolute;right:20px;bottom:14px;margin:0;max-width:none;width:min(17rem,calc((100% - 47rem)/2 - 36px));
+ display:flex;flex-direction:column;gap:8px;padding:10px 12px;background:var(--card);border:1px solid var(--border);border-radius:12px;font-size:12px}
+@container (max-width:72rem){.composer-region>.usage-dock{display:none}}
+.usage-dock-head{display:flex;align-items:center;justify-content:space-between}
+.usage-dock-head strong{font-size:12px;letter-spacing:.02em;color:var(--muted)}
+.usage-dock-head .icon-button{padding:3px}
+.usage-plan-card{display:flex;flex-direction:column;gap:6px}
+.usage-plan-card+.usage-plan-card{border-top:1px solid var(--border);padding-top:8px}
+.usage-plan-title{font-weight:600;display:flex;align-items:baseline;gap:6px}
+.usage-plan-title small{font-weight:400;color:var(--subtle);text-transform:capitalize}
+.usage-plan-error{margin:0;color:var(--subtle);font-size:11px}
+.usage-limit{display:flex;flex-direction:column;gap:3px}
+.usage-limit-top{display:flex;justify-content:space-between;color:var(--muted)}
+.usage-limit-top span:last-child{font-variant-numeric:tabular-nums;color:var(--foreground)}
+.usage-limit-track{height:5px;border-radius:999px;background:var(--elevated);overflow:hidden}
+.usage-limit-fill{height:100%;border-radius:inherit;background:var(--primary)}
+.usage-limit-fill.warning{background:var(--warning)}
+.usage-limit-fill.critical{background:var(--danger)}
+.usage-limit small{color:var(--subtle);font-size:10.5px}

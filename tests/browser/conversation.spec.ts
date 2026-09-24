@@ -88,6 +88,14 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await page.locator('.agent-browser input[type=checkbox]').first().check();
  await expect(page.locator('.agent-browser')).toContainText('screenshots appear here');
  await page.keyboard.press('Escape');
+ // Subscription usage sits in the gutter beside the composer on a wide window, and hides on a narrow one.
+ await page.setViewportSize({width:1900,height:1000});
+ await expect(page.locator('.usage-dock')).toContainText('Week, all models');
+ await expect(page.locator('.usage-dock')).toContainText('Codex');
+ await page.screenshot({path:'test-results/usage-dock.png'});
+ await page.setViewportSize({width:1100,height:1000});
+ await expect(page.locator('.usage-dock')).toBeHidden();
+ await page.setViewportSize({width:1440,height:1000});
  // Resume from CLI: the sidebar button and /resume open the same picker of Claude and Codex conversations.
  await page.getByRole('button',{name:'Resume from CLI',exact:true}).click();
  await expect(page.getByRole('dialog')).toContainText('Resume from CLI');

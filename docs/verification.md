@@ -481,3 +481,11 @@ whatever id comes back. The picker leaves out conversations started by `claude -
 before this, a history import brought those in as well. Four new tests cover the list, the native
 turn sending only new messages, the fallback when another agent answers or the session is gone,
 and each tool's argument spelling; the suite is at 140.
+
+Version 0.13.2 adds the Usage card. The figures come from the same endpoints Claude Code and Codex use
+for their own usage views (`api.anthropic.com/api/oauth/usage` with the Claude Code sign-in,
+`chatgpt.com/backend-api/wham/usage` with the Codex sign-in), read live on this machine before
+wiring: Claude returned its session, week and per-model week; Codex its weekly window and plan. A good
+answer is kept five minutes and a refusal until its Retry-After, even when refreshed, which a test
+checks. The browser suite runs against fixed figures, so it never uses the tester's sign-in, and
+checks the card shows on a wide window and hides on a narrow one.

@@ -276,3 +276,97 @@ async def detect():
                 row['default'] = configured
         return row
     return await asyncio.gather(*(one(p) for p in CLI_TOOLS))
+
+
+# ── Subscription limits: how much of each plan's window is used, as the tools' own /usage shows ──
+
+LIMITS_CACHE = {}  # provider -> (valid until, result). The endpoints rate-limit hard, so they are asked rarely.
+LIMITS_TTL = 300
+
+
+def fetch_json(url, headers):
+    """GET a JSON document; a refusal carries the server's Retry-After when it sends one."""
+    import urllib.error, urllib.request
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'Frontier', **headers}), timeout=15) as response:
+            return json.loads(response.read().decode('utf-8')), None, None
+    except urllib.error.HTTPError as exc:
+        wait = exc.headers.get('retry-after') if exc.headers else None
+        wait = int(wait) if wait and wait.strip().isdigit() else None
+        if exc.code == 429:
+            return None, 'Usage figures are rate limited by the provider for a moment. Your allowance is not affected.', wait
+        if exc.code in (401, 403):
+            return None, 'The sign-in has expired. Run the tool once in a terminal to refresh it.', None
+        return None, f'The provider answered HTTP {exc.code}.', wait
+    except (OSError, ValueError) as exc:
+        return None, f'Could not reach the provider: {exc}', None
+
+
+def read_token(path, *keys):
+    try:
+        value = json.loads(path.read_text(encoding='utf-8'))
+        for key in keys:
+            value = value[key]
+        return value if isinstance(value, str) and value else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def claude_limits():
+    import os
+    home = Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home()/'.claude')
+    token = read_token(home/'.credentials.json', 'claudeAiOauth', 'accessToken')
+    if not token:
+        return None  # Not signed in to Claude Code with a subscription on this computer.
+    payload, error, wait = fetch_json('https://api.anthropic.com/api/oauth/usage', {'Authorization': f'Bearer {token}', 'anthropic-beta': 'oauth-2025-04-20'})
+    if payload is None:
+        return {'provider': 'claude_cli', 'label': 'Claude', 'plan': None, 'error': error, 'retry_after': wait, 'limits': []}
+    names = {'session': 'Current session', 'weekly_all': 'Week, all models'}
+    limits = []
+    for entry in payload.get('limits') or []:
+        if not isinstance(entry.get('percent'), (int, float)):
+            continue
+        label = names.get(entry.get('kind')) or ((entry.get('scope') or {}).get('model') or {}).get('display_name') or str(entry.get('kind') or 'Usage').replace('_', ' ').capitalize()
+        limits.append({'label': label, 'percent': float(entry['percent']), 'severity': entry.get('severity') or 'normal', 'resets_at': entry.get('resets_at')})
+    return {'provider': 'claude_cli', 'label': 'Claude', 'plan': None, 'error': None, 'retry_after': None, 'limits': limits}
+
+
+def codex_limits():
+    import os
+    from datetime import datetime, timezone
+    home = Path(os.environ.get('CODEX_HOME') or Path.home()/'.codex')
+    token = read_token(home/'auth.json', 'tokens', 'access_token')
+    if not token:
+        return None
+    payload, error, wait = fetch_json('https://chatgpt.com/backend-api/wham/usage', {'Authorization': f'Bearer {token}'})
+    if payload is None:
+        return {'provider': 'codex_cli', 'label': 'Codex', 'plan': None, 'error': error, 'retry_after': wait, 'limits': []}
+    limits = []
+    for key in ('primary_window', 'secondary_window'):
+        window = (payload.get('rate_limit') or {}).get(key)
+        if not window or not isinstance(window.get('used_percent'), (int, float)):
+            continue
+        seconds = window.get('limit_window_seconds') or 0
+        label = {604800: 'Week', 18000: '5 hours'}.get(seconds) or (f'{seconds // 86400} days' if seconds and seconds % 86400 == 0 else f'{seconds // 3600} hours')
+        reset = window.get('reset_at')
+        limits.append({'label': label, 'percent': float(window['used_percent']), 'severity': 'normal',
+                       'resets_at': datetime.fromtimestamp(reset, timezone.utc).isoformat() if isinstance(reset, (int, float)) else None})
+    return {'provider': 'codex_cli', 'label': 'Codex', 'plan': payload.get('plan_type'), 'error': None, 'retry_after': None, 'limits': limits}
+
+
+def subscription_limits(force=False):
+    """Each signed-in subscription's usage windows. A good answer is kept five minutes; a refusal until
+    the provider's Retry-After, or a minute, so a refresh never hammers an endpoint that rate-limits."""
+    import time
+    found = []
+    for provider, read in (('claude_cli', claude_limits), ('codex_cli', codex_limits)):
+        until, result = LIMITS_CACHE.get(provider, (0, None))
+        if force and result is not None and not result['error']:
+            until = 0  # A refresh re-asks a good answer, never one the provider asked us to wait on.
+        if time.time() >= until:
+            result = read()
+            ttl = LIMITS_TTL if result is None or not result['error'] else (result['retry_after'] or 60)
+            LIMITS_CACHE[provider] = (time.time() + ttl, result)
+        if result is not None:
+            found.append(result)
+    return found

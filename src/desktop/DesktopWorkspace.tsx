@@ -16,6 +16,7 @@ import {ADAPTIVE,ADAPTIVE_HINT,agentProviders,modes,modeLabels,modeHints,provide
 import {ProjectSettings} from './ProjectSettings';
 import {SetupWizard} from './SetupWizard';
 import {ResumePicker} from './ResumePicker';
+import {UsageDock} from './UsageDock';
 import {MarkdownOutput} from '../components/Markdown';
 const Models=lazy(()=>import('../features/models/Models'));
 const Tenants=lazy(()=>import('../features/tenants/Tenants'));
@@ -180,6 +181,7 @@ export default function DesktopWorkspace(){
   {sessionQ.error&&<div className="thread-error">{sessionQ.error.message}<button onClick={startNewSession}>Start a new session</button></div>}
   </div>
   <div className="composer-region">
+   <UsageDock/>
    {error&&!projectOpen&&<div className="composer-error" role="alert"><span>{error}</span><button className="icon-button" aria-label="Dismiss error" onClick={()=>setError('')}><X size={13}/></button></div>}
    {switching&&!busy&&<div className="continue-strip"><ArrowRightLeft size={14}/><span>Next turn goes to {activeAgent?.name}. It gets this conversation and the project folder.</span></div>}
    {(slashMatches.length>0||resumeMatch)&&<div className="slash-menu" role="listbox">{resumeMatch&&<button role="option" onClick={()=>{setInput('');setResumeOpen(true)}}><History size={11}/><strong>/resume</strong><span>Continue a Claude Code or Codex conversation from this folder</span><small>Frontier</small></button>}{slashMatches.map(s=><button key={s.path} role="option" onClick={()=>{setInput(`/${s.name} `);composer.current?.focus()}}><Slash size={11}/><strong>/{s.name}</strong><span>{s.description}</span><small>{s.provider} · {s.scope}</small></button>)}</div>}

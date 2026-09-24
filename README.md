@@ -151,6 +151,10 @@ Right-click a session to rename, pin, archive, or snooze it for an hour or until
 
 Closing the window keeps Frontier running in the system tray: automations keep firing, finished turns still notify you, and the tray icon's menu offers **Open Frontier** and **Quit Frontier**. A left click on the icon reopens the window. **Settings → General → Window** turns this off, after which closing the window quits. Launching Frontier while it is already running brings the existing window to the front instead of starting a second copy.
 
+### Subscription usage
+
+On a wide enough window, a **Usage** card sits beside the composer. It shows how much of each signed-in Claude and Codex subscription's windows is used and when each resets, the same figures as each tool's own usage view: Claude's current session, its week and any per-model week, and Codex's windows and plan. It reads the sign-in each tool already keeps on this computer, so anyone using Frontier sees their own plans, and the tokens never leave the backend. It refreshes every five minutes, or from its refresh button; when a provider rate-limits the figures, Frontier waits as long as it was asked before asking again.
+
 ### Resume from the command line
 
 **Resume from CLI** in the sidebar, or `/resume` in the composer, lists the recent conversations you had with Claude Code or Codex in this project's folder, newest first, with the first message and date. Pick one and it becomes the current session. Frontier's own turns, which also run those tools, are left out of the list.
