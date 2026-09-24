@@ -18,21 +18,54 @@ looked like before and after so any turn can be reverted.
 
 ## What it does
 
+**Agents and turns**
+
 | | |
 |---|---|
-| **Four agents, your subscriptions** | Claude Code, Codex, Gemini CLI and OpenCode run as the tools you already installed and signed in to. No API key is needed to take a turn. Several logins per provider can be connected; a spent one hands over to the next. |
+| **Four agents, your subscriptions** | Claude Code, Codex, Gemini CLI and OpenCode run as the tools you already installed and signed in to. No API key is needed to take a turn. Several logins per tool can be connected; a spent one hands over to the next. |
 | **Adaptive routing** | Pick Adaptive and each message goes to the least expensive agent whose capability profile covers it, escalating to a stronger one with a handoff if that agent fails. |
-| **Three postures, and approval cards** | Read only, Edit files, Full auto, translated into each tool's own flags. Under Edit files, Claude asks before running a command and a card in the conversation answers it. |
-| **Git-native sessions** | Stage, diff, commit and push from the Changes panel; every editing turn is checkpointed so **Revert this turn** restores it exactly; a session can start on its own branch in its own worktree; one message can fan out to several agents at once. |
-| **Work alongside the agent** | A real terminal in the project folder, a file editor, project and conversation search, clickable `file:line` links, and a preview panel for the project's dev server. |
-| **Queue, steer, compact** | Enter queues the next message while a turn runs, Ctrl+Enter stops it and sends instead, and a context meter offers to compact the conversation into a summary before the oldest turns fall off. |
-| **Automations and remote access** | Prompts that run daily, every N minutes or by webhook, each as an ordinary session. A browser on another device on your network or tailnet can use the same Frontier. |
-| **MCP servers and skills** | Servers the workspace hands to every agent on every turn, with a catalog of common ones, and the skills and slash commands the agents already find, offered with `/` in the composer. |
-| **Team mode** | Pick a lead; it plans the work as tasks, Frontier hands each task to the agent whose profile fits (or the one the lead names), workers run in parallel worktrees, their changes are folded back, and the lead reviews and replies. |
-| **Pull requests** | Open a PR from the session's branch through the GitHub CLI, stacked on another PR if you like; request reviewers, label it, review it (with an agent's draft), merge it or turn on auto-merge, and hand review comments to the agent. |
+| **Three postures, approval and question cards** | Read only, Edit files, Full auto, translated into each tool's own flags. Claude asks before running a command, and asks you a question instead of guessing; cards in the conversation answer both. |
+| **Team mode** | A lead plans the work as tasks, Frontier hands each to the agent whose profile fits, workers run in parallel worktrees, their changes are folded back, and the lead reviews and replies. |
+| **Resume from the command line** | Pick up a conversation you started in Claude Code or Codex; the same tool continues its own session with its full memory, and any other agent continues from the transcript. |
 | **Agents that test in a browser** | Turn it on per project and every editing turn gets a real browser: the agent opens the page it changed, clicks through, reads the console and takes screenshots, which appear in the Preview panel. |
+
+**Working on a project**
+
+| | |
+|---|---|
+| **Git-native sessions** | Stage, diff, commit and push from the Changes panel; every editing turn is checkpointed so **Revert this turn** restores it exactly; a session can start on its own branch in its own worktree; one message can fan out to several agents at once. |
+| **Pull requests, fully** | Open one from the session's branch, stacked on another if you like; request reviewers, label it, review it with an agent's draft, merge it or turn on auto-merge, and hand review comments to the agent. |
+| **Work alongside the agent** | A real terminal in the project folder, a file editor, project and conversation search, clickable `file:line` links, a preview of the dev server, and any panel popped out into its own window for a second monitor. |
+| **A plan that outlives a conversation** | Each project has a task board that you, team mode and every agent keep up to date, so a later session picks up where an earlier one left off. |
+| **Queue, steer, compact** | Enter queues the next message while a turn runs, Ctrl+Enter stops it and sends instead, and a context meter offers to compact the conversation into a summary before the oldest turns fall off. |
+| **Since you were last here** | Come back to a project and a strip lists the turns, commits and runs since your last visit; one click has an agent summarise them. |
+
+**Frontier around the project**
+
+| | |
+|---|---|
+| **All projects at a glance** | A dashboard of every project: what its agents are doing, its last session, branch and changes, open tasks, and dev server controls. |
+| **Starter prompts and a skills catalog** | Curated prompts by kind of work, and one-click install of curated skills into a project for every agent to use. |
+| **A sandbox of your own** | Per project, confine every agent's file changes to the project folder, enforced by Windows integrity levels, and limit its network to its own service or an allowlist, whatever posture it runs under. |
+| **Automations** | Prompts that run daily, every N minutes or by webhook, each as an ordinary session. |
 | **Frontier as a tool** | Frontier is itself an MCP server: another agent, an editor or a script can list projects, send a message to any agent here and wait for the reply, and catch up on a project. |
-| **Quiet desktop manners** | Tray icon and close-to-tray, one instance at a time, desktop notifications when a turn finishes in the background, signed auto-updates, usage per agent and project, four themes and an accent colour. |
+| **MCP servers and skills** | Servers the workspace hands to every agent on every turn, with a catalog of common ones, and the skills and slash commands the agents already find, offered with `/` in the composer. |
+
+**Anywhere, any machine**
+
+| | |
+|---|---|
+| **Your phone** | Remote access with a layout for phones, pairing by QR code with no password to type, and push notifications when a turn finishes or an agent needs you. |
+| **Other machines** | Pair another computer running Frontier and work on its projects from this window; its agents run there, on its files. |
+
+**The desktop app**
+
+| | |
+|---|---|
+| **First run in a minute** | Setup finds the agent tools installed on this computer, connects them, and offers to bring in the conversations Claude Code and Codex already hold about your folders. |
+| **Subscription usage** | How much of each Claude and Codex subscription window is used and when it resets, beside the composer and in Settings, pooled across several logins. |
+| **Your keys and your colours** | Every keyboard shortcut can be rebound, and any colour theme installed in VS Code, Cursor, Windsurf or VSCodium can be imported. |
+| **Quiet desktop manners** | Tray icon and close-to-tray, one instance at a time, desktop notifications when a turn finishes in the background, signed auto-updates, and usage per agent and project. |
 
 ## Install the desktop application
 
@@ -46,8 +79,7 @@ The installer installs WebView2 if it is missing; that step needs internet acces
 
 On first run, **Set up your agents** looks for Claude Code, Codex, OpenCode and Gemini CLI on this computer, shows where each is and its version, offers the model identifiers each accepts (Codex's are read from Codex itself), and connects the ones you tick in one go; for a tool that is missing it shows the install and sign-in commands. **Settings → Agents & Providers → Run the setup wizard again** reopens it. Below the tools, **Bring your past conversations** lists the folders Claude Code and Codex already have conversations about, with how many each holds; tick them and each becomes a project with its conversations imported, ready for the same tool to continue.
 
-
-On a fresh installation, open **Settings → Agents & Providers → Connect model**. Choose **Claude subscription**, **Codex subscription**, **Gemini CLI** or **OpenCode subscription** to run a model without any API key: Frontier runs the agent command line tool you already have installed, and that tool signs in with your own subscription. Install the tool, sign in once in a terminal, then connect a model whose identifier is the name the tool accepts, such as `sonnet` for Claude or `opencode-go/glm-5.3` for OpenCode. There is no key, endpoint or per-token rate to enter. **Test connection** confirms the tool runs; a sign-in problem surfaces on the first request.
+You can also connect agents by hand. On a fresh installation, open **Settings → Agents & Providers → Connect model**. Choose **Claude subscription**, **Codex subscription**, **Gemini CLI** or **OpenCode subscription** to run a model without any API key: Frontier runs the agent command line tool you already have installed, and that tool signs in with your own subscription. Install the tool, sign in once in a terminal, then connect a model whose identifier is the name the tool accepts, such as `sonnet` for Claude or `opencode-go/glm-5.3` for OpenCode. There is no key, endpoint or per-token rate to enter. **Test connection** confirms the tool runs; a sign-in problem surfaces on the first request.
 
 This is the one place where credentials come from outside the application, so it is worth knowing what holds and what does not. The tool runs in your project folder with its own tools, which is what makes it an agent rather than a text generator; how much it may do is the per-turn posture below and is never escalated on its own. Provider API keys are stripped from its environment, because an inherited `ANTHROPIC_API_KEY` would make the Claude tool bill per token instead of using the subscription. Codex reports only a combined token total, so its token counts show as unavailable.
 
@@ -55,7 +87,7 @@ An API key is not an agent. A model reached with a key has no tool loop, no file
 
 ### More than one subscription
 
-A subscription login can carry a **subscription account** name, such as `work` or `personal`. Each name gets its own credential directory inside the workspace, so a second Claude, Codex or OpenCode subscription is connected beside the first instead of replacing it. **Sign in** on the model card prints the two lines that sign that account in: the command line tool writes its credential into that directory and reads it back from there, and Frontier never sees it. Leave the account name empty to keep using the sign-in already on this machine.
+A subscription login can carry a **subscription account** name, such as `work` or `personal`. Each name gets its own credential directory inside the workspace, so a second Claude, Codex, Gemini CLI or OpenCode subscription is connected beside the first instead of replacing it. **Sign in** on the model card prints the two lines that sign that account in: the command line tool writes its credential into that directory and reads it back from there, and Frontier never sees it. Leave the account name empty to keep using the sign-in already on this machine.
 
 Connect a second subscription by adding a second model with the same provider and the same model identifier under a different account name. When one of them answers that its usage window is spent, the run moves to the next connected account and continues; the message records the login that actually answered, and the spent one is skipped for an hour before it is tried again. When every login for an agent is spent, the turn hands over to another connected agent with the same handoff an Adaptive escalation writes, up to twice, and the message records who was out of usage and who continued. A login that is simply not signed in is reported rather than switched away from.
 
@@ -71,7 +103,7 @@ A **Dictate** button in the composer records from the microphone and types the t
 4. The agent works in the folder. When it finishes, its reply appears with the files it changed, how long it took, its tokens in and out, and its cost when the model has rates. Open Files, Changes, Terminal or Preview as needed. **Revert this turn** under the changed files puts every file the turn touched back to how it was before it.
 5. Pick a different agent whenever you like. The next turn goes to it, and it is given this conversation and the same folder.
 
-Ctrl+N starts a session, Ctrl+K finds a session, and Escape closes the contextual panel. Project and session selection, drafts, and appearance survive a restart.
+Ctrl+N starts a session, Ctrl+K finds a session, and Escape closes the contextual panel; every shortcut can be rebound (see below). Project and session selection, drafts, and appearance survive a restart.
 
 ### What an agent may do
 
@@ -133,8 +165,8 @@ With more than one agent connected, the people icon beside the composer turns on
 
 With the GitHub CLI installed and signed in, the Changes panel shows the branch's pull request: number, title, checks, review state, and the size of the change. Without one, **Create pull request** pushes the branch and opens it; **Write description** has the current agent draft the title and body from the branch's commits and diff. **Address review comments** collects the review comments and puts a prompt in the composer that asks the agent to act on them.
 
-
 The pull request also shows its labels, the reviewers asked, each reviewer's latest verdict, and, when it is part of a stack, the chain from the default branch through every pull request beneath it to the ones built on it. **Review…** approves, comments or requests changes as you, through gh; **Draft with an agent** has the conversation's agent read the diff under Read only and write a review with a suggested verdict, for you to edit before submitting. **Reviewers & labels…** requests a review from a login or team, toggles the repository's labels, and changes the base branch. **Merge…** squashes, merges or rebases now, or turns on auto-merge so GitHub merges once required checks and reviews pass, and turns it off again. When opening a pull request, **Base** offers the default branch or any open pull request's branch, which stacks the new one on it, and reviewers and labels can be set at once.
+
 ### Editing a message from earlier
 
 Hover one of your own messages and choose **Edit from here**. That message and everything after it leave the conversation, the folder is put back to how it was before that turn (from the checkpoint in a repository, from the recorded before-text otherwise), and the text lands in the composer to change and resend.
@@ -145,7 +177,7 @@ The panels can put typed references beside your next message instead of pasted t
 
 ### Project settings
 
-Right-click a project for **Project settings**: the default agent and posture for new sessions; a **setup command** to run in every new worktree and the ignored files, such as `.env`, to **copy into worktrees** so a fresh branch runs at once; the **dev server command** the Preview panel starts, stops and restarts, with its output and a way to free a stuck port; whether `.env` files are kept away from Claude under every posture; the **project memory** every agent is given; and a one-time **import** of the conversations Claude Code and Codex kept about this folder.
+Right-click a project for **Project settings**: the default agent and posture for new sessions; a **setup command** to run in every new worktree and the ignored files, such as `.env`, to **copy into worktrees** so a fresh branch runs at once; the **dev server command** the Preview panel starts, stops and restarts, with its output and a way to free a stuck port; whether `.env` files are kept away from Claude under every posture; the **project memory** every agent is given; how long a turn may run (at least 90 minutes, up to 8 hours); the **sandbox** described below; and a one-time **import** of the conversations Claude Code and Codex kept about this folder.
 
 ### Sessions, notifications, the tray
 
@@ -177,7 +209,7 @@ Each project has a task board, in the **Tasks** panel: To do, Doing, Blocked and
 
 ### Pop-out panels
 
-The arrow button beside the panel tabs opens Files, Changes, Terminal, Preview or Tasks in its own window, for a second monitor. The window follows whichever project and session the main window has open; asking for the same panel again brings its window forward.
+The arrow button beside the panel tabs opens Files, Changes, Terminal, Preview or Tasks in its own window, for a second monitor (in a browser, a new browser window). The window follows whichever project and session the main window has open; asking for the same panel again brings its window forward.
 
 ### Subscription usage
 
@@ -215,15 +247,17 @@ Frontier is also an MCP server. **Settings → MCP & Skills → Use Frontier fro
 
 - **Confine file changes to this folder** (Windows). The agent tool runs at Windows low integrity, a mandatory-integrity level the operating system enforces: it can change the project folder and its own settings folder (where it keeps its sessions and sign-in), and nothing else you own, even under Full auto. Reading is not restricted. The first sandboxed turn labels those folders writable from low integrity, which takes a moment in a large project; package caches and temporary files go under LocalLow. Codex's own Windows sandbox cannot start at low integrity, so under Edit files Codex runs inside Frontier's instead, which confines writes the same way; under Read only it keeps its own, stricter one.
 - **Network**: open, only the agent's own AI service, or the agent's service plus hosts you list (a button adds the common package registries and GitHub). The workspace's MCP servers keep their hosts. Tools and the package managers they run go through a filter in Frontier that refuses everything else; each turn lists the hosts it refused. This part relies on the proxy settings every mainstream tool honours; a program deliberately written to ignore them is not stopped by it.
+- While a sandboxed turn runs, Frontier's own API refuses calls from low-integrity processes, so an agent cannot use it to switch its sandbox off or start a command outside it. The agent's own approval, question and task-board tools keep working.
+- The sandbox also covers the agent calls Frontier makes on the project's behalf: commit messages, pull request descriptions and review drafts, catch-up summaries, remembering and compacting a session, and the team lead.
 
 ### Remote access
 
-**Settings → Remote access** lets a browser on another device on your network or tailnet use this Frontier. Turn it on, set a password for your user, restart Frontier, and open one of the listed addresses. The connection is plain HTTP, so use it on a network you trust or over Tailscale. In a browser the terminal, updater and desktop notifications are unavailable; everything else works.
-
+**Settings → Remote access** lets a browser on another device on your network or tailnet use this Frontier. Turn it on, set a password for your user, restart Frontier, and open one of the listed addresses. The addresses offered are the ones another device can reach, your local network first and then Tailscale, each labelled; VPN tunnels and virtual adapters are left out. A VPN on this computer can still block local-network traffic: allow LAN connections in its settings, or use Tailscale. The connection is plain HTTP, so use it on a network you trust or over Tailscale. In a browser the terminal, updater and desktop notifications are unavailable; everything else works.
 
 **On a phone.** The layout becomes one column: projects and sessions open as a drawer from the header, panels and dialogs take the whole screen, and the composer's controls wrap. **Pair a phone** shows a QR code; scanning it opens Frontier on the phone already signed in as you, with no password to type. The code works once, for ten minutes. A phone on mobile data needs a tailnet such as Tailscale to reach this computer.
 
 **Push notifications.** Phones only allow web notifications from secure (HTTPS) sites, which a local address is not, so Frontier sends them through [ntfy](https://ntfy.sh), a free notification app for Android and iPhone. Turn them on, scan the topic's QR code in the ntfy app, and Frontier tells you when a turn finishes, stops with an error, or an agent is waiting on a question or a permission; tapping one opens that conversation. The topic is a long random name and is the only key, so keep it private; **New topic** cuts off everything subscribed to the old one. Notifications name the agent, the project and the session; the start of the reply is included only if you ask. Point it at your own ntfy server to keep notifications off the public one.
+
 ### Agent tools
 
 **Settings → Agents & Providers** shows each installed agent tool's version against the latest on npm, with a one-click update for tools installed through npm.
@@ -234,18 +268,18 @@ Frontier is also an MCP server. **Settings → MCP & Skills → Use Frontier fro
 
 ### Usage and themes
 
-**Settings → Usage** adds up every finished turn in the workspace: tokens in and out, agent time, and cost per agent, per project, and per day. Subscription turns carry no rate and show no cost. **Settings → General** offers Dark, Midnight, Warm and Light themes and an accent colour that recolours buttons, links and highlights in any of them.
+**Settings → Usage** adds up every finished turn in the workspace: tokens in and out, agent time, and cost per agent, per project, and per day. Subscription turns carry no rate and show no cost. **Settings → General** offers Dark, Midnight, Warm and Light themes, any imported VS Code theme, and an accent colour that recolours buttons, links and highlights in any of them.
 
 ## Execution and security boundaries
 
-- **An agent runs project code as the signed-in operating-system user. This is not an OS or container sandbox.** The postures above are the agent tool's own permission settings. Use Read only for a project you do not trust.
+- **By default, an agent runs project code as the signed-in operating-system user.** The postures above are the agent tool's own permission settings. For a project you do not trust, use Read only, or turn on the project's **Sandbox**: file changes confined to the project folder by Windows integrity levels, and network limited by a filter. It is not a container or a virtual machine: the agent can still read what you can read.
 - Switching agent replays the conversation into the one taking over, and nothing else. Tool calls and file reads belong to the tool that made them; the project folder already holds their result, and the new agent is told to read it rather than trust a summary. A conversation too long to send drops its oldest turns and says so, rather than refusing to continue; Compact keeps their gist.
 - A turn's file changes are recorded by reading the folder before and after it, because a project folder need not be a git repository. In a repository the working tree is also checkpointed as hidden refs before and after the turn. Anything else that writes to the folder during a turn is attributed to it.
 - The backend owns workspace checks. Foreign resource IDs raise `TenantIsolationViolationException`; switching workspaces clears cached resources and open event streams.
 - Project file APIs reject traversal, linked paths, sensitive names, private app storage, and overlapping project roots across workspaces. These bound what Frontier itself reads, shows and saves; the agent reaches the folder through its own tools.
 - One turn at a time per conversation. A second backend on the same data folder says so and exits. A turn interrupted by a restart is closed out, never replayed: its subprocess died with the application, and whatever it had already written to the folder is still there.
 - The Terminal panel in the desktop app is your own shell, running as you with no restriction beyond your account's. In a browser it falls back to a bounded project check runner: Python pytest, unittest, compileall, and npm test/build/test/lint/typecheck, with a 120-second timeout and no shell operators. Both are separate from the commands an agent runs through its own tool.
-- The approval tool speaks to the backend over loopback with a token minted for that one turn; a webhook's secret is its only credential; remote access is plain HTTP behind the user's password.
+- The approval, question and task-board tools speak to the backend over loopback with a token minted for that one turn; a webhook's secret is its only credential; remote access is plain HTTP behind the user's password or a one-time pairing link; another paired machine is reached with a session kept encrypted here; push notifications carry only what the settings allow to a topic only you know.
 - File views are bounded: up to 2,000 tree entries, UTF-8 text under 300 KB, and text-based PDFs up to 5 MB and 100 pages, read as extracted text. A turn may run for 90 minutes before it is stopped; Project settings can raise that for a project, up to 8 hours.
 
 Native application state lives under `%LOCALAPPDATA%\dev.frontier.harness`. Managed project folders and worktrees are stored in the adjacent `Frontier Projects` and `Frontier Worktrees` directories, segregated by workspace. Back up the database and `secret.key` together. Deleting workspace records does not delete project folders.
@@ -285,7 +319,7 @@ npm run build
 npm run test:e2e
 ```
 
-The Python suite exercises workspace boundaries, a turn's file record, agent switching and its handover, cancellation, restart recovery, subscription account switching, each posture's translation into every tool, the project file and command boundaries, git checkpoints and worktrees, the approval tool's protocol, automations, usage, remote access and the tray flag. The Playwright suite uses an isolated server and an explicitly injected test agent. Production has no simulated provider path or hard-coded model response. Each release is also driven at runtime in the installed window over the DevTools protocol, and the approval chain was proven with a real Claude turn. See the [verification notes](docs/verification.md) for what each version added and how it was checked.
+The Python suite exercises workspace boundaries, a turn's file record, agent switching and its handover, cancellation, restart recovery, subscription account switching, each posture's translation into every tool, the project file and command boundaries, git checkpoints and worktrees, the approval and question tools, the task board, native resume, pull request commands, the sandbox (a low-integrity process really is refused outside the project) and its network filter, pairing, push notifications, environments on another machine, automations, usage and pooled limits. The Playwright suites use an isolated server and an explicitly injected test agent: one drives the desktop layout, one a phone-sized layout, and one pairs a second Frontier as another machine. Production has no simulated provider path or hard-coded model response. Each release is also driven at runtime in the installed window over the DevTools protocol, and the approval chain was proven with a real Claude turn. See the [verification notes](docs/verification.md) for what each version added and how it was checked.
 
 ## Code map
 
@@ -312,8 +346,11 @@ The Python suite exercises workspace boundaries, a turn's file record, agent swi
 | Other machines, paired and passed through | `backend/environments.py` |
 | The sandbox: low integrity and the network filter | `backend/sandbox.py` |
 | Workspace-scoped persistence and encryption | `backend/store.py` |
+| Local model servers: up or down | `backend/localhealth.py` |
+| VS Code themes installed on this computer | `backend/vscode_themes.py` |
 | Project file reading, writing, search and the user's own checks | `backend/projects.py` |
 | Authenticated HTTP API and replayable SSE | `backend/app.py` |
 | Project shell, conversation, contextual panels | `src/desktop/` |
 | Settings pages | `src/features/settings/` |
 | Workspace-aware query cache and live turns | `src/app/context.tsx`, `src/app/useLiveSession.ts` |
+| Which machine the window works on; shortcuts; imported themes | `src/lib/environment.ts`, `src/lib/keys.ts`, `src/lib/vscodeTheme.ts` |
