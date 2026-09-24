@@ -234,6 +234,8 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await page.keyboard.press('Control+Alt+KeyP');
  await expect(page.locator('.shortcut-row',{hasText:'All projects'}).locator('kbd')).toHaveText('Ctrl Alt P');
  await page.screenshot({path:'test-results/theme-keys.png'});
+ await page.locator('.shortcut-list h3').scrollIntoViewIfNeeded();
+ await page.screenshot({path:'test-results/settings-spacing.png'});
  await page.keyboard.press('Escape');
  await expect(page.locator('.desktop-settings')).toHaveCount(0);
  await page.keyboard.press('Control+Alt+KeyP');

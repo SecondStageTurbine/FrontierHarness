@@ -577,7 +577,9 @@ body{overflow:hidden}
  .pair-box .qr{align-self:center}
 }
 
-.desktop-settings-body h3{display:flex;align-items:center;gap:8px}
+.desktop-settings-body h3{display:flex;align-items:center;gap:8px;margin:28px 0 10px}
+/* A row of buttons, or a lone button, gets room from the section heading that follows it. */
+.desktop-settings-body .actions,.desktop-settings-body>button{margin:10px 0 6px}
 .pair-box>div:last-child code{display:block;word-break:break-all}
 
 .sandbox-blocked{display:flex;align-items:center;gap:6px;margin:4px 20px 10px 47px;font-size:11.5px;color:var(--warning)}
