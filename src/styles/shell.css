@@ -431,8 +431,8 @@ body{overflow:hidden}
 
 /* Subscription usage, in the gutter beside the composer when the window is wide enough */
 .composer-region{position:relative;container-type:inline-size}
-.composer-region>.usage-dock{position:absolute;right:20px;bottom:14px;margin:0;max-width:none;width:min(17rem,calc((100% - 47rem)/2 - 36px));
- display:flex;flex-direction:column;gap:8px;padding:10px 12px;background:var(--card);border:1px solid var(--border);border-radius:12px;font-size:12px}
+.composer-region>.usage-dock{position:absolute;right:20px;bottom:14px;margin:0;max-width:none;width:min(17rem,calc((100% - 47rem)/2 - 36px))}
+.usage-dock{display:flex;flex-direction:column;gap:8px;padding:10px 12px;background:var(--card);border:1px solid var(--border);border-radius:12px;font-size:12px}
 @container (max-width:72rem){.composer-region>.usage-dock{display:none}}
 .usage-dock-head{display:flex;align-items:center;justify-content:space-between}
 .usage-dock-head strong{font-size:12px;letter-spacing:.02em;color:var(--muted)}
@@ -450,3 +450,11 @@ body{overflow:hidden}
 .usage-limit-fill.warning{background:var(--warning)}
 .usage-limit-fill.critical{background:var(--danger)}
 .usage-limit small{color:var(--subtle);font-size:10.5px}
+.usage-dock.inline{display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:10px 16px;padding:14px 16px;margin-bottom:18px;font-size:13px}
+.usage-dock.inline .usage-dock-head{grid-column:1/-1}
+.usage-dock.inline .usage-plan-card+.usage-plan-card{border-top:0;padding-top:0}
+/* Settings → Usage totals: a label over its figure, one tile each */
+.desktop-settings .metrics{grid-template-columns:repeat(auto-fit,minmax(8rem,1fr));gap:10px;margin-bottom:10px}
+.desktop-settings .metrics>div{display:flex;flex-direction:column;gap:2px;padding:10px 12px;background:var(--card);border:1px solid var(--border);border-radius:10px}
+.desktop-settings .metrics span{font-size:11px;color:var(--subtle)}
+.desktop-settings .metrics strong{font-size:18px;font-variant-numeric:tabular-nums}

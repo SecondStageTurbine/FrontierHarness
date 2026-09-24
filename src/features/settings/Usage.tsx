@@ -3,6 +3,7 @@ import {BarChart3} from 'lucide-react';
 import {useResource} from '../../app/context';
 import {PageHeading} from '../../components/ui';
 import {money} from '../../lib/api';
+import {UsageDock} from '../../desktop/UsageDock';
 
 type Row={key:string;label:string;turns:number;input_tokens:number;output_tokens:number;cost:number;seconds:number};
 type Payload={days:number;totals:Omit<Row,'key'|'label'>;models:Row[];projects:Row[];series:Row[]};
@@ -18,6 +19,7 @@ export default function Usage(){
  const peak=Math.max(1,...(d?.series||[]).map(r=>r.input_tokens+r.output_tokens));
  return <>
   <PageHeading eyebrow="WHAT THE TURNS ADDED UP TO" title="Usage" description="Tokens, time and cost per agent, per project and per day, read from the conversations in this workspace."><select value={days} onChange={e=>setDays(Number(e.target.value))} aria-label="Period"><option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option><option value={365}>Last year</option></select></PageHeading>
+  <UsageDock inline/>
   {q.error&&<p className="error-text">{q.error.message}</p>}
   {d&&<><div className="metrics"><div><span>Turns</span><strong>{d.totals.turns}</strong></div><div><span>Tokens in</span><strong>{k(d.totals.input_tokens)}</strong></div><div><span>Tokens out</span><strong>{k(d.totals.output_tokens)}</strong></div><div><span>Agent time</span><strong>{hours(d.totals.seconds)}</strong></div><div><span>Cost</span><strong>{d.totals.cost?money(d.totals.cost):'$0.00'}</strong></div></div>
    {d.series.length>0&&<div className="usage-chart" role="img" aria-label="Tokens per day">{d.series.map(r=><div key={r.key} title={`${r.key}: ${k(r.input_tokens+r.output_tokens)} tokens, ${r.turns} turns`}><i style={{height:`${Math.max(2,Math.round((r.input_tokens+r.output_tokens)/peak*100))}%`}}/><span>{r.key.slice(5)}</span></div>)}</div>}

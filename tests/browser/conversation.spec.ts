@@ -96,6 +96,13 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await page.setViewportSize({width:1100,height:1000});
  await expect(page.locator('.usage-dock')).toBeHidden();
  await page.setViewportSize({width:1440,height:1000});
+ // The same figures are in Settings → Usage for any window width.
+ await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await page.locator('.desktop-settings nav button',{hasText:'Usage'}).click();
+ await expect(page.locator('.usage-dock.inline')).toContainText('Subscription limits');
+ await expect(page.locator('.usage-dock.inline')).toContainText('Week, all models');
+ await page.screenshot({path:'test-results/usage-settings.png'});
+ await page.keyboard.press('Escape');
  // Resume from CLI: the sidebar button and /resume open the same picker of Claude and Codex conversations.
  await page.getByRole('button',{name:'Resume from CLI',exact:true}).click();
  await expect(page.getByRole('dialog')).toContainText('Resume from CLI');

@@ -153,7 +153,7 @@ Closing the window keeps Frontier running in the system tray: automations keep f
 
 ### Subscription usage
 
-On a wide enough window, a **Usage** card sits beside the composer. It shows how much of each signed-in Claude and Codex subscription's windows is used and when each resets, the same figures as each tool's own usage view: Claude's current session, its week and any per-model week, and Codex's windows and plan. It reads the sign-in each tool already keeps on this computer, so anyone using Frontier sees their own plans, and the tokens never leave the backend. It refreshes every five minutes, or from its refresh button; when a provider rate-limits the figures, Frontier waits as long as it was asked before asking again.
+On a wide enough window, a **Usage** card sits beside the composer, and the same figures head **Settings → Usage** at any width. It shows how much of each signed-in Claude and Codex subscription's windows is used and when each resets, the same figures as each tool's own usage view: Claude's current session, its week and any per-model week, and Codex's windows and plan. It reads the sign-in each tool already keeps on this computer, so anyone using Frontier sees their own plans, and the tokens never leave the backend. It refreshes every five minutes, or from its refresh button; when a provider rate-limits the figures, Frontier waits as long as it was asked before asking again.
 
 ### Resume from the command line
 
