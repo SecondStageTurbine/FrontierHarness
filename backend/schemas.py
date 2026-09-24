@@ -259,6 +259,13 @@ class AutomationInput(StrictModel):
 class RemoteInput(StrictModel):
     enabled: bool
 
+class PushInput(StrictModel):
+    enabled: bool | None = None
+    server: str | None = Field(default=None, pattern=r'^https?://[^\s]+$', max_length=300)
+    events: list[Literal['done', 'failed', 'waiting']] | None = None
+    details: bool | None = None
+    new_topic: bool = False
+
 class PasswordInput(StrictModel):
     password: str = Field(min_length=12, max_length=200)
 

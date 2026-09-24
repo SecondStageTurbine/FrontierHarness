@@ -209,6 +209,10 @@ Frontier is also an MCP server. **Settings → MCP & Skills → Use Frontier fro
 
 **Settings → Remote access** lets a browser on another device on your network or tailnet use this Frontier. Turn it on, set a password for your user, restart Frontier, and open one of the listed addresses. The connection is plain HTTP, so use it on a network you trust or over Tailscale. In a browser the terminal, updater and desktop notifications are unavailable; everything else works.
 
+
+**On a phone.** The layout becomes one column: projects and sessions open as a drawer from the header, panels and dialogs take the whole screen, and the composer's controls wrap. **Pair a phone** shows a QR code; scanning it opens Frontier on the phone already signed in as you, with no password to type. The code works once, for ten minutes. A phone on mobile data needs a tailnet such as Tailscale to reach this computer.
+
+**Push notifications.** Phones only allow web notifications from secure (HTTPS) sites, which a local address is not, so Frontier sends them through [ntfy](https://ntfy.sh), a free notification app for Android and iPhone. Turn them on, scan the topic's QR code in the ntfy app, and Frontier tells you when a turn finishes, stops with an error, or an agent is waiting on a question or a permission; tapping one opens that conversation. The topic is a long random name and is the only key, so keep it private; **New topic** cuts off everything subscribed to the old one. Notifications name the agent, the project and the session; the start of the reply is included only if you ask. Point it at your own ntfy server to keep notifications off the public one.
 ### Agent tools
 
 **Settings → Agents & Providers** shows each installed agent tool's version against the latest on npm, with a one-click update for tools installed through npm.
@@ -293,6 +297,7 @@ The Python suite exercises workspace boundaries, a turn's file record, agent swi
 | Tool versions and updates, history import and the resume picker | `backend/maintenance.py` |
 | Scheduled and webhook turns, idle archiving | `backend/automations.py` |
 | Remote access and tray flags | `backend/remote.py` |
+| Push notifications through ntfy | `backend/push.py` |
 | Workspace-scoped persistence and encryption | `backend/store.py` |
 | Project file reading, writing, search and the user's own checks | `backend/projects.py` |
 | Authenticated HTTP API and replayable SSE | `backend/app.py` |

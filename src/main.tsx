@@ -12,6 +12,8 @@ import '@fontsource/inter/700.css';
 import 'highlight.js/styles/github-dark.css';
 import './styles/global.css';
 import './styles/shell.css';
+{const q=new URLSearchParams(window.location.search);const t=q.get('t'),p=q.get('p'),s=q.get('s');
+ if(t&&p){try{localStorage.setItem('frontier.tenant',t);localStorage.setItem(`frontier.project.${t}`,p);if(s)localStorage.setItem(`frontier.session.${p}`,s)}catch{/* private mode */}window.history.replaceState(null,'','/')}}
 const DesktopWorkspace=lazy(()=>import('./desktop/DesktopWorkspace'));
 const Popout=lazy(()=>import('./desktop/Popout'));
 // A panel popped out into its own window loads the same page with ?popout=<panel>.

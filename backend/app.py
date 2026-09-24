@@ -15,12 +15,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 from fastapi import FastAPI, Request, Response, HTTPException, UploadFile, File, Form
-from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
-from .schemas import LoginInput, TenantInput, ModelConfig, SUBSCRIPTION_PROVIDERS, PasswordInput, RemoteInput
-from . import automations, remote, devserver
+from .schemas import LoginInput, TenantInput, ModelConfig, SUBSCRIPTION_PROVIDERS, PasswordInput, RemoteInput, PushInput
+from . import automations, remote, devserver, push
 from .store import Store, TenantIsolationViolationException, uid, now, public_model
 from .agent import AgentRunner
 from . import localhealth
@@ -228,6 +228,60 @@ def create_app(directory=None, broker=None):
         user(request)
         remote.set_tray_enabled(store.directory, payload.enabled)
         return {'enabled': payload.enabled}
+
+    # ── A phone: signing in by QR code, and push notifications ──
+    pairings = {}  # sha256(token) -> (user id, expiry). In memory: a restart simply voids unused codes.
+
+    @app.post('/api/remote/pair')
+    def remote_pair(request:Request):
+        """A one-time link that signs a phone in without typing the password. Shown as a QR code, valid ten minutes, used once."""
+        current = user(request)
+        for key, (_, expires) in list(pairings.items()):
+            if expires < time.time():
+                pairings.pop(key, None)
+        token = secrets.token_urlsafe(32)
+        pairings[hashlib.sha256(token.encode()).hexdigest()] = (current['id'], time.time() + 600)
+        port = int(os.environ.get('HARNESS_DESKTOP_PORT') or 0) or None
+        return {'token': token, 'expires_in': 600, 'urls': [f'http://{a}:{port}/pair?code={token}' for a in remote.addresses()] if port else []}
+
+    @app.get('/pair')
+    def pair(code:str=''):
+        found = pairings.pop(hashlib.sha256(code.encode()).hexdigest(), None)
+        if not found or found[1] < time.time():
+            return HTMLResponse('<!doctype html><meta name="viewport" content="width=device-width"><body style="font:16px system-ui;padding:24px;background:#09090b;color:#fafafa">'
+                                '<h2>This pairing code has expired or was already used.</h2><p>Show a new QR code in Frontier: Settings, Remote access.</p>', status_code=410)
+        response = RedirectResponse('/', status_code=303)
+        session(response, found[0])
+        return response
+
+    @app.get('/api/push')
+    def push_status(request:Request):
+        user(request)
+        settings = push.config(store.directory)
+        return {**settings, 'subscribe_url': f'{settings["server"]}/{settings["topic"]}' if settings['topic'] else None}
+
+    @app.put('/api/push')
+    def push_set(payload:PushInput, request:Request):
+        user(request)
+        fields = payload.model_dump(exclude_unset=True, exclude={'new_topic'})
+        if payload.new_topic:
+            fields['topic'] = None  # A new random topic: anyone subscribed to the old one stops receiving.
+            settings = push.config(store.directory); settings['topic'] = None
+            (Path(store.directory)/'push.json').write_text(json.dumps(settings), encoding='utf-8')
+        settings = push.save(store.directory, **{k: v for k, v in fields.items() if k != 'topic'})
+        return {**settings, 'subscribe_url': f'{settings["server"]}/{settings["topic"]}'}
+
+    @app.post('/api/push/test')
+    async def push_test(request:Request):
+        user(request)
+        settings = push.config(store.directory)
+        if not settings['enabled']:
+            raise HTTPException(400, 'Turn push notifications on first.')
+        try:
+            await asyncio.to_thread(push.send, store.directory, 'done', 'Frontier test notification', 'Notifications from Frontier reach this device.', None, True, True)
+        except OSError as exc:
+            raise HTTPException(502, f'{settings["server"]} could not be reached: {exc}') from None
+        return {'sent': True}
 
     @app.put('/api/remote')
     def remote_set(payload:RemoteInput, request:Request):

@@ -535,3 +535,14 @@ and finding the ones based on this branch. Against this repository on GitHub, th
 live (labels, people who can review, open pull requests, the default branch). Nothing was opened,
 reviewed or merged on a real repository; the browser suite drives the panel against a stand-in for gh
 and checks the review, label and auto-merge requests it sends. 155 tests pass.
+
+Version 0.18.0 makes remote access work on a phone. A second browser suite runs as an iPhone 13
+(390 by 844, touch): a notification's link opens its conversation and leaves the address bar clean;
+the page never scrolls sideways; the composer sends; projects open as a drawer that closes once a
+session is picked; a panel fills the screen; the pairing code and the push topic's code render; and a
+fresh browser opening the pairing link is signed in, while a second use of it is refused. Building it
+found that below 900 pixels wide the sidebar and every panel had been hidden outright, which is why the
+old note asked for a wide screen. Push notifications were checked live against ntfy.sh: a notification
+published on a new random topic was read back with its title, text, tag, priority and link. Web push
+was not used because browsers allow it only on HTTPS, which remote access over a local address is not.
+157 tests pass.

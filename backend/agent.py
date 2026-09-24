@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import adaptive, board, gitops, localhealth, team as teamwork
+from . import adaptive, board, gitops, localhealth, push, team as teamwork
 from .adaptive import ADAPTIVE, MAX_ESCALATIONS
 from .broker import CLI_TOOLS, ProviderError
 from .projects import ProjectFiles
@@ -306,6 +306,22 @@ class AgentRunner:
             extras['approval'] = {'url': f'http://127.0.0.1:{port}', 'token': token, 'command': command, 'env': env}
         return extras
 
+    def notify(self, tenant_id, project_id, session, message, event, text):
+        """A push to the user's phone, when they set one up: a turn finished, stopped, or is waiting on them.
+        Team workers stay quiet; their lead's turn speaks for them."""
+        if session.get('team_parent'):
+            return
+        try:
+            directory = self.store.directory
+            project = self.store.get(tenant_id, 'projects', project_id)
+            agent = message.get('model_name') or 'The agent'
+            title = {'done': f'{agent} finished in {project["name"]}', 'failed': f'{agent} stopped in {project["name"]}',
+                     'waiting': f'{agent} needs you in {project["name"]}'}[event]
+            body = ' '.join(text.split())[:300] if push.config(directory)['details'] and text else session.get('name') or ''
+            push.send(directory, event, title, body, push.link(directory, tenant_id, project_id, session['id']))
+        except Exception:
+            pass  # A notification is a courtesy; it never disturbs the turn.
+
     def request_approval(self, token, tool_name, tool_input, tool_use_id=None, kind='permission'):
         """A running turn's tool asks; the conversation shows a card until someone answers."""
         turn = self.turn_tokens.get(token)
@@ -318,6 +334,9 @@ class AgentRunner:
         self.approvals[approval['id']] = approval
         text = f'The agent asks: {str(tool_input.get("question") or "")[:200]}' if kind == 'question' else f'{tool_name} needs your permission.'
         self.store.event(tenant_id, session_id, 'approval.requested', text, message_id=message_id, approval_id=approval['id'])
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        message = next((m for m in session['messages'] if m['id'] == message_id), {})
+        self.notify(tenant_id, project_id, session, message, 'waiting', str(tool_input.get('question') or '') if kind == 'question' else f'{tool_name} needs your permission.')
         return approval['id']
 
     async def approval_state(self, approval_id, wait=0):
@@ -675,6 +694,8 @@ class AgentRunner:
                              f'{served["name"]} took over after the previous subscription ran out of usage.', message_id=message_id)
         session['updated_at'] = now()
         self.store.put(tenant_id, 'sessions', session)
+        if status in ('complete', 'failed'):
+            self.notify(tenant_id, project_id, session, message, 'done' if status == 'complete' else 'failed', text or error or '')
         summary = f'{len(changes)} file{"" if len(changes) == 1 else "s"} changed.' if changes else 'No files changed.'
         self.store.event(tenant_id, session_id, f'turn.{status}',
                          error or (summary if mode != 'read' else 'Answered without touching the folder.'),
