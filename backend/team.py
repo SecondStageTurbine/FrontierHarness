@@ -34,9 +34,10 @@ PLAN_ASK = (
     'the agents whose work it checks, and you review again at the end, so the work gets two independent reviews.\n'
     'Staff the team from the whole roster below, not from your own model family: every tool and every local model on it '
     'is available. Match each task to the agent whose strengths fit it; give simple, well-specified tasks to cheaper and '
-    'local agents (a local one runs on this computer at no usage cost) and keep the strongest for the hard ones. Name an '
-    'agent only when you have a reason; otherwise leave "agent" null and Frontier picks the cheapest one whose strengths '
-    'cover the task\'s "needs".'
+    'local agents (a local one runs on this computer at no usage cost) and keep the strongest for the hard ones: '
+    'integration, debugging across the codebase, and anything the rest depends on. Name the agent for every task in '
+    '"agent", exactly as the roster writes it; a task you leave unnamed goes to the cheapest agent whose strengths cover '
+    'its "needs", which suits only small, self-contained work.'
 )
 
 

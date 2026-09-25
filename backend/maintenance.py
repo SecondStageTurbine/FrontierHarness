@@ -225,9 +225,27 @@ def resume_cli(store, tenant_id, project, source, key):
 INSTALL = {
     'claude_cli': {'install': 'irm https://claude.ai/install.ps1 | iex', 'signin': 'claude', 'models': ['sonnet', 'opus', 'haiku', 'fable'], 'default': 'sonnet'},
     'codex_cli': {'install': 'npm install -g @openai/codex', 'signin': 'codex login', 'models': ['gpt-6-sol', 'gpt-6-astra', 'gpt-6-luna'], 'default': 'gpt-6-sol'},
-    'opencode_cli': {'install': 'npm install -g opencode-ai', 'signin': 'opencode auth login', 'models': ['opencode/free'], 'default': 'opencode/free'},
+    'opencode_cli': {'install': 'npm install -g opencode-ai', 'signin': 'opencode auth login', 'models': [], 'default': ''},
     'gemini_cli': {'install': 'npm install -g @google/gemini-cli', 'signin': 'gemini', 'models': ['gemini-2.5-pro', 'gemini-2.5-flash'], 'default': 'gemini-2.5-pro'},
 }
+
+
+async def opencode_models():
+    """The model identifiers this machine's OpenCode offers (`opencode models`), free ones first."""
+    try:
+        launch = resolve_cli('opencode_cli')
+    except ProviderError:
+        return []
+    proc = await asyncio.create_subprocess_exec(*launch, 'models', env=child_env(), stdin=asyncio.subprocess.DEVNULL,
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, **child_flags())
+    try:
+        async with asyncio.timeout(40):
+            out, _ = await proc.communicate()
+    except TimeoutError:
+        await terminate(proc)
+        return []
+    found = [line.strip() for line in out.decode('utf-8', 'replace').splitlines() if '/' in line.strip() and ' ' not in line.strip()]
+    return sorted(found, key=lambda m: (not m.endswith('-free'), m))
 
 
 async def codex_models():
@@ -282,10 +300,10 @@ async def detect():
                 row['models'] = slugs
             row['default'] = default if default in row['models'] else (row['models'][0] if row['models'] else row['default'])
         if provider == 'opencode_cli':
+            listed = await opencode_models()
             configured = opencode_default()
-            if configured:
-                row['models'] = [configured] + [m for m in row['models'] if m != configured]
-                row['default'] = configured
+            row['models'] = ([configured] if configured else []) + [m for m in listed if m != configured]
+            row['default'] = configured or (row['models'][0] if row['models'] else '')
         return row
     return await asyncio.gather(*(one(p) for p in CLI_TOOLS))
 

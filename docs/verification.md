@@ -648,3 +648,12 @@ usage cost, or cloud and its cost class), its three strongest capabilities with 
 and is told to staff from the whole roster, send simple tasks to cheaper and local agents, and leave the
 agent unnamed unless it has a reason. Local agents whose server is down are left off the team and listed
 as offline; a local agent is counted as free when tasks are assigned.
+
+Version 0.20.5: a team gave four of six tasks to "OpenCode opencode/free". That identifier came from
+Frontier's own setup wizard, which offered it as OpenCode's default, but OpenCode has no such model:
+`opencode run --model opencode/free` fails with "Unexpected server error", while a listed model such as
+opencode/nemotron-3-ultra-free answers. The wizard now reads OpenCode's models from `opencode models`
+(free ones first, the configured default at the top). The tasks went to it because 0.20.4 told the lead to
+leave tasks unnamed unless it had a reason, and an unnamed task goes to the cheapest agent that covers it;
+the lead is now told to name the agent for every task and keep the strongest for integration and
+cross-cutting debugging.
