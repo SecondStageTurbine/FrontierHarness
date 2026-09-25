@@ -226,6 +226,9 @@ def test_a_stopped_team_continues_with_only_its_unfinished_tasks(tmp_path):
         while ran.count('b') < 1:
             await asyncio.sleep(0.05)
         await runner.cancel(*key)
+        stopped = store.get('tenant-a', 'sessions', session['id'])
+        stopped['messages'][-1]['team'].pop('objective')  # As a team from before 0.20.8 was saved.
+        store.put('tenant-a', 'sessions', stopped)
         assert store.get('tenant-a', 'sessions', session['id'])['messages'][-1]['status'] == 'cancelled'
         runner.continue_team('tenant-a', project['id'], session['id'])
         await asyncio.gather(runner.turns[key], return_exceptions=True)

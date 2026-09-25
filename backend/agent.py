@@ -458,7 +458,10 @@ class AgentRunner:
         last = session['messages'][-1] if session['messages'] else {}
         if not last.get('team', {}).get('tasks') or last.get('status') not in ('cancelled', 'failed'):
             raise ValueError('Only a team that stopped before finishing can be continued.')
-        return self.send(tenant_id, project_id, session_id, 'Continue the team\u2019s work where it stopped.', last['model_id'], last['mode'], team=last['team'])
+        # A team from before 0.20.8 did not record its request; it is the message that started it.
+        asked = next((m['content'] for m in reversed(session['messages']) if m['role'] == 'user'), '')
+        return self.send(tenant_id, project_id, session_id, 'Continue the team\u2019s work where it stopped.', last['model_id'], last['mode'],
+                         team={'objective': asked, **last['team']})
 
     def send(self, tenant_id, project_id, session_id, content, model_id, mode, queue=False, team=False, context=None):
         """Record the message, start the turn, and answer immediately.

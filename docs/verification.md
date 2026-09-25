@@ -682,3 +682,8 @@ again, a worker's partial worktree changes are applied to the lead's folder firs
 connected is replaced. The team keeps its original objective and checkpoint, so the final review diff spans
 both runs. Tested by stopping a two-task team during its second task and continuing it: the first task is not
 redone, the lead does not plan again, and the team finishes with both tasks done.
+
+Version 0.20.9: a team stopped before 0.20.8 has no recorded objective, so continuing it would have given its
+workers and reviewer "Continue the team's work where it stopped." as the request. The continuation now takes
+the objective from the user message that started the team; the continue test strips the objective before
+continuing to cover this.
