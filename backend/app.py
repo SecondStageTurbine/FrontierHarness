@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from .schemas import LoginInput, TenantInput, ModelConfig, SUBSCRIPTION_PROVIDERS, PasswordInput, RemoteInput, PushInput, EnvironmentInput
-from . import adaptive, automations, remote, devserver, push, environments
+from . import adaptive, benchmark, automations, remote, devserver, push, environments
 from starlette.background import BackgroundTask
 from .store import Store, TenantIsolationViolationException, uid, now, public_model
 from .agent import AgentRunner
@@ -381,7 +381,10 @@ def create_app(directory=None, broker=None):
         # turn is spent finding out. Cloud agents carry no answer.
         online = await localhealth.availability(rows)
         records = {r['id']:r for r in store.list(tenant_id,adaptive.TRACK_KIND)}
-        return [{**public_model(m),'online':online.get(m['id']),'track':adaptive.describe_track(adaptive.track_for(m,records))} for m in rows]
+        await benchmark.refresh(store.directory)
+        board = benchmark.table(store.directory)
+        return [{**public_model(m),'online':online.get(m['id']),'track':adaptive.describe_track(adaptive.track_for(m,records)),
+                 'benchmark':benchmark.describe(benchmark.match(m,board)) or None} for m in rows]
 
     @app.post('/api/t/{tenant_id}/models')
     @app.put('/api/t/{tenant_id}/models/{model_id}')

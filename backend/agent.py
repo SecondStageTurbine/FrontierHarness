@@ -20,7 +20,7 @@ import secrets
 import sys
 from pathlib import Path
 
-from . import adaptive, board, gitops, localhealth, push, sandbox, team as teamwork
+from . import adaptive, benchmark, board, gitops, localhealth, push, sandbox, team as teamwork
 from .adaptive import ADAPTIVE, MAX_ESCALATIONS
 from .broker import CLI_TOOLS, ProviderError, cooling
 from .projects import ProjectFiles
@@ -452,7 +452,8 @@ class AgentRunner:
     def agents(self, tenant_id):
         """Every agent that can take a turn, each with its track record so routing weighs what it has done."""
         records = {r['id']: r for r in self.store.list(tenant_id, adaptive.TRACK_KIND)}
-        return [{**a, 'track': adaptive.track_for(a, records)} for a in agentic_providers(self.store.list(tenant_id, 'models'))]
+        board = benchmark.table(self.store.directory)
+        return [{**a, 'track': adaptive.track_for(a, records), 'benchmark': benchmark.match(a, board)} for a in agentic_providers(self.store.list(tenant_id, 'models'))]
 
     def continue_team(self, tenant_id, project_id, session_id):
         """Pick a stopped team back up: the same lead, posture and plan, with only unfinished tasks run again."""
@@ -577,6 +578,7 @@ class AgentRunner:
         # A local model whose server is not running is not available, however good its profile:
         # several can be configured while only one holds the GPU, and a turn sent to a server
         # that is down would fail and escalate to a cloud agent for no reason.
+        await benchmark.refresh(self.store.directory)
         agents = self.agents(tenant_id)
         online = await localhealth.availability(agents)
         offline = [m for m in agents if online.get(m['id']) is False]

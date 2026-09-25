@@ -11,7 +11,7 @@ import json
 import re
 
 from . import board
-from . import adaptive, gitops, localhealth
+from . import adaptive, benchmark, gitops, localhealth
 from .adaptive import TaskRequirements
 from .broker import CLI_TOOLS, AgentResult, ProviderError, cooling as broker_cooling
 from .store import now, uid
@@ -52,13 +52,15 @@ def roster(agents, online, lead):
         local = localhealth.server_for(agent) is not None or cap.get('location') == 'local'
         best = sorted((c for c in CAPABILITIES if c != 'speed'), key=lambda c: -cap.get(c, 0))[:3]
         window = localhealth.context_limit(agent)
-        track = adaptive.describe_track(agent.get('track'))
+        track = '; '.join(filter(None, [benchmark.describe(agent.get('benchmark')), adaptive.describe_track(agent.get('track'))]))
         where = (('local on this computer, no usage cost' + (f', context window {window // 1000}K tokens' if window else ''))
                  if local else f'cloud, {cap.get("cost_class", "unknown")} cost')
         lines.append(f'- {agent["name"]}: {CLI_TOOLS.get(agent["provider"], ("", "", agent["provider"]))[2]}, model {agent.get("model_name")}; {where}; '
                      f'best at {", ".join(f"{c} {cap.get(c, 0)}" for c in best)}; speed {cap.get("speed", 5)}; {track}' + (' (you, the lead)' if agent['id'] == lead['id'] else ''))
     offline = [a['name'] for a in online.get('offline', [])]
-    return ('CONNECTED AGENTS (strengths are 0 to 10, already adjusted by each agent\'s track record on this computer):\n' + '\n'.join(lines)
+    return ('CONNECTED AGENTS (strengths are 0 to 10, already adjusted by the public DeepSWE coding benchmark where it lists the '
+            'model and by each agent\'s track record on this computer; the benchmark cost is per task at API prices, so '
+            'compare it between agents rather than read it as a bill):\n' + '\n'.join(lines)
             + (f'\nOffline right now, so not on the team: {", ".join(offline)}.' if offline else ''))
 REVIEW_ASK = (
     'You are the lead. Your workers have finished; their reports and the resulting diff of the project are below. '
@@ -197,6 +199,7 @@ class Team:
 
     async def run(self, conversation_prompt, objective):
         session, message = self.state()
+        await benchmark.refresh(self.runner.store.directory)
         connected = [a for a in self.runner.agents(self.tenant_id) if a.get('enabled', True)]
         # A local agent whose server is not running cannot take a task; the lead is told who is out.
         up = await localhealth.availability(connected)

@@ -19,6 +19,7 @@ from pathlib import Path
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
+from . import benchmark
 
 ADAPTIVE = 'adaptive'
 CAPABILITIES = ('coding', 'reasoning', 'planning', 'debugging', 'architecture', 'review',
@@ -42,7 +43,6 @@ PROVIDER_PROFILES = {
 FAMILY_PROFILES = [
     ('ollama/',    dict(location='local', cost_class='free', speed=8, coding=6, reasoning=5, planning=4, debugging=5, architecture=4, review=5, tool_use=6, repository=6, instruction_following=6)),
     ('lmstudio/',  dict(location='local', cost_class='free', speed=8, coding=6, reasoning=5, planning=4, debugging=5, architecture=4, review=5, tool_use=6, repository=6, instruction_following=6)),
-    ('-free',      dict(cost_class='free')),
     ('haiku',      dict(cost_class='low', speed=9, coding=6, reasoning=6, planning=5, debugging=6, architecture=5, review=6)),
     ('flash',      dict(cost_class='low', speed=9, coding=6, reasoning=6, planning=5, debugging=6, architecture=5, review=6)),
     ('mini',       dict(cost_class='low', speed=9, coding=6, reasoning=6, planning=5, debugging=6, architecture=5, review=6)),
@@ -53,6 +53,8 @@ FAMILY_PROFILES = [
     ('gpt-6-astra', dict(cost_class='high',   coding=10, reasoning=10, planning=9, debugging=10, architecture=9, review=9, tool_use=10, repository=10, instruction_following=9, speed=5)),
     ('gpt-6-sol',   dict(cost_class='medium', coding=9,  reasoning=8,  planning=8, debugging=9,  architecture=8, review=8, tool_use=9,  repository=9,  instruction_following=9, speed=7)),
     ('gpt-6-luna',  dict(cost_class='low',    coding=7,  reasoning=6,  planning=6, debugging=6,  architecture=5, review=6, tool_use=8,  repository=7,  instruction_following=8, speed=9)),
+    # Last, so a free model stays free whatever family its name also matches (a free "flash" is still free).
+    ('-free',      dict(cost_class='free')),
 ]
 
 
@@ -108,8 +110,13 @@ def describe_track(track):
     return 'track record: ' + ', '.join(parts)
 
 
+# What a public benchmark pass rate says about, of all the skills: agentic coding on real repositories.
+BENCHMARK_SKILLS = ('coding', 'debugging', 'repository', 'tool_use')
+
+
 def profile(model):
-    """What one agent is good at: provider default, family refinement, its track record, then the row's own word."""
+    """What one agent is good at: provider default, family refinement, the public benchmark, its track
+    record on this computer, then the row's own word."""
     base = dict(PROVIDER_PROFILES.get(model['provider'], {}))
     if not base:
         return None  # An API-key model has no agent loop; it cannot take a turn at all.
@@ -117,6 +124,12 @@ def profile(model):
     for needle, refinement in FAMILY_PROFILES:
         if needle in name:
             base.update(refinement)
+    bench = model.get('benchmark')
+    if bench:
+        for key in BENCHMARK_SKILLS:
+            base[key] = benchmark.skill(bench['pass'])
+        if base.get('cost_class') != 'free' and benchmark.cost_class(bench.get('cost')):
+            base['cost_class'] = benchmark.cost_class(bench['cost'])
     shift = track_shift(model.get('track'))
     for key in CAPABILITIES:
         if shift and key != 'speed':

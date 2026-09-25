@@ -696,3 +696,13 @@ From three attempts, the share accepted without a fix shifts every skill but spe
 row's own capability overrides apply. Tested: one task leaves the profile unchanged; 1 clean of 5 lowers
 coding by 2; a user override still wins; a different model identifier gets no record; the scripted team
 whose OpenCode worker overflowed records failed=1, overflows=1 for it and done=1 for the agent that took over.
+
+Version 0.22.0: DeepSWE publishes its leaderboard as JSON at /artifacts/v1.1/leaderboard-live.json (70
+configurations of 28 models, regenerated as runs are imported; the copy read was generated 2026-09-22). Frontier
+downloads it at most daily into the data directory (a failed download keeps the last copy and waits a day),
+takes each model's best configuration, and matches connected agents by normalised identifier (dots to dashes,
+provider prefix, "-free" and ":cloud" dropped) or, for Claude Code's aliases, the newest claude-<alias>-N. Against
+the live file: Opus, Fable, Sonnet, gpt-5.6-terra and gpt-6-astra matched; haiku, gpt-6-sol, gpt-6-luna,
+Nemotron and the local Qwen did not and keep their profiles. The benchmark sets coding/debugging/repository/tool
+use (35% pass = 5, 75% = 10) and cost class, before track records and user overrides. Writing the tests exposed
+that "-free" was applied before "flash", so a free flash model ranked as low cost; "-free" now comes last.
