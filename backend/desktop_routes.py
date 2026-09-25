@@ -578,6 +578,12 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         get_session(tenant_id,project_id,session_id)
         return await runner.compact(tenant_id,project_id,session_id)
 
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/team/continue')
+    async def continue_team(tenant_id:str,project_id:str,session_id:str,request:Request):
+        scoped(request,tenant_id)
+        get_session(tenant_id,project_id,session_id)
+        return runner.continue_team(tenant_id,project_id,session_id)
+
     @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/instructions')
     async def instruct(tenant_id:str,project_id:str,session_id:str,payload:InstructionInput,request:Request):
         """One message, one agentic turn. The reply arrives in the session, not in this response."""

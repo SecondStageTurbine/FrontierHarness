@@ -452,6 +452,14 @@ class AgentRunner:
     def agents(self, tenant_id):
         return agentic_providers(self.store.list(tenant_id, 'models'))
 
+    def continue_team(self, tenant_id, project_id, session_id):
+        """Pick a stopped team back up: the same lead, posture and plan, with only unfinished tasks run again."""
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        last = session['messages'][-1] if session['messages'] else {}
+        if not last.get('team', {}).get('tasks') or last.get('status') not in ('cancelled', 'failed'):
+            raise ValueError('Only a team that stopped before finishing can be continued.')
+        return self.send(tenant_id, project_id, session_id, 'Continue the team\u2019s work where it stopped.', last['model_id'], last['mode'], team=last['team'])
+
     def send(self, tenant_id, project_id, session_id, content, model_id, mode, queue=False, team=False, context=None):
         """Record the message, start the turn, and answer immediately.
 
@@ -498,7 +506,8 @@ class AgentRunner:
                  'changes': [], 'input_tokens': None, 'output_tokens': None,
                  'created_at': now(), 'finished_at': None}
         if team:
-            reply['team'] = {'status': 'planning', 'lead': config['name'], 'tasks': [], 'summary': ''}
+            # `team` is True for a new team, or the plan of a stopped one to continue.
+            reply['team'] = {**team, 'status': 'working'} if isinstance(team, dict) else {'status': 'planning', 'lead': config['name'], 'tasks': [], 'summary': ''}
         session['messages'].append(reply)
         if len(session['messages']) == 2 and session.get('name') in (None, '', 'New session'):
             session['name'] = content.splitlines()[0][:80]
@@ -633,11 +642,12 @@ class AgentRunner:
                 raise ProviderError(f'{config["name"]} is not running: nothing at {localhealth.where(config)} is serving it. Start that server, or pick another agent.')
             if message.get('team'):
                 # The lead plans and reviews under Read only; its workers take the real posture.
-                message['team']['checkpoint'] = before_ref
+                # A continued team keeps its first checkpoint, so the lead reviews everything the team did.
+                message['team']['checkpoint'] = message['team'].get('checkpoint') or before_ref
                 session = self.save_turn(tenant_id, session_id, message_id, team=message['team'])
                 message = next(m for m in session['messages'] if m['id'] == message_id)
                 visible, summary = conversation(session)
-                objective = next(m['content'] for m in reversed(session['messages']) if m['role'] == 'user')
+                objective = message['team'].get('objective') or next(m['content'] for m in reversed(session['messages']) if m['role'] == 'user')
                 lead_prompt = build_prompt(visible, False, None, 'read', summary, rules=rules, memory=memory, environment=environment, board=board_text)
                 result = await teamwork.Team(self, tenant_id, project_id, session_id, message_id, config, mode, root).run(lead_prompt, objective)
             rounds = 0 if message.get('team') else 1 + (MAX_ESCALATIONS if adaptive_turn else 0)

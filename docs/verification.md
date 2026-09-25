@@ -674,3 +674,11 @@ model's context window, read from its `limit.context` in OpenCode's settings (Qw
 tokens"), and the plan instructions send log-, diff- and codebase-heavy tasks to cloud agents. A worker that
 fails with the context-window error is reassigned once to a cloud agent (tested with a scripted team whose
 OpenCode worker overflows: the task is redone by another tool and finishes).
+
+Version 0.20.8: a stopped team could only be started over, planning included. A team message that ended
+cancelled or failed with unfinished tasks now offers "Continue the team" (POST .../team/continue), which
+starts a new turn with the same lead, mode and plan: done tasks are kept, every other task is reset and run
+again, a worker's partial worktree changes are applied to the lead's folder first, and an agent no longer
+connected is replaced. The team keeps its original objective and checkpoint, so the final review diff spans
+both runs. Tested by stopping a two-task team during its second task and continuing it: the first task is not
+redone, the lead does not plan again, and the team finishes with both tasks done.

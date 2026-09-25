@@ -152,9 +152,9 @@ def worker_prompt(objective, plan, task, reports):
     return '\n'.join(lines)
 
 
-def waves(tasks):
+def waves(tasks, finished=()):
     """Groups of tasks that can run together: dependencies satisfied, and parallel ones batched."""
-    done, result = set(), []
+    done, result = set(finished), []
     remaining = list(tasks)
     while remaining:
         ready = [t for t in remaining if all(d in done for d in t['depends_on'])]
@@ -203,28 +203,35 @@ class Team:
         # A local agent costs nothing to run, so assignment counts it as free, whatever its tool's default says.
         agents = [{**a, 'cost_class': 'free'} if localhealth.server_for(a) and not a.get('cost_class') else a for a in agents]
         self.agents = agents
+        self.agents = agents
         team = message['team']
-        team.update(status='planning', lead=self.lead['name'], agents=[a['name'] for a in agents])
-        self.save(message, session, f'{self.lead["name"]} is planning the work.')
-        listing = roster(agents, {'offline': [a for a in connected if up.get(a['id']) is False]}, self.lead)
-        raw = await self.ask_lead(conversation_prompt + '\n\n' + PLAN_ASK + '\n' + listing)
-        plan = normalise_plan(parse_json(raw))
-        if not plan['tasks']:
-            raise ProviderError(f'{self.lead["name"]} did not return a plan the team could run. Its reply: {raw[:600]}')
+        cooling = lambda mid: broker_cooling(self.runner.broker, self.tenant_id, mid)
+        repo = await gitops.toplevel(self.root)
+        if team.get('tasks'):
+            await self.resume(agents, repo, cooling)
+        else:
+            team.update(status='planning', lead=self.lead['name'], agents=[a['name'] for a in agents], objective=objective)
+            self.save(message, session, f'{self.lead["name"]} is planning the work.')
+            listing = roster(agents, {'offline': [a for a in connected if up.get(a['id']) is False]}, self.lead)
+            raw = await self.ask_lead(conversation_prompt + '\n\n' + PLAN_ASK + '\n' + listing)
+            plan = normalise_plan(parse_json(raw))
+            if not plan['tasks']:
+                raise ProviderError(f'{self.lead["name"]} did not return a plan the team could run. Its reply: {raw[:600]}')
+            session, message = self.state()
+            team = message['team']
+            team.update(status='working', summary=plan['summary'], tasks=plan['tasks'])
+            # Work first, then reviews, so a review knows which model families wrote what it checks.
+            for task in sorted(team['tasks'], key=is_review):
+                authors = {a['provider'] for t in team['tasks'] if t.get('model_id') and not is_review(t) for a in agents if a['id'] == t['model_id']}
+                agent = assign(task, agents, self.lead, cooling, authors)
+                task.update(model_id=agent['id'], model_name=agent['name'], cross_review=is_review(task))
+            self.save(message, session, f'Planned {len(team["tasks"])} tasks.')
+            for task in team['tasks']:
+                self.to_board(task)
         session, message = self.state()
         team = message['team']
-        team.update(status='working', summary=plan['summary'], tasks=plan['tasks'])
-        cooling = lambda mid: broker_cooling(self.runner.broker, self.tenant_id, mid)
-        # Work first, then reviews, so a review knows which model families wrote what it checks.
-        for task in sorted(team['tasks'], key=is_review):
-            authors = {a['provider'] for t in team['tasks'] if t.get('model_id') and not is_review(t) for a in agents if a['id'] == t['model_id']}
-            agent = assign(task, agents, self.lead, cooling, authors)
-            task.update(model_id=agent['id'], model_name=agent['name'], cross_review=is_review(task))
-        self.save(message, session, f'Planned {len(team["tasks"])} tasks.')
-        for task in team['tasks']:
-            self.to_board(task)
-        repo = await gitops.toplevel(self.root)
-        for batch in waves(team['tasks']):
+        finished = {t['id'] for t in team['tasks'] if t['status'] == 'done'}
+        for batch in waves([t for t in team['tasks'] if t['id'] not in finished], finished):
             if repo and len(batch) > 1:
                 await asyncio.gather(*(self.work(task['id'], objective, team, repo) for task in batch))
             else:
@@ -253,6 +260,39 @@ class Team:
             self.save(message, session, 'The team finished.')
             return AgentResult(reply or self.summary(team), self.tokens[0] or None, self.tokens[1] or None)
         return AgentResult(self.summary(team), self.tokens[0] or None, self.tokens[1] or None)
+
+    async def resume(self, agents, repo, cooling):
+        """Continue a stopped team: finished tasks stand, the rest run again from where their workers got to.
+
+        A worker stopped mid-task in its own worktree had not been folded back yet, so what it had
+        written is brought into the lead's folder first; the fresh worker then starts from it.
+        """
+        session, message = self.state()
+        team = message['team']
+        team['status'] = 'working'
+        here = {a['id'] for a in agents}
+        for task in team['tasks']:
+            if task['status'] == 'done':
+                continue
+            try:
+                worker = self.runner.store.get(self.tenant_id, 'sessions', task['session_id']) if task.get('session_id') else None
+            except Exception:
+                worker = None
+            last = next((m for m in reversed((worker or {}).get('messages', [])) if m['role'] == 'assistant'), {})
+            if repo and worker and worker.get('worktree') and last.get('checkpoint') and not task.get('merge'):
+                try:
+                    applied = await gitops.apply_between(self.root, last['checkpoint']['before'], last['checkpoint']['after'])
+                    task['merge'] = 'partial work applied' if applied else None
+                except gitops.GitError as exc:
+                    task['merge'] = f'conflict: {str(exc)[:300]}'
+            if task['model_id'] not in here:
+                authors = {a['provider'] for t in team['tasks'] if not is_review(t) for a in agents if a['id'] == t.get('model_id')}
+                agent = assign({**task, 'agent': None}, agents, self.lead, cooling, authors)
+                task.update(model_id=agent['id'], model_name=agent['name'])
+            task.update(status='pending', session_id=None, report='', rerouted=False)
+        self.save(message, session, f'{self.lead["name"]}\u2019s team continues where it stopped.')
+        for task in team['tasks']:
+            self.to_board(task)
 
     def summary(self, team):
         return 'The team finished.\n\n' + '\n'.join(f'- **{t["title"]}** ({t["model_name"]}): {t["status"]}' + (f' — {t["report"][:300]}' if t.get('report') else '') for t in team['tasks'])

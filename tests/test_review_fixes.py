@@ -200,3 +200,40 @@ def test_a_task_too_big_for_a_local_model_goes_once_to_a_cloud_agent(tmp_path, m
     task = store.get('tenant-a', 'sessions', session['id'])['messages'][-1]['team']['tasks'][0]
     assert ran[0] == 'opencode_cli' and len(ran) == 2 and ran[1] != 'opencode_cli'
     assert task['status'] == 'done' and task['rerouted']
+
+
+def test_a_stopped_team_continues_with_only_its_unfinished_tasks(tmp_path):
+    ran = []
+    async def respond(config, prompt, mode, root):
+        if 'reply with ONLY a JSON object' in prompt and '"tasks"' in prompt and 'REPORTS:' not in prompt:
+            return AgentResult('{"summary": "Two steps.", "tasks": [{"id": "a", "title": "Write A", "instructions": "Create a.txt.", "parallel": false},'
+                               '{"id": "b", "title": "Write B", "instructions": "Create b.txt.", "parallel": false, "depends_on": ["a"]}]}', 5, 5)
+        if 'REPORTS:' in prompt:
+            ran.append('review')
+            return AgentResult('{"verdict": "done", "reply": "Both written."}', 5, 5)
+        name = 'a' if 'YOUR TASK — Write A' in prompt else 'b'
+        ran.append(name)
+        if name == 'b' and ran.count('b') == 1:
+            await asyncio.sleep(30)  # Stopped here.
+        (Path(root)/f'{name}.txt').write_text(name, encoding='utf-8')
+        return AgentResult(f'Wrote {name}.txt.', 1, 1)
+    store = setup_store(tmp_path/'state')
+    runner = AgentRunner(store, ScriptedAgent(respond=respond))
+    project, session = open_project(store, runner, 'tenant-a', repo(tmp_path))
+    key = ('tenant-a', session['id'])
+    async def scenario():
+        runner.send('tenant-a', project['id'], session['id'], 'Create a.txt, then b.txt.', 'claude_cli', 'edit', team=True)
+        while ran.count('b') < 1:
+            await asyncio.sleep(0.05)
+        await runner.cancel(*key)
+        assert store.get('tenant-a', 'sessions', session['id'])['messages'][-1]['status'] == 'cancelled'
+        runner.continue_team('tenant-a', project['id'], session['id'])
+        await asyncio.gather(runner.turns[key], return_exceptions=True)
+    asyncio.run(scenario())
+    reply = store.get('tenant-a', 'sessions', session['id'])['messages'][-1]
+    assert reply['status'] == 'complete' and reply['content'] == 'Both written.', reply.get('error')
+    assert ran == ['a', 'b', 'b', 'review']  # A was not redone; the lead did not plan again.
+    assert [t['status'] for t in reply['team']['tasks']] == ['done', 'done']
+    assert reply['team']['objective'] == 'Create a.txt, then b.txt.'
+    with pytest.raises(ValueError):
+        runner.continue_team('tenant-a', project['id'], session['id'])
