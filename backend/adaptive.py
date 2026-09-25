@@ -110,10 +110,6 @@ def describe_track(track):
     return 'track record: ' + ', '.join(parts)
 
 
-# What a public benchmark pass rate says about, of all the skills: agentic coding on real repositories.
-BENCHMARK_SKILLS = ('coding', 'debugging', 'repository', 'tool_use')
-
-
 def profile(model):
     """What one agent is good at: provider default, family refinement, the public benchmark, its track
     record on this computer, then the row's own word."""
@@ -126,10 +122,10 @@ def profile(model):
             base.update(refinement)
     bench = model.get('benchmark')
     if bench:
-        for key in BENCHMARK_SKILLS:
-            base[key] = benchmark.skill(bench['pass'])
-        if base.get('cost_class') != 'free' and benchmark.cost_class(bench.get('cost')):
-            base['cost_class'] = benchmark.cost_class(bench['cost'])
+        base.update(benchmark.skills(bench))
+        cost = benchmark.cost_class((bench.get('deepswe') or {}).get('cost'))  # Only DeepSWE prices a task.
+        if base.get('cost_class') != 'free' and cost:
+            base['cost_class'] = cost
     shift = track_shift(model.get('track'))
     for key in CAPABILITIES:
         if shift and key != 'speed':

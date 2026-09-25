@@ -706,3 +706,13 @@ the live file: Opus, Fable, Sonnet, gpt-5.6-terra and gpt-6-astra matched; haiku
 Nemotron and the local Qwen did not and keep their profiles. The benchmark sets coding/debugging/repository/tool
 use (35% pass = 5, 75% = 10) and cost class, before track records and user overrides. Writing the tests exposed
 that "-free" was applied before "flash", so a free flash model ranked as low cost; "-free" now comes last.
+
+Version 0.23.0: Terminal-Bench 4.0 has no public data file; its page embeds the leaderboard rows as escaped
+JSON (27 rows, agent + model + reasoning effort, accuracy out of 100). Frontier finds the "rows" array, decodes
+it, and keys each row by normalised model label, prefixing "claude-" for Anthropic's ("Opus 5" -> claude-opus-5).
+Both boards are now saved parsed, as benchmark-<name>.json, and refreshed at most daily. Where both list a model,
+DeepSWE sets coding and repository (35% = 5, 75% = 10) and Terminal-Bench tool use and debugging (15% = 5,
+60% = 10); one board alone sets all four; cost class still comes only from DeepSWE's cost per task. Against the
+live pages: Fable (TB 58%, DeepSWE Fable 5 70%), Opus, Sonnet, gpt-5.6-terra and gpt-6-astra matched both;
+Terra's tool use and debugging fell from 9 to 6, Sonnet's to 5. A page without the rows raises a clear error
+that is logged, and the last copy stays in use.

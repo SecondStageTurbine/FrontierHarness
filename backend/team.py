@@ -58,8 +58,8 @@ def roster(agents, online, lead):
         lines.append(f'- {agent["name"]}: {CLI_TOOLS.get(agent["provider"], ("", "", agent["provider"]))[2]}, model {agent.get("model_name")}; {where}; '
                      f'best at {", ".join(f"{c} {cap.get(c, 0)}" for c in best)}; speed {cap.get("speed", 5)}; {track}' + (' (you, the lead)' if agent['id'] == lead['id'] else ''))
     offline = [a['name'] for a in online.get('offline', [])]
-    return ('CONNECTED AGENTS (strengths are 0 to 10, already adjusted by the public DeepSWE coding benchmark where it lists the '
-            'model and by each agent\'s track record on this computer; the benchmark cost is per task at API prices, so '
+    return ('CONNECTED AGENTS (strengths are 0 to 10, already adjusted by the public DeepSWE and Terminal-Bench '
+            'benchmarks where they list the model and by each agent\'s track record on this computer; the DeepSWE cost is per task at API prices, so '
             'compare it between agents rather than read it as a bill):\n' + '\n'.join(lines)
             + (f'\nOffline right now, so not on the team: {", ".join(offline)}.' if offline else ''))
 REVIEW_ASK = (
