@@ -96,3 +96,12 @@ async def test_a_manual_pick_of_an_offline_local_agent_fails_fast_with_the_addre
     reply = session['messages'][-1]
     assert reply['status'] == 'failed' and 'coder at http://localhost:9095/v1' in reply['error']
     assert agent.calls == []  # No turn was spent on a server that is not there.
+
+
+def test_a_local_model_context_window_comes_from_opencode_settings(opencode_config):
+    config = json.loads(opencode_config.read_text(encoding='utf-8'))
+    config['provider']['big']['models']['Prometheus'] = {'limit': {'context': 81920}}
+    opencode_config.write_text(json.dumps(config), encoding='utf-8')
+    assert localhealth.context_limit({'provider': 'opencode_cli', 'model_name': 'big/Prometheus'}) == 81920
+    assert localhealth.context_limit({'provider': 'opencode_cli', 'model_name': 'coder/qwen3-coder'}) is None
+    assert localhealth.context_limit({'provider': 'codex_cli', 'model_name': 'gpt'}) is None

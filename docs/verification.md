@@ -667,3 +667,10 @@ it. A nonzero exit (or an empty reply) now reports OpenCode's message, with a hi
 reproduced with an oversized prompt against the same server, whose ContextOverflowError event now reads back
 as "OpenCode stopped with an error: request (120483 tokens) exceeds the available context size (81920 tokens)".
 The stderr tail is now logged for every tool's failed turn.
+
+Version 0.20.7: the task that overflowed Qwen's context in 0.20.6 was a log-heavy review the team lead
+chose to give it, so "give it smaller tasks" was not the user's to act on. The roster now shows a local
+model's context window, read from its `limit.context` in OpenCode's settings (Qwen: "context window 81K
+tokens"), and the plan instructions send log-, diff- and codebase-heavy tasks to cloud agents. A worker that
+fails with the context-window error is reassigned once to a cloud agent (tested with a scripted team whose
+OpenCode worker overflows: the task is redone by another tool and finishes).

@@ -172,3 +172,31 @@ def test_opencode_failure_reports_opencode_own_error():
         assert 'subscription' not in str(error)
     else:
         raise AssertionError('expected a ProviderError')
+
+
+def test_a_task_too_big_for_a_local_model_goes_once_to_a_cloud_agent(tmp_path, monkeypatch):
+    from backend import localhealth
+    monkeypatch.setattr(localhealth, 'local_providers', lambda: {'opencode': 'http://127.0.0.1:9/v1'})
+    async def all_up(models):
+        return {m['id']: True for m in models}
+    monkeypatch.setattr(localhealth, 'availability', all_up)
+    ran = []
+    async def respond(config, prompt, mode, root):
+        if 'reply with ONLY a JSON object' in prompt and '"tasks"' in prompt and 'REPORTS:' not in prompt:
+            return AgentResult('{"summary": "One step.", "tasks": [{"id": "a", "title": "Read the logs", "instructions": "Summarise every log.", "agent": "OpenCode"}]}', 5, 5)
+        if 'REPORTS:' in prompt:
+            return AgentResult('{"verdict": "done", "reply": "Done."}', 5, 5)
+        ran.append(config['provider'])
+        if config['provider'] == 'opencode_cli':
+            raise ProviderError("OpenCode stopped with an error: request exceeds the available context size. The conversation outgrew the model's context window.")
+        return AgentResult('Summarised.', 1, 1)
+    store = setup_store(tmp_path/'state')
+    runner = AgentRunner(store, ScriptedAgent(respond=respond))
+    project, session = open_project(store, runner, 'tenant-a', repo(tmp_path))
+    async def scenario():
+        runner.send('tenant-a', project['id'], session['id'], 'Summarise the logs.', 'claude_cli', 'edit', team=True)
+        await asyncio.gather(runner.turns[('tenant-a', session['id'])], return_exceptions=True)
+    asyncio.run(scenario())
+    task = store.get('tenant-a', 'sessions', session['id'])['messages'][-1]['team']['tasks'][0]
+    assert ran[0] == 'opencode_cli' and len(ran) == 2 and ran[1] != 'opencode_cli'
+    assert task['status'] == 'done' and task['rerouted']

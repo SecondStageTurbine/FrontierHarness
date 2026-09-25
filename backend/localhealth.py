@@ -52,6 +52,20 @@ def server_for(model, providers=None):
     return name, providers[name], ident
 
 
+def context_limit(model):
+    """The context window, in tokens, OpenCode's settings give a local model; None when unknown."""
+    found = server_for(model)
+    if not found:
+        return None
+    try:
+        data = json.loads(config_path().read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    spec = (((data.get('provider') or {}).get(found[0]) or {}).get('models') or {}).get(found[2]) or {}
+    limit = (spec.get('limit') or {}).get('context')
+    return limit if isinstance(limit, int) and limit > 0 else None
+
+
 async def served_models(base):
     """The model ids a server lists, or None when nothing answers. Cached briefly, because the
     picker, the router and a turn may all ask within the same few seconds."""

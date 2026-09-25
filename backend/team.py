@@ -37,7 +37,10 @@ PLAN_ASK = (
     'local agents (a local one runs on this computer at no usage cost) and keep the strongest for the hard ones: '
     'integration, debugging across the codebase, and anything the rest depends on. Name the agent for every task in '
     '"agent", exactly as the roster writes it; a task you leave unnamed goes to the cheapest agent whose strengths cover '
-    'its "needs", which suits only small, self-contained work.'
+    'its "needs", which suits only small, self-contained work. A local agent has a small context window (the roster '
+    'gives its size): it can read only so much in one task before it has to stop. Give local agents tasks that touch a '
+    'few files; a task that reads long logs, large diffs or much of the codebase, including most reviews, goes to a '
+    'cloud agent.'
 )
 
 
@@ -48,7 +51,9 @@ def roster(agents, online, lead):
         cap = adaptive.profile(agent) or {}
         local = localhealth.server_for(agent) is not None or cap.get('location') == 'local'
         best = sorted((c for c in CAPABILITIES if c != 'speed'), key=lambda c: -cap.get(c, 0))[:3]
-        where = 'local on this computer, no usage cost' if local else f'cloud, {cap.get("cost_class", "unknown")} cost'
+        window = localhealth.context_limit(agent)
+        where = (('local on this computer, no usage cost' + (f', context window {window // 1000}K tokens' if window else ''))
+                 if local else f'cloud, {cap.get("cost_class", "unknown")} cost')
         lines.append(f'- {agent["name"]}: {CLI_TOOLS.get(agent["provider"], ("", "", agent["provider"]))[2]}, model {agent.get("model_name")}; {where}; '
                      f'best at {", ".join(f"{c} {cap.get(c, 0)}" for c in best)}; speed {cap.get("speed", 5)}' + (' (you, the lead)' if agent['id'] == lead['id'] else ''))
     offline = [a['name'] for a in online.get('offline', [])]
@@ -197,6 +202,7 @@ class Team:
         agents = [a for a in connected if up.get(a['id']) is not False]
         # A local agent costs nothing to run, so assignment counts it as free, whatever its tool's default says.
         agents = [{**a, 'cost_class': 'free'} if localhealth.server_for(a) and not a.get('cost_class') else a for a in agents]
+        self.agents = agents
         team = message['team']
         team.update(status='planning', lead=self.lead['name'], agents=[a['name'] for a in agents])
         self.save(message, session, f'{self.lead["name"]} is planning the work.')
@@ -325,3 +331,13 @@ class Team:
             except gitops.GitError as exc:
                 fields['merge'] = f'conflict: {str(exc)[:300]}'
         self.update_task(task_id, f'{task["model_name"]} finished {task["title"]}: {fields["status"]}.', **fields)
+        if fields['status'] == 'failed' and not fix and 'context window' in (reply.get('error') or '') and not task.get('rerouted'):
+            # A local model ran out of context: the task was too big for it, so it goes once to a cloud agent.
+            cloud = [a for a in getattr(self, 'agents', []) if a['id'] != task['model_id'] and not localhealth.server_for(a)]
+            if cloud:
+                tasks = self.state()[1]['team']['tasks']
+                authors = {a['provider'] for t in tasks if t.get('model_id') and not is_review(t) for a in cloud if a['id'] == t['model_id']}
+                agent = assign({**task, 'agent': None}, cloud, self.lead, lambda mid: broker_cooling(self.runner.broker, self.tenant_id, mid), authors)
+                self.update_task(task_id, f'{task["model_name"]} ran out of context; {agent["name"]} takes {task["title"]} instead.',
+                                 status='pending', model_id=agent['id'], model_name=agent['name'], session_id=None, rerouted=True)
+                await self.work(task_id, objective, team, repo)
