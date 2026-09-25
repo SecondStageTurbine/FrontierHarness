@@ -52,12 +52,13 @@ def roster(agents, online, lead):
         local = localhealth.server_for(agent) is not None or cap.get('location') == 'local'
         best = sorted((c for c in CAPABILITIES if c != 'speed'), key=lambda c: -cap.get(c, 0))[:3]
         window = localhealth.context_limit(agent)
+        track = adaptive.describe_track(agent.get('track'))
         where = (('local on this computer, no usage cost' + (f', context window {window // 1000}K tokens' if window else ''))
                  if local else f'cloud, {cap.get("cost_class", "unknown")} cost')
         lines.append(f'- {agent["name"]}: {CLI_TOOLS.get(agent["provider"], ("", "", agent["provider"]))[2]}, model {agent.get("model_name")}; {where}; '
-                     f'best at {", ".join(f"{c} {cap.get(c, 0)}" for c in best)}; speed {cap.get("speed", 5)}' + (' (you, the lead)' if agent['id'] == lead['id'] else ''))
+                     f'best at {", ".join(f"{c} {cap.get(c, 0)}" for c in best)}; speed {cap.get("speed", 5)}; {track}' + (' (you, the lead)' if agent['id'] == lead['id'] else ''))
     offline = [a['name'] for a in online.get('offline', [])]
-    return ('CONNECTED AGENTS (strengths are 0 to 10):\n' + '\n'.join(lines)
+    return ('CONNECTED AGENTS (strengths are 0 to 10, already adjusted by each agent\'s track record on this computer):\n' + '\n'.join(lines)
             + (f'\nOffline right now, so not on the team: {", ".join(offline)}.' if offline else ''))
 REVIEW_ASK = (
     'You are the lead. Your workers have finished; their reports and the resulting diff of the project are below. '
@@ -252,6 +253,10 @@ class Team:
                 team['status'] = 'fixing'
                 self.save(message, session, f'{self.lead["name"]} asked for {len(fixes)} fixes.')
                 for fix in fixes:
+                    task = next(t for t in team['tasks'] if t['id'] == str(fix['task_id']))
+                    if task.get('model_id'):
+                        self.record(task['model_id'], fixes=1)
+                for fix in fixes:
                     await self.work(str(fix['task_id']), objective, team, repo, fix=fix['instructions'])
                 continue
             session, message = self.state()
@@ -293,6 +298,13 @@ class Team:
         self.save(message, session, f'{self.lead["name"]}\u2019s team continues where it stopped.')
         for task in team['tasks']:
             self.to_board(task)
+
+    def record(self, model_id, **counts):
+        try:
+            model = self.runner.store.get(self.tenant_id, 'models', model_id)
+        except Exception:
+            return  # Disconnected since; its record goes with it.
+        adaptive.record_outcome(self.runner.store, self.tenant_id, model, **counts)
 
     def summary(self, team):
         return 'The team finished.\n\n' + '\n'.join(f'- **{t["title"]}** ({t["model_name"]}): {t["status"]}' + (f' — {t["report"][:300]}' if t.get('report') else '') for t in team['tasks'])
@@ -371,6 +383,9 @@ class Team:
             except gitops.GitError as exc:
                 fields['merge'] = f'conflict: {str(exc)[:300]}'
         self.update_task(task_id, f'{task["model_name"]} finished {task["title"]}: {fields["status"]}.', **fields)
+        if not fix and reply.get('status') in ('complete', 'failed'):
+            overflow = 'context window' in (reply.get('error') or '')
+            self.record(task['model_id'], **({'done': 1} if fields['status'] == 'done' else {'failed': 1, 'overflows': int(overflow)}))
         if fields['status'] == 'failed' and not fix and 'context window' in (reply.get('error') or '') and not task.get('rerouted'):
             # A local model ran out of context: the task was too big for it, so it goes once to a cloud agent.
             cloud = [a for a in getattr(self, 'agents', []) if a['id'] != task['model_id'] and not localhealth.server_for(a)]

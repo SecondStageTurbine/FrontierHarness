@@ -200,6 +200,9 @@ def test_a_task_too_big_for_a_local_model_goes_once_to_a_cloud_agent(tmp_path, m
     task = store.get('tenant-a', 'sessions', session['id'])['messages'][-1]['team']['tasks'][0]
     assert ran[0] == 'opencode_cli' and len(ran) == 2 and ran[1] != 'opencode_cli'
     assert task['status'] == 'done' and task['rerouted']
+    records = {r['id']: r for r in store.list('tenant-a', 'track_records')}
+    assert records['opencode_cli']['failed'] == 1 and records['opencode_cli']['overflows'] == 1
+    assert records[task['model_id']]['done'] == 1
 
 
 def test_a_stopped_team_continues_with_only_its_unfinished_tasks(tmp_path):

@@ -450,7 +450,9 @@ class AgentRunner:
         return config
 
     def agents(self, tenant_id):
-        return agentic_providers(self.store.list(tenant_id, 'models'))
+        """Every agent that can take a turn, each with its track record so routing weighs what it has done."""
+        records = {r['id']: r for r in self.store.list(tenant_id, adaptive.TRACK_KIND)}
+        return [{**a, 'track': adaptive.track_for(a, records)} for a in agentic_providers(self.store.list(tenant_id, 'models'))]
 
     def continue_team(self, tenant_id, project_id, session_id):
         """Pick a stopped team back up: the same lead, posture and plan, with only unfinished tasks run again."""
@@ -717,6 +719,11 @@ class AgentRunner:
                 session, message = self.bind(tenant_id, session_id, message_id, config, f'Escalating to {config["name"]}: {reason}.')
             if result is None and error:
                 status = 'failed'
+            for attempt in attempts if adaptive_turn else []:
+                # An Adaptive turn that had to escalate counts against the agent that struggled.
+                if attempt['outcome'] != 'out of usage' and any(m['id'] == attempt['id'] for m in self.store.list(tenant_id, 'models')):
+                    adaptive.record_outcome(self.store, tenant_id, self.store.get(tenant_id, 'models', attempt['id']),
+                                            **({'done': 1} if attempt['outcome'] == 'completed' else {'failed': 1}))
         except asyncio.CancelledError:
             status, error = 'cancelled', 'Stopped. Anything the agent had already written to the folder is still there.'
             raise

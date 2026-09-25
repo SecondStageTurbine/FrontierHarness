@@ -56,8 +56,60 @@ FAMILY_PROFILES = [
 ]
 
 
+# ── Track record ─────────────────────────────────────────────────────────────
+# What each agent actually did with the work it was given: team tasks finished or failed, fixes the
+# lead asked for, context overflows, and Adaptive turns that completed or had to escalate. It is kept
+# per model row and model identifier, so changing a row's model starts its record again.
+TRACK_KIND = 'track_records'
+TRACK_MINIMUM = 3  # Tasks before the record moves a profile; fewer say too little.
+
+
+def track_for(model, records):
+    record = records.get(model['id'])
+    return record if record and record.get('model_name') == model.get('model_name') else None
+
+
+def record_outcome(store, tenant_id, model, **counts):
+    """Add to one agent's record: done, failed, fixes, overflows."""
+    try:
+        row = track_for(model, {model['id']: store.get(tenant_id, TRACK_KIND, model['id'])}) or {}
+    except Exception:
+        row = {}
+    row = {'done': 0, 'failed': 0, 'fixes': 0, 'overflows': 0, **row, 'id': model['id'], 'model_name': model.get('model_name')}
+    for key, value in counts.items():
+        row[key] = row.get(key, 0) + value
+    store.put(tenant_id, TRACK_KIND, row)
+
+
+def first_pass(track):
+    """(tasks accepted without a fix, tasks attempted), from a record."""
+    tried = (track or {}).get('done', 0) + (track or {}).get('failed', 0)
+    return max(0, (track or {}).get('done', 0) - (track or {}).get('fixes', 0)), tried
+
+
+def track_shift(track):
+    """How far the record moves every skill: +1 for a clean record, down to -2 for a poor one."""
+    clean, tried = first_pass(track)
+    if tried < TRACK_MINIMUM:
+        return 0
+    # ponytail: one shift for every skill; per-skill records (debugging vs review) if routing needs finer grain.
+    return max(-2, min(1, round((clean / tried - 0.7) * 5)))
+
+
+def describe_track(track):
+    clean, tried = first_pass(track)
+    if not tried:
+        return 'no track record yet'
+    parts = [f'{clean} of {tried} tasks accepted first time']
+    if track.get('failed'):
+        parts.append(f'{track["failed"]} failed')
+    if track.get('overflows'):
+        parts.append(f'{track["overflows"]} ran out of context')
+    return 'track record: ' + ', '.join(parts)
+
+
 def profile(model):
-    """What one agent is good at: provider default, family refinement, then the row's own word."""
+    """What one agent is good at: provider default, family refinement, its track record, then the row's own word."""
     base = dict(PROVIDER_PROFILES.get(model['provider'], {}))
     if not base:
         return None  # An API-key model has no agent loop; it cannot take a turn at all.
@@ -65,6 +117,10 @@ def profile(model):
     for needle, refinement in FAMILY_PROFILES:
         if needle in name:
             base.update(refinement)
+    shift = track_shift(model.get('track'))
+    for key in CAPABILITIES:
+        if shift and key != 'speed':
+            base[key] = max(0, min(10, base[key] + shift))
     for key, value in (model.get('capabilities') or {}).items():
         if key in CAPABILITIES and isinstance(value, (int, float)):
             base[key] = max(0, min(10, int(value)))

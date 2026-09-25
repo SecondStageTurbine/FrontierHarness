@@ -10,7 +10,7 @@ export const ADAPTIVE='adaptive';
 export const ADAPTIVE_HINT='Picks the least expensive agent that can do this message, and hands it to a stronger one if that agent fails.';
 // The capability registry, as far as the interface sees it: what a row may say it is good at.
 export const capabilities=['coding','reasoning','planning','debugging','architecture','review','tool_use','repository','instruction_following','speed'] as const;
-export interface Model {id:string; name:string; provider:string; model_name:string; account:string|null; base_url:string|null; input_price:number|null; output_price:number|null; key_hint:string; status:string; latency_ms?:number; capabilities?:Record<string,number>|null; cost_class?:string|null; enabled?:boolean; online?:boolean|null}
+export interface Model {id:string; name:string; provider:string; model_name:string; account:string|null; base_url:string|null; input_price:number|null; output_price:number|null; key_hint:string; status:string; latency_ms?:number; capabilities?:Record<string,number>|null; cost_class?:string|null; enabled?:boolean; online?:boolean|null; track?:string}
 export interface Routing {mode:'adaptive'|'manual'; status?:string; classified_by?:string; chosen?:{id:string;name:string;because:string}; requirements?:{task_type:string;complexity:string;risk:string;reason:string}; candidates?:{id:string;name:string;cost_class:string;sufficient:boolean}[]; attempts?:{id:string;name:string;outcome:string}[]; escalations?:number}
 export interface FileChange {id:string; path:string; status:'added'|'modified'|'removed'; before:string|null; after:string|null}
 export interface CommandResult {id:string; command:string; started_at:string; finished_at:string|null; status:string; output:string; exit_code:number|null}

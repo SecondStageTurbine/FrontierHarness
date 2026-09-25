@@ -318,3 +318,24 @@ def test_codex_families_have_their_own_default_profiles():
     # The row's own numbers still win over the family default.
     custom = profile({**row('gpt-6-luna'), 'capabilities': {'coding': 9}, 'cost_class': 'free'})
     assert custom['coding'] == 9 and custom['cost_class'] == 'free'
+
+
+def test_a_track_record_moves_a_profile_and_resets_with_a_new_model(tmp_path):
+    from backend.adaptive import TRACK_KIND, describe_track, profile, record_outcome, track_for
+    from tests.harness import setup_store
+    store = setup_store(tmp_path/'state')
+    model = {'id': 'nemo', 'name': 'Nemotron', 'provider': 'opencode_cli', 'model_name': 'opencode/nemotron-3-ultra-free'}
+    plain = profile(model)
+    record_outcome(store, 'tenant-a', model, done=1)
+    records = {r['id']: r for r in store.list('tenant-a', TRACK_KIND)}
+    assert profile({**model, 'track': track_for(model, records)})['coding'] == plain['coding']  # One task says too little.
+    record_outcome(store, 'tenant-a', model, done=2, fixes=2)
+    record_outcome(store, 'tenant-a', model, failed=2, overflows=1)
+    records = {r['id']: r for r in store.list('tenant-a', TRACK_KIND)}
+    track = track_for(model, records)
+    assert describe_track(track) == 'track record: 1 of 5 tasks accepted first time, 2 failed, 1 ran out of context'
+    assert profile({**model, 'track': track})['coding'] == plain['coding'] - 2
+    assert profile({**model, 'track': track, 'capabilities': {'coding': 9}})['coding'] == 9  # The user's word still wins.
+    assert track_for({**model, 'model_name': 'opencode/other'}, records) is None  # A new model starts clean.
+    clean = {'done': 4, 'failed': 0, 'fixes': 0, 'model_name': model['model_name']}
+    assert profile({**model, 'track': clean})['coding'] == plain['coding'] + 1

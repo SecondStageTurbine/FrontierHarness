@@ -687,3 +687,12 @@ Version 0.20.9: a team stopped before 0.20.8 has no recorded objective, so conti
 workers and reviewer "Continue the team's work where it stopped." as the request. The continuation now takes
 the objective from the user message that started the team; the continue test strips the objective before
 continuing to cover this.
+
+Version 0.21.0: an agent Frontier has no profile for (opencode/nemotron-3-ultra-free) was judged only by its
+tool's default and a "free" cost, so nothing it did changed how it was ranked. Outcomes are now recorded per
+model row and identifier (kind `track_records`): team tasks done or failed, lead fix requests, context
+overflows, and Adaptive attempts (completed, or struggled and escalated; "out of usage" does not count).
+From three attempts, the share accepted without a fix shifts every skill but speed by -2 to +1 before the
+row's own capability overrides apply. Tested: one task leaves the profile unchanged; 1 clean of 5 lowers
+coding by 2; a user override still wins; a different model identifier gets no record; the scripted team
+whose OpenCode worker overflowed records failed=1, overflows=1 for it and done=1 for the agent that took over.
