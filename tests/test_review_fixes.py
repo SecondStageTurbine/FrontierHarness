@@ -156,3 +156,19 @@ def test_the_team_lead_sees_every_agent_with_where_it_runs_and_what_it_is_good_a
     assert 'Qwen 3.8 27B: OpenCode, model prometheus/Prometheus; local on this computer, no usage cost' in text
     assert 'Haiku: Claude Code' in text and 'Offline right now, so not on the team: Gemma local.' in text
     assert 'not from your own model family' in team.PLAN_ASK and 'local agents' in team.PLAN_ASK
+
+
+def test_opencode_failure_reports_opencode_own_error():
+    """A local model that runs out of context must say so, not blame a subscription sign-in."""
+    from backend.broker import ProviderError, read_output
+    out = '\n'.join([
+        '{"type":"text","part":{"type":"text","text":"Reading the log."}}',
+        '{"type":"error","error":{"name":"APIError","data":{"message":"request (81972 tokens) exceeds the available context size (81920 tokens)"}}}',
+    ])
+    try:
+        read_output('opencode_cli', 1, out, '', 'prompt', None)
+    except ProviderError as error:
+        assert 'exceeds the available context size' in str(error) and 'context window' in str(error)
+        assert 'subscription' not in str(error)
+    else:
+        raise AssertionError('expected a ProviderError')

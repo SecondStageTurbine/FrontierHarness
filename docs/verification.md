@@ -657,3 +657,13 @@ opencode/nemotron-3-ultra-free answers. The wizard now reads OpenCode's models f
 leave tasks unnamed unless it had a reason, and an unnamed task goes to the cheapest agent that covers it;
 the lead is now told to name the agent for every task and keep the strongest for integration and
 cross-cutting debugging.
+
+Version 0.20.6: a team's review task on Qwen (local, through OpenCode) failed after ten minutes with
+"The OpenCode command line tool exited with code 1 ... confirm the subscription is signed in", while the
+model server was running. OpenCode's own log showed the cause: "request (81972 tokens) exceeds the available
+context size (81920 tokens)". The review had read enough logs to outgrow the model's context. OpenCode
+reports this as an error event in its JSON output, but Frontier checked the exit code first and never read
+it. A nonzero exit (or an empty reply) now reports OpenCode's message, with a hint when it is about context;
+reproduced with an oversized prompt against the same server, whose ContextOverflowError event now reads back
+as "OpenCode stopped with an error: request (120483 tokens) exceeds the available context size (81920 tokens)".
+The stderr tail is now logged for every tool's failed turn.

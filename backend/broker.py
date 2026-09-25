@@ -77,11 +77,16 @@ def strip_echo(text, prompt):
     lines = {line.strip() for line in prompt.splitlines() if line.strip()}
     return '\n'.join(line for line in text.replace(prompt, '').splitlines() if line.strip() not in lines)
 
-def cli_exit_error(provider, code, out, err):
+def cli_exit_error(provider, code, out, err, reported=''):
     """Why a tool stopped, when it left nothing readable behind. Output can echo the prompt, so
-    it is classified here and the message says only what the user can act on."""
-    if is_exhausted(out, err):
+    it is classified here and the message says only what the user can act on. `reported` is the
+    tool's own error message, when it gives one separately from the conversation (OpenCode does)."""
+    if is_exhausted(out, err) or is_exhausted(reported, ''):
         return exhausted_error(provider)
+    if reported:
+        hint = (" The conversation outgrew the model's context window: give this model smaller tasks, or raise the context size"
+                " of the model server and the limit in the tool's settings.") if 'context' in reported.lower() else ''
+        return ProviderError(f'{CLI_TOOLS[provider][2]} stopped with an error: {reported[:400]}.{hint}')
     return ProviderError(f'The {CLI_TOOLS[provider][2]} command line tool exited with code {code}. Run it once in a terminal to confirm the subscription is signed in.')
 
 def exhausted_error(provider):
@@ -406,17 +411,29 @@ def read_gemini(out, err, code, provider):
         return sum(found) or None
     return AgentResult(payload['response'], total('input_tokens', 'prompt_tokens', 'prompt'), total('output_tokens', 'candidates_tokens', 'candidates'))
 
-def read_opencode(out, err, provider):
-    """Newline-delimited events: the reply is every text part, usage the step totals."""
-    text, input_tokens, output_tokens, failure = '', 0, 0, ''
+def opencode_events(out):
     for line in out.splitlines():
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if isinstance(event, dict):
+            yield event
+
+def opencode_failure(out):
+    """The message of the last error event OpenCode reported, or ''."""
+    failure = ''
+    for event in opencode_events(out):
         if event.get('type') == 'error':
-            failure = json.dumps(event.get('error') or {})  # OpenCode reports a refusal as an event, not an exit code.
-            continue
+            error = event.get('error') or {}
+            failure = str((error.get('data') or {}).get('message') or error.get('message') or json.dumps(error))
+    return failure
+
+def read_opencode(out, err, provider):
+    """Newline-delimited events: the reply is every text part, usage the step totals."""
+    text, input_tokens, output_tokens = '', 0, 0
+    failure = opencode_failure(out)  # OpenCode reports a refusal as an event, not always an exit code.
+    for event in opencode_events(out):
         part = event.get('part') or {}
         if part.get('type') == 'text':
             text += part.get('text') or ''
@@ -424,10 +441,28 @@ def read_opencode(out, err, provider):
         input_tokens += tokens.get('input') or 0
         output_tokens += tokens.get('output') or 0
     if not text.strip():
-        if is_exhausted(failure, err):
-            raise exhausted_error(provider)
+        if failure:
+            raise cli_exit_error(provider, 0, '', err, failure)
         raise ProviderError(f'{CLI_TOOLS[provider][2]} returned no message. Confirm the subscription is signed in.')
     return AgentResult(text, input_tokens or None, output_tokens or None)
+
+def read_output(provider, code, out, err, prompt, final):
+    """The reply from a finished tool run, or the ProviderError saying why there is none."""
+    if provider == 'claude_cli':
+        return read_claude(out, err, code, provider)
+    if provider == 'gemini_cli':
+        return read_gemini(out, err, code, provider)
+    if code != 0:
+        raise cli_exit_error(provider, code, strip_echo(out, prompt), err, opencode_failure(out) if provider == 'opencode_cli' else '')
+    if provider == 'opencode_cli':
+        return read_opencode(out, err, provider)
+    text = final.read_text(encoding='utf-8') if final.is_file() else ''
+    if not text.strip():
+        if is_exhausted(strip_echo(out, prompt), err):
+            raise exhausted_error(provider)
+        raise ProviderError(f'{CLI_TOOLS[provider][2]} returned no final message. Confirm the subscription is signed in.')
+    # Codex reports only a combined token total, so usage stays unreported.
+    return AgentResult(text, None, None)
 
 class ModelBroker:
     def __init__(self, store: Store):
@@ -535,23 +570,9 @@ class ModelBroker:
                 limit = (extras.get('timeout') or TURN_TIMEOUT) // 60
                 raise ProviderError(f'{CLI_TOOLS[provider][2]} was still working after {limit} minutes and was stopped. Anything it had already written to the folder is still there. A project whose checks run longer can raise the limit in Project settings.') from None
             try:
-                if provider == 'claude_cli':
-                    return read_claude(out, err, code, provider)
-                if provider == 'gemini_cli':
-                    return read_gemini(out, err, code, provider)
+                return read_output(provider, code, out, err, prompt, final)
             except ProviderError:
                 # The tool's stderr stays out of the conversation, but its tail goes to the local
                 # backend log so a failed turn can be diagnosed on this machine.
                 logging.getLogger('frontier.broker').warning('%s turn failed (exit %s). stderr tail: %s', CLI_TOOLS[provider][2], code, ' '.join((err or '')[-1500:].split()))
                 raise
-            if code != 0:
-                raise cli_exit_error(provider, code, strip_echo(out, prompt), err)
-            if provider == 'opencode_cli':
-                return read_opencode(out, err, provider)
-            text = final.read_text(encoding='utf-8') if final.is_file() else ''
-            if not text.strip():
-                if is_exhausted(strip_echo(out, prompt), err):
-                    raise exhausted_error(provider)
-                raise ProviderError(f'{CLI_TOOLS[provider][2]} returned no final message. Confirm the subscription is signed in.')
-            # Codex reports only a combined token total, so usage stays unreported.
-            return AgentResult(text, None, None)
