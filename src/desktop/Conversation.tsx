@@ -4,7 +4,7 @@ import {MarkdownOutput} from '../components/Markdown';
 import {duration,money} from '../lib/api';
 import {working} from '../types';
 import {modeLabels,type Approval,type Message,type Mode,type Session,type Team as TeamState} from '../types';
-export type InspectorTab='Files'|'Changes'|'Terminal'|'Preview'|'Tasks';
+export type InspectorTab='Activity'|'Files'|'Changes'|'Terminal'|'Preview'|'Tasks';
 const modeIcon={read:Eye,edit:Pencil,auto:Zap};
 
 export function Conversation({session,onInspect,onUnqueue,onRevert,onDecide,onRewind,onOpenSession,onCite,onContinueTeam}:{session:Session;onContinueTeam?:()=>void;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onUnqueue?:(id:string)=>void;onRevert?:(id:string)=>void;onDecide?:(approval:Approval,allow:boolean,message?:string)=>void;onRewind?:(id:string)=>void;onOpenSession?:(id:string)=>void;onCite?:(text:string,from:string)=>void}){

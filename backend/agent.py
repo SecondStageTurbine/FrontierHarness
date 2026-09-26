@@ -14,6 +14,7 @@ handoff. A manual choice is never second-guessed.
 """
 import asyncio
 import logging
+from collections import deque
 import os
 import re
 import secrets
@@ -290,6 +291,25 @@ class AgentRunner:
         # approval tool speak for exactly one turn. Both are ephemeral: a restart ends the turn.
         self.turn_tokens: dict[str, tuple] = {}
         self.approvals: dict[str, dict] = {}
+        # What each conversation's agent is doing right now, line by line, for the live view. Kept after the turn
+        # ends, until the next one starts, so a finished turn can still be read back. Memory only.
+        self.live: dict[tuple[str, str], dict] = {}
+
+    def watch(self, tenant_id, session_id, agent):
+        """Start a conversation's live view afresh, and return what feeds it."""
+        self.live[(tenant_id, session_id)] = {'agent': agent, 'started': now(), 'lines': deque(maxlen=600)}
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        # A team worker's lines also show in the team's own conversation, labelled with the task.
+        parent, label = session.get('team_parent'), session.get('name', '').split(' · ')[0]
+        def feed(text):
+            self.say(tenant_id, session_id, text)
+            if parent:
+                self.say(tenant_id, parent, f'[{label}] {text}')
+        return feed
+
+    def say(self, tenant_id, session_id, text):
+        view = self.live.setdefault((tenant_id, session_id), {'agent': None, 'started': now(), 'lines': deque(maxlen=600)})
+        view['lines'].append({'at': now(), 'text': text})
 
     def protections(self, tenant_id, project_id):
         """The project's own limits, for agent calls outside a conversation turn (commit messages, pull requests,
@@ -615,6 +635,7 @@ class AgentRunner:
         message.update(model_id=config['id'], model_name=config['name'], provider=config['provider'],
                        switched_from=previous['model_name'] if previous and previous['model_id'] != config['id'] else None)
         self.store.put(tenant_id, 'sessions', session)
+        self.say(tenant_id, session_id, f'— {note}')
         self.store.event(tenant_id, session_id, 'turn.agent', note, message_id=message_id)
         return session, message
 
@@ -627,6 +648,7 @@ class AgentRunner:
         token = secrets.token_urlsafe(24)
         self.turn_tokens[token] = (tenant_id, project_id, session_id, message_id)
         extras = self.extras(tenant_id, token, mode, project)
+        extras['live'] = self.watch(tenant_id, session_id, message.get('model_name'))
         # Every project gets at least 90 minutes; a project may ask for more, never less.
         extras['timeout'] = max(MIN_TURN_MINUTES, int(project.get('turn_minutes') or 0)) * 60
         rules = (self.store.tenant_internal(tenant_id) or {}).get('rules')

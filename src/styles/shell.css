@@ -610,3 +610,6 @@ body{overflow:hidden}
 .browser-choice small{color:var(--muted);font-size:11.5px}
 .browser-mine{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
 .team-continue{margin-top:10px;font-size:11px;padding:6px 12px}
+.live-button{position:relative}.live-button.busy{color:var(--primary)}.live-dot{position:absolute;top:4px;right:4px;width:6px;height:6px;border-radius:50%;background:var(--success);animation:pulse 1.2s ease-in-out infinite}
+.live-activity{display:flex;flex-direction:column;height:100%;min-height:0}.live-head{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted);padding:10px 14px;border-bottom:1px solid var(--border)}.live-head strong{color:var(--foreground)}
+.live-lines{flex:1;min-height:0;overflow:auto;padding:10px 14px;font-family:'Cascadia Code',Consolas,monospace;font-size:11px;line-height:1.6}.live-line{display:flex;gap:10px;padding:1px 0}.live-line time{color:var(--subtle);flex-shrink:0}.live-line span{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted)}.live-line.tool span{color:var(--foreground)}.live-line.result span{color:var(--subtle)}.live-line.note span{color:var(--primary)}.live-line.warn span{color:var(--warning)}

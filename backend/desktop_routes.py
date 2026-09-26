@@ -578,6 +578,15 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         get_session(tenant_id,project_id,session_id)
         return await runner.compact(tenant_id,project_id,session_id)
 
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/live')
+    def live(tenant_id:str,project_id:str,session_id:str,request:Request,since:int=0):
+        """What the agent is doing: every line since `since`, and whether it is still at it."""
+        scoped(request,tenant_id)
+        get_session(tenant_id,project_id,session_id)
+        view=runner.live.get((tenant_id,session_id)) or {}
+        lines=list(view.get('lines') or [])
+        return {'running':runner.busy(tenant_id,session_id),'agent':view.get('agent'),'started':view.get('started'),'total':len(lines),'lines':lines[since:] if since<=len(lines) else lines}
+
     @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/team/continue')
     async def continue_team(tenant_id:str,project_id:str,session_id:str,request:Request):
         scoped(request,tenant_id)

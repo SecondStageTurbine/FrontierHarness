@@ -194,8 +194,9 @@ class Team:
         tried = {self.lead['id']}
         while True:
             try:
+                live = lambda text: self.runner.say(self.tenant_id, self.session_id, f'[lead · {self.lead["name"]}] {text}')
                 result = await self.runner.broker.invoke_agent(self.tenant_id, self.lead, prompt, 'read', self.root,
-                                                               self.runner.protections(self.tenant_id, self.project_id))
+                                                               {**self.runner.protections(self.tenant_id, self.project_id), 'live': live})
                 break
             except ProviderError as exc:
                 # A lead that cannot run (not signed in, out of usage, its service down) hands the lead's seat to

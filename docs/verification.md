@@ -743,3 +743,14 @@ answered by another agent (routing attempt "could not run"), a weak reply from a
 timed-out agent is not handed over, an offline local pick hands over without spending a turn on either local server
 and fails with the address only when nobody is left, and a team whose lead and worker are both Gemini finishes with
 the lead's seat and the task moved.
+
+Version 0.25.0: a running turn showed only "Working · 45m" with no way to see what the agent was doing. Agent output is
+now read line by line as it arrives (run_cli pumps stdout and stderr with a 64 MB line limit, since one event can carry a
+whole file) and each line is turned into a step: Claude via --output-format stream-json --verbose (tool_use, text,
+first line of each tool_result; read_claude takes the closing result event), OpenCode's tool and text parts, agy's
+ACTIVE tool steps and error steps, and Codex's plain-text narration minus lines of the echoed conversation. The steps
+go to an in-memory ring of 600 lines per conversation, served at GET .../sessions/{id}/live?since=N and polled by the
+Activity panel every 1.2 s while running. Checked live with each tool on a task that lists files and reads one: Claude
+"▸ Bash: ls -la", "▸ Read: …notes.txt", "↳ 1 code word: PELICAN"; OpenCode "▸ read: notes.txt", "▸ bash: ls"; Codex its
+session header and commands. agy could not be checked: its account reports RESOURCE_EXHAUSTED (individual quota,
+resets in about 155 hours), which Frontier reads as out of usage and fails over from.

@@ -298,3 +298,40 @@ def test_a_team_worker_and_lead_that_cannot_run_are_replaced(tmp_path):
     assert reply['team']['lead'] != 'Gemini'  # The lead's seat moved.
     task = reply['team']['tasks'][0]
     assert task['status'] == 'done' and task['model_id'] != 'gemini' and ran and 'gemini_cli' not in ran
+
+
+def test_the_live_view_turns_each_tools_output_into_steps():
+    from backend.broker import live_line
+    claude = ('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"npm test"}},'
+              '{"type":"text","text":"Running the tests."}]}}')
+    assert live_line('claude_cli', claude, '') == '▸ Bash: npm test\nRunning the tests.'
+    import json
+    result = json.dumps({'type': 'user', 'message': {'content': [{'type': 'tool_result', 'content': '\n3 passed\nok'}]}})
+    assert live_line('claude_cli', result, '') == '  ↳ 3 passed'
+    assert live_line('opencode_cli', '{"type":"tool_use","part":{"type":"tool","tool":"edit","state":{"input":{"filePath":"src/a.ts"}}}}', '') == '▸ edit: src/a.ts'
+    assert live_line('gemini_cli', '{"event":"step_update","step_update":{"step_type":"tool","state":"ACTIVE","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"dir"}}}}', '') == '▸ run_command: dir'
+    assert live_line('codex_cli', '\x1b[1mexec\x1b[0m npm test', 'USER: fix it') == 'exec npm test'
+    assert live_line('codex_cli', 'USER: fix it', 'USER: fix it') is None  # Its echo of the conversation is not news.
+    assert live_line('claude_cli', '{"type":"system","subtype":"init"}', '') is None
+
+
+def test_the_live_view_route_returns_new_lines_and_a_workers_lines_reach_its_team(tmp_path):
+    store = setup_store(tmp_path/'state')
+    with TestClient(create_app(str(tmp_path/'state'), ScriptedAgent())) as c:
+        t = setup(c)
+        runner = c.app.state.runner if hasattr(c.app.state, 'runner') else None
+        project = c.post(f'/api/t/{t}/projects', json={'name': 'p', 'root': str(repo(tmp_path))}).json()
+        parent = c.post(f'/api/t/{t}/projects/{project["id"]}/sessions', json={'name': 'Team'}).json()
+        worker = c.post(f'/api/t/{t}/projects/{project["id"]}/sessions', json={'name': 'Write A · Codex'}).json()
+        state = c.app.state
+        run = next(v for v in vars(state).values() if hasattr(v, 'watch')) if runner is None else runner
+        stored = run.store.get(t, 'sessions', worker['id'])
+        run.store.put(t, 'sessions', {**stored, 'team_parent': parent['id']})
+        feed = run.watch(t, worker['id'], 'Codex')
+        feed('▸ bash: npm test')
+        feed('3 passed')
+        live = c.get(f'/api/t/{t}/projects/{project["id"]}/sessions/{worker["id"]}/live').json()
+        assert [l['text'] for l in live['lines']] == ['▸ bash: npm test', '3 passed'] and live['agent'] == 'Codex' and live['running'] is False
+        assert [l['text'] for l in c.get(f'/api/t/{t}/projects/{project["id"]}/sessions/{worker["id"]}/live?since=1').json()['lines']] == ['3 passed']
+        team = c.get(f'/api/t/{t}/projects/{project["id"]}/sessions/{parent["id"]}/live').json()
+        assert [l['text'] for l in team['lines']] == ['[Write A] ▸ bash: npm test', '[Write A] 3 passed']

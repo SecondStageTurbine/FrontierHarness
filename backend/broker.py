@@ -288,7 +288,7 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
         if extras.get('protect_env'):
             # The project keeps its secrets: Claude may not open .env files under any posture.
             disallowed += ['Read(./.env)', 'Read(./.env.*)', 'Read(**/.env)', 'Read(**/.env.*)']
-        argv = [*launch, '-p', '--output-format', 'json', '--model', model_name,
+        argv = [*launch, '-p', '--output-format', 'stream-json', '--verbose', '--model', model_name,
                 '--permission-mode', {'read': 'dontAsk', 'edit': 'acceptEdits', 'auto': 'bypassPermissions'}[mode]]
         if disallowed:
             argv += ['--disallowedTools', *disallowed]
@@ -347,19 +347,99 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
             '--agent', 'plan' if mode == 'read' else 'build']
     return argv + (['--auto'] if mode == 'auto' else [])
 
-async def run_cli(argv, stdin_text, work, env=None):
+async def run_cli(argv, stdin_text, work, env=None, on_line=None):
     """Run an agent tool to completion, killing its whole tree on timeout or cancellation.
 
     Stderr comes back only so a spent subscription can be told apart from a broken install. It
-    can echo the prompt, so callers classify it and it is never surfaced or stored.
+    can echo the prompt, so callers classify it and it is never surfaced or stored. Output is read
+    line by line as it arrives, and `on_line` sees each line of either stream, for the live view.
     """
-    proc = await asyncio.create_subprocess_exec(*argv, cwd=work, env=child_env(**(env or {})),
+    # A single event line can carry a whole file a tool read, far past asyncio's 64 KB line default.
+    proc = await asyncio.create_subprocess_exec(*argv, cwd=work, env=child_env(**(env or {})), limit=1 << 26,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **child_flags())
+    out, err = [], []
+
+    async def feed():
+        try:
+            if stdin_text is not None:
+                proc.stdin.write(stdin_text.encode('utf-8'))
+                await proc.stdin.drain()
+            proc.stdin.close()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # The tool exited without reading everything; its output says why.
+
+    async def pump(stream, sink):
+        while line := await stream.readline():
+            sink.append(line)
+            if on_line:
+                try:
+                    on_line(line.decode('utf-8', errors='replace'))
+                except Exception:  # The live view never takes a turn down.
+                    logging.getLogger('frontier.broker').exception('live view line failed')
+
     try:
-        out, err = await proc.communicate(stdin_text.encode('utf-8') if stdin_text is not None else None)
+        await asyncio.gather(feed(), pump(proc.stdout, out), pump(proc.stderr, err))
+        await proc.wait()
     finally:
         await terminate(proc)
-    return proc.returncode, out.decode('utf-8', errors='replace'), err.decode('utf-8', errors='replace')
+    return proc.returncode, b''.join(out).decode('utf-8', errors='replace'), b''.join(err).decode('utf-8', errors='replace')
+
+
+ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
+
+
+def brief(value):
+    """A tool call's input in one line: the command, file, pattern or address it names."""
+    if isinstance(value, dict):
+        for key in ('command', 'CommandLine', 'cmd', 'file_path', 'filePath', 'AbsolutePath', 'TargetFile', 'path', 'pattern', 'url', 'query', 'description'):
+            if isinstance(value.get(key), str) and value[key].strip():
+                return ' '.join(value[key].split())[:200]
+        value = json.dumps(value)[:200]
+    return ' '.join(str(value or '').split())[:200]
+
+
+def live_line(provider, raw, prompt):
+    """What one line of a tool's output says it is doing, for a person to follow, or None."""
+    text = ANSI.sub('', raw).strip()
+    if not text:
+        return None
+    try:
+        event = json.loads(text)
+    except ValueError:
+        # Codex narrates in plain text. Lines of the conversation it echoes back are not news.
+        return None if provider != 'codex_cli' or text in prompt else text[:300]
+    if not isinstance(event, dict):
+        return None
+    lines = []
+    if provider == 'claude_cli' and event.get('type') in ('assistant', 'user'):
+        for item in (event.get('message') or {}).get('content') or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get('type') == 'tool_use':
+                lines.append(f'▸ {item.get("name")}: {brief(item.get("input"))}')
+            elif item.get('type') == 'text' and (item.get('text') or '').strip():
+                lines.append(item['text'].strip()[:600])
+            elif item.get('type') == 'tool_result':
+                result = item.get('content')
+                result = ' '.join(c.get('text', '') for c in result if isinstance(c, dict)) if isinstance(result, list) else str(result or '')
+                first = next((l.strip() for l in result.splitlines() if l.strip()), '')
+                if first:
+                    lines.append(f'  ↳ {first[:200]}')
+    elif provider == 'opencode_cli':
+        part = event.get('part') or {}
+        if part.get('type') == 'tool':
+            lines.append(f'▸ {part.get("tool")}: {brief((part.get("state") or {}).get("input"))}')
+        elif part.get('type') == 'text' and (part.get('text') or '').strip():
+            lines.append(part['text'].strip()[:600])
+    elif provider == 'gemini_cli':
+        step = event.get('step_update') or {}
+        if step.get('step_type') == 'tool' and step.get('state') == 'ACTIVE':
+            lines.append(f'▸ {step.get("tool_name")}: {brief((step.get("tool_info") or {}).get("parameters"))}')
+        elif step.get('step_type') == 'error_message':
+            lines.append('⚠ agy hit an error and is retrying; its log in ~/.gemini/antigravity-cli/log says why.')
+    elif provider == 'codex_cli':
+        return text[:300]
+    return '\n'.join(lines) or None
 
 async def probe_cli(provider, env=None):
     """Confirm the tool runs, without a model call. Sign-in is only proven by a real turn."""
@@ -373,10 +453,15 @@ def read_claude(out, err, code, provider):
     """Claude puts a refusal in its JSON and still exits nonzero, so the payload is read before
     the exit code: it names the reason, which the exit code cannot. Telling a spent subscription
     from one that was never signed in depends on it."""
-    try:
-        payload = json.loads(out) if out.strip() else None
-    except json.JSONDecodeError:
-        payload = None
+    payload = None
+    for line in reversed(out.splitlines()):  # The stream's closing `result` event, or the single object of --output-format json.
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and event.get('type', 'result') == 'result':
+            payload = event
+            break
     if payload is None:
         if code != 0:
             raise cli_exit_error(provider, code, out, err)
@@ -583,7 +668,9 @@ class ModelBroker:
             argv = [*(extras.get('argv_prefix') or []), *agent_argv(provider, launch, config['model_name'], mode, root, final, extras)]
             try:
                 async with asyncio.timeout(extras.get('timeout') or TURN_TIMEOUT):
-                    code, out, err = await run_cli(argv, agy_input(prompt) if provider == 'gemini_cli' else prompt, root, env)
+                    live = extras.get('live')
+                    code, out, err = await run_cli(argv, agy_input(prompt) if provider == 'gemini_cli' else prompt, root, env,
+                                                   (lambda raw: (line := live_line(provider, raw, prompt)) and live(line)) if live else None)
                 # A tool may echo the conversation; words like 'quota' in it must not read as the tool running out.
                 err = strip_echo(err, prompt)
             except TimeoutError:
