@@ -4,7 +4,7 @@
 <p align="center"><a href="https://github.com/SecondStageTurbine/FrontierHarness/releases/latest">Download for Windows</a> · <a href="#everyday-use">Everyday use</a> · <a href="#run-from-source">Run from source</a> · <a href="docs/verification.md">Verification notes</a></p>
 
 Frontier is a desktop harness for coding agents. You hold one conversation about one project
-folder and choose which agent answers each turn: Claude Code, Codex, Gemini CLI, or OpenCode,
+folder and choose which agent answers each turn: Claude Code, Codex, Antigravity CLI (Gemini), or OpenCode,
 including a local model through OpenCode. Switching agent mid-conversation costs nothing. The
 conversation lives in Frontier, not inside any tool's own session, and the agent taking over is
 given it along with the folder the previous one was working in. Or leave the choice to
@@ -22,7 +22,7 @@ looked like before and after so any turn can be reverted.
 
 | | |
 |---|---|
-| **Four agents, your subscriptions** | Claude Code, Codex, Gemini CLI and OpenCode run as the tools you already installed and signed in to. No API key is needed to take a turn. Several logins per tool can be connected; a spent one hands over to the next. |
+| **Four agents, your subscriptions** | Claude Code, Codex, Antigravity CLI (Gemini) and OpenCode run as the tools you already installed and signed in to. No API key is needed to take a turn. Several logins per tool can be connected; a spent one hands over to the next. |
 | **Adaptive routing** | Pick Adaptive and each message goes to the least expensive agent whose capability profile covers it, escalating to a stronger one with a handoff if that agent fails. |
 | **Three postures, approval and question cards** | Read only, Edit files, Full auto, translated into each tool's own flags. Claude asks before running a command, and asks you a question instead of guessing; cards in the conversation answer both. |
 | **Team mode** | A lead plans the work as tasks, Frontier hands each to the agent whose profile fits, workers run in parallel worktrees, their changes are folded back, and the lead reviews and replies. |
@@ -77,9 +77,9 @@ The installer installs WebView2 if it is missing; that step needs internet acces
 
 ## Connecting agents
 
-On first run, **Set up your agents** looks for Claude Code, Codex, OpenCode and Gemini CLI on this computer, shows where each is and its version, offers the model identifiers each accepts (Codex's and OpenCode's are read from the tools themselves), and connects the ones you tick in one go; for a tool that is missing it shows the install and sign-in commands. **Settings → Agents & Providers → Run the setup wizard again** reopens it. Below the tools, **Bring your past conversations** lists the folders Claude Code and Codex already have conversations about, with how many each holds; tick them and each becomes a project with its conversations imported, ready for the same tool to continue.
+On first run, **Set up your agents** looks for Claude Code, Codex, OpenCode and Antigravity CLI (Gemini) on this computer, shows where each is and its version, offers the model identifiers each accepts (Codex's and OpenCode's are read from the tools themselves), and connects the ones you tick in one go; for a tool that is missing it shows the install and sign-in commands. **Settings → Agents & Providers → Run the setup wizard again** reopens it. Below the tools, **Bring your past conversations** lists the folders Claude Code and Codex already have conversations about, with how many each holds; tick them and each becomes a project with its conversations imported, ready for the same tool to continue.
 
-You can also connect agents by hand. On a fresh installation, open **Settings → Agents & Providers → Connect model**. Choose **Claude subscription**, **Codex subscription**, **Gemini CLI** or **OpenCode subscription** to run a model without any API key: Frontier runs the agent command line tool you already have installed, and that tool signs in with your own subscription. Install the tool, sign in once in a terminal, then connect a model whose identifier is the name the tool accepts, such as `sonnet` for Claude or `opencode-go/glm-5.3` for OpenCode. There is no key, endpoint or per-token rate to enter. **Test connection** confirms the tool runs; a sign-in problem surfaces on the first request.
+You can also connect agents by hand. On a fresh installation, open **Settings → Agents & Providers → Connect model**. Choose **Claude subscription**, **Codex subscription**, **Antigravity CLI (Gemini)** or **OpenCode subscription** to run a model without any API key: Frontier runs the agent command line tool you already have installed, and that tool signs in with your own subscription. Install the tool, sign in once in a terminal, then connect a model whose identifier is the name the tool accepts, such as `sonnet` for Claude or `opencode-go/glm-5.3` for OpenCode. There is no key, endpoint or per-token rate to enter. **Test connection** confirms the tool runs; a sign-in problem surfaces on the first request.
 
 This is the one place where credentials come from outside the application, so it is worth knowing what holds and what does not. The tool runs in your project folder with its own tools, which is what makes it an agent rather than a text generator; how much it may do is the per-turn posture below and is never escalated on its own. Provider API keys are stripped from its environment, because an inherited `ANTHROPIC_API_KEY` would make the Claude tool bill per token instead of using the subscription. Codex reports only a combined token total, so its token counts show as unavailable.
 
@@ -87,7 +87,7 @@ An API key is not an agent. A model reached with a key has no tool loop, no file
 
 ### More than one subscription
 
-A subscription login can carry a **subscription account** name, such as `work` or `personal`. Each name gets its own credential directory inside the workspace, so a second Claude, Codex, Gemini CLI or OpenCode subscription is connected beside the first instead of replacing it. **Sign in** on the model card prints the two lines that sign that account in: the command line tool writes its credential into that directory and reads it back from there, and Frontier never sees it. Leave the account name empty to keep using the sign-in already on this machine.
+A subscription login can carry a **subscription account** name, such as `work` or `personal`. Each name gets its own credential directory inside the workspace, so a second Claude, Codex, Antigravity CLI (Gemini) or OpenCode subscription is connected beside the first instead of replacing it. **Sign in** on the model card prints the two lines that sign that account in: the command line tool writes its credential into that directory and reads it back from there, and Frontier never sees it. Leave the account name empty to keep using the sign-in already on this machine.
 
 Connect a second subscription by adding a second model with the same provider and the same model identifier under a different account name. When one of them answers that its usage window is spent, the run moves to the next connected account and continues; the message records the login that actually answered, and the spent one is skipped for an hour before it is tried again. When every login for an agent is spent, the turn hands over to another connected agent with the same handoff an Adaptive escalation writes, up to twice, and the message records who was out of usage and who continued. A login that is simply not signed in is reported rather than switched away from.
 
@@ -109,11 +109,11 @@ Ctrl+N starts a session, Ctrl+K finds a session, and Escape closes the contextua
 
 Chosen per turn, and translated into each tool's own setting:
 
-| Posture | Claude Code | Codex | OpenCode | Gemini CLI |
+| Posture | Claude Code | Codex | OpenCode | Antigravity CLI (Gemini) |
 |---|---|---|---|---|
-| Read only | `--permission-mode dontAsk --disallowedTools Bash Edit Write MultiEdit NotebookEdit` | `--sandbox read-only` | `--agent plan` | `--approval-mode plan` |
-| Edit files | `--permission-mode acceptEdits --permission-prompt-tool mcp__frontier__approve` | `--sandbox workspace-write` | `--agent build` | `--approval-mode auto_edit` |
-| Full auto | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | `--agent build --auto` | `--approval-mode yolo` |
+| Read only | `--permission-mode dontAsk --disallowedTools Bash Edit Write MultiEdit NotebookEdit` | `--sandbox read-only` | `--agent plan` | `--mode plan` |
+| Edit files | `--permission-mode acceptEdits --permission-prompt-tool mcp__frontier__approve` | `--sandbox workspace-write` | `--agent build` | `--mode accept-edits` |
+| Full auto | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | `--agent build --auto` | `--dangerously-skip-permissions` |
 
 A commit or push by the agent needs **Full auto**. Under Edit files, Codex's sandbox keeps `.git` read-only and blocks the network; the agent is told this on every turn so it asks for Full auto rather than asking you to run git by hand. Your own commits from the Changes panel need no posture at all.
 
@@ -266,7 +266,7 @@ Frontier is also an MCP server. **Settings → MCP & Skills → Use Frontier fro
 
 ### MCP servers and skills
 
-**Settings → MCP & Skills** lists the Model Context Protocol servers this workspace hands to its agents on every turn: a command spoken to over stdio, or an HTTP endpoint. **Catalog** fills the form for common ones, GitHub, a filesystem, Postgres, a Playwright browser, Slack, fetch, memory, sequential thinking and Context7, leaving the token, path or connection string for you. Claude receives them through `--mcp-config`, Codex through `-c mcp_servers.*` overrides (with their tools run unasked under Edit files and Full auto, since a Frontier turn has no one to approve them, and only read-only tools under Read only), and OpenCode through `OPENCODE_CONFIG_CONTENT`; with a project's agent browser on, it takes the place of a plain Playwright server added here, so agents see one browser; Gemini CLI reads its own settings file and is not configured from here. The same page lists the skills and slash commands the agents already discover in the project and your home folder (`.claude`, `.codex`, `.gemini`).
+**Settings → MCP & Skills** lists the Model Context Protocol servers this workspace hands to its agents on every turn: a command spoken to over stdio, or an HTTP endpoint. **Catalog** fills the form for common ones, GitHub, a filesystem, Postgres, a Playwright browser, Slack, fetch, memory, sequential thinking and Context7, leaving the token, path or connection string for you. Claude receives them through `--mcp-config`, Codex through `-c mcp_servers.*` overrides (with their tools run unasked under Edit files and Full auto, since a Frontier turn has no one to approve them, and only read-only tools under Read only), and OpenCode through `OPENCODE_CONFIG_CONTENT`; with a project's agent browser on, it takes the place of a plain Playwright server added here, so agents see one browser; Antigravity CLI (Gemini) reads its own settings file and is not configured from here. The same page lists the skills and slash commands the agents already discover in the project and your home folder (`.claude`, `.codex`, `.gemini`).
 
 ### Usage and themes
 

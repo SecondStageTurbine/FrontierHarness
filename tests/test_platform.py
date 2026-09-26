@@ -34,14 +34,23 @@ def test_mcp_servers_reach_each_tool_in_its_own_spelling(tmp_path):
     assert toml_value({'K': 'v', 'ON': True}) == '{K = "v", ON = true}'
     opencode = mcp_config_for_opencode(servers)['mcp']
     assert opencode['graft'] == {'type': 'local', 'command': ['npx', '-y', 'graft-mcp'], 'environment': {'A': '1'}, 'enabled': True}
-    gemini = agent_argv('gemini_cli', ['gemini'], 'gemini-2.5-pro', 'read', tmp_path, tmp_path/'f')
-    assert gemini[-1] == 'plan' and '-o' in gemini and 'json' in gemini
+    gemini = agent_argv('gemini_cli', ['agy'], 'gemini-3.8-flash-high', 'read', tmp_path, tmp_path/'f')
+    assert gemini[-2:] == ['--mode', 'plan'] and gemini[gemini.index('--input-format') + 1] == 'stream-json'
+    assert agent_argv('gemini_cli', ['agy'], 'g', 'edit', tmp_path, None)[-1] == 'accept-edits'
+    assert agent_argv('gemini_cli', ['agy'], 'g', 'auto', tmp_path, None)[-1] == '--dangerously-skip-permissions'
 
 
-def test_gemini_output_is_read_from_its_json_envelope():
-    out = 'Loaded cached credentials.\n{"response": "Three widgets.", "stats": {"models": {"gemini-2.5-pro": {"tokens": {"prompt": 120, "candidates": 30}}}}}\n'
+def test_antigravity_output_is_read_from_its_result_event():
+    from backend.broker import agy_input
+    import json
+    assert json.loads(agy_input('USER: hi')) == {'event': 'user', 'message': {'content': 'USER: hi'}}
+    out = ('{"event":"init","tools":["view_file"]}\n'
+           '{"event":"result","result":{"status":"SUCCESS","response":"Three widgets.","usage":{"input_tokens":120,"output_tokens":30}}}\n')
     result = read_gemini(out, '', 0, 'gemini_cli')
     assert result.text == 'Three widgets.' and result.input_tokens == 120 and result.output_tokens == 30
+    failed = '{"event":"result","result":{"status":"ERROR","response":"","error":"invalid project ID: \\"7648\\""}}\n'
+    with pytest.raises(ProviderError, match='invalid project ID'):  # agy's own reason, not a guess about sign-in.
+        read_gemini(failed, '', 0, 'gemini_cli')
     with pytest.raises(ProviderError):
         read_gemini('', 'Error authenticating', 1, 'gemini_cli')
 

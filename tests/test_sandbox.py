@@ -80,9 +80,9 @@ def test_a_named_gemini_login_gets_its_own_home_and_signs_in(tmp_path):
     from tests.test_api import setup
     with TestClient(create_app(str(tmp_path/'state'), ScriptedAgent())) as c:
         t = setup(c)
-        model = c.post(f'/api/t/{t}/models', json={'name': 'Gemini (work)', 'provider': 'gemini_cli', 'model_name': 'gemini-2.5-pro', 'account': 'work'}).json()
+        model = c.post(f'/api/t/{t}/models', json={'name': 'Gemini (work)', 'provider': 'gemini_cli', 'model_name': 'gemini-3.8-flash-high', 'account': 'work'}).json()
         signin = c.post(f'/api/t/{t}/models/{model["id"]}/signin')
-        assert signin.status_code == 200 and signin.json()['variable'] == 'GEMINI_CLI_HOME' and signin.json()['command'].endswith('gemini')
+        assert signin.status_code == 200 and signin.json()['variable'] == 'USERPROFILE' and signin.json()['command'].endswith('agy')
     home = tmp_path/'state'/'subscriptions'/t/'gemini_cli'/'work'
     assert home.is_dir()
     assert sandbox.tool_state('gemini_cli', str(home)) == [home] and sandbox.tool_state('claude_cli')[0].name == '.claude'

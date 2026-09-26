@@ -29,13 +29,16 @@ CLI_TOOLS = {
     'codex_cli': ('codex', 'node_modules/@openai/codex/bin/codex.js', 'Codex'),
     # OpenCode ships a compiled binary rather than a script, so this entry carries no extension.
     'opencode_cli': ('opencode', 'node_modules/opencode-ai/bin/opencode', 'OpenCode'),
-    'gemini_cli': ('gemini', 'node_modules/@google/gemini-cli/dist/index.js', 'Gemini CLI'),
+    # Google's Gemini agent is now the Antigravity CLI, a native `agy` binary; the old npm `gemini` no longer signs in.
+    'gemini_cli': ('agy', 'agy', 'Antigravity CLI'),
 }
 # Each agent tool reads the subscription it is signed in as out of one directory. Pointing that
 # variable at a directory per named account is the whole mechanism behind connecting more than
 # one subscription to the same provider: nothing is copied, and no credential is read here.
-ACCOUNT_HOME_VARS = {'claude_cli': ('CLAUDE_CONFIG_DIR',), 'codex_cli': ('CODEX_HOME',), 'opencode_cli': ('XDG_DATA_HOME',), 'gemini_cli': ('GEMINI_CLI_HOME',)}
-SIGNIN_COMMANDS = {'claude_cli': 'claude', 'codex_cli': 'codex login', 'opencode_cli': 'opencode auth login', 'gemini_cli': 'gemini'}
+ACCOUNT_HOME_VARS = {'claude_cli': ('CLAUDE_CONFIG_DIR',), 'codex_cli': ('CODEX_HOME',), 'opencode_cli': ('XDG_DATA_HOME',),
+                     # agy has no variable of its own for its state; it keeps it under the home folder, so a named login gets its own home.
+                     'gemini_cli': ('USERPROFILE', 'HOME')}
+SIGNIN_COMMANDS = {'claude_cli': 'claude', 'codex_cli': 'codex login', 'opencode_cli': 'opencode auth login', 'gemini_cli': 'agy'}
 # A spent subscription is skipped for this long before it is tried again. ponytail: a fixed
 # window, because the three CLIs do not report a reset time in any shared form. Parse the real
 # reset if idling an hour ever costs more than the two seconds a premature retry costs.
@@ -120,7 +123,7 @@ KNOWN_DIRS = {
     'claude_cli': ['~/.local/bin', '~/.claude/local', '%LOCALAPPDATA%/Programs/claude', '%LOCALAPPDATA%/Microsoft/WinGet/Links'],
     'codex_cli': ['~/.local/bin', '%LOCALAPPDATA%/Programs/codex', '%LOCALAPPDATA%/Microsoft/WinGet/Links'],
     'opencode_cli': ['~/.local/bin', '~/.opencode/bin', '%LOCALAPPDATA%/Microsoft/WinGet/Links'],
-    'gemini_cli': ['~/.local/bin', '%LOCALAPPDATA%/Microsoft/WinGet/Links'],
+    'gemini_cli': ['%LOCALAPPDATA%/agy/bin', '~/.local/bin', '%LOCALAPPDATA%/Microsoft/WinGet/Links'],
 }
 
 
@@ -223,7 +226,7 @@ def resolve_cli(provider):
     hint = {'claude_cli': 'Install it from https://claude.com/claude-code (in PowerShell: irm https://claude.ai/install.ps1 | iex), run `claude` once in a terminal to sign in',
             'codex_cli': 'Install it with `npm install -g @openai/codex`, run `codex login` once',
             'opencode_cli': 'Install it with `npm install -g opencode-ai`, run `opencode auth login` once',
-            'gemini_cli': 'Install it with `npm install -g @google/gemini-cli`, run `gemini` once to sign in'}.get(provider, 'Install it and sign in once in a terminal')
+            'gemini_cli': 'Install it from https://antigravity.google, run `agy` once in a terminal to sign in'}.get(provider, 'Install it and sign in once in a terminal')
     raise ProviderError(f'The {label} command line tool was not found on this computer: `{name}` is not on the PATH and not in the folders its installer uses. {hint}, then press Test connection again.')
 
 
@@ -333,9 +336,10 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
                  else ['--sandbox', 'read-only' if mode == 'read' else codex_write_mode(extras)])
         return argv + ['-']
     if provider == 'gemini_cli':
-        # The conversation arrives on stdin; -p is appended to it. Plan mode is Gemini's read only.
-        return [*launch, '-p', 'The conversation above is on standard input. Answer its final USER message.', '-m', model_name,
-                '-o', 'json', '--approval-mode', {'read': 'plan', 'edit': 'auto_edit', 'auto': 'yolo'}[mode]]
+        # The conversation arrives on stdin as one stream-json message (agy_input): a command line cannot carry a long
+        # conversation. Plan mode is agy's read only; Full auto approves every tool without asking.
+        argv = [*launch, '--input-format', 'stream-json', '--output-format', 'stream-json', '--print=', '--model', model_name]
+        return argv + (['--dangerously-skip-permissions'] if mode == 'auto' else ['--mode', 'plan' if mode == 'read' else 'accept-edits'])
     argv = [*launch, 'run', '--format', 'json', '--model', model_name,
             '--agent', 'plan' if mode == 'read' else 'build']
     return argv + (['--auto'] if mode == 'auto' else [])
@@ -390,26 +394,32 @@ def read_claude(out, err, code, provider):
     usage = payload.get('usage') or {}
     return AgentResult(payload.get('result') or '', usage.get('input_tokens'), usage.get('output_tokens'), session_id=payload.get('session_id'))
 
+def agy_input(prompt):
+    """The conversation as the one stream-json message agy reads from standard input."""
+    return json.dumps({'event': 'user', 'message': {'content': prompt}}) + '\n'
+
+
 def read_gemini(out, err, code, provider):
-    """Gemini prints one JSON object with the reply under `response`; anything else is a failure."""
-    start, end = out.find('{'), out.rfind('}')
-    payload = None
-    if start >= 0 and end > start:
+    """agy streams events; the last `result` event carries the reply, its status, any error, and the usage."""
+    result = {}
+    for line in out.splitlines():
         try:
-            payload = json.loads(out[start:end+1])
+            event = json.loads(line)
         except json.JSONDecodeError:
-            payload = None
-    if not isinstance(payload, dict) or not (payload.get('response') or '').strip():
-        if is_exhausted(out, err):
+            continue
+        if isinstance(event, dict) and event.get('event') == 'result':
+            result = event.get('result') or {}
+    reply = (result.get('response') or '').strip()
+    if not reply or result.get('status') == 'ERROR':
+        if is_exhausted(result.get('error') or '', err):
             raise exhausted_error(provider)
+        if result.get('error'):
+            raise cli_exit_error(provider, code, '', err, result['error'])
         if code != 0:
             raise cli_exit_error(provider, code, out, err)
-        raise ProviderError(f'{CLI_TOOLS[provider][2]} returned no message. Run `gemini` once in a terminal to confirm it is signed in.')
-    tokens = json.dumps(payload.get('stats') or {})
-    def total(*names):
-        found = [int(v) for name in names for v in re.findall(rf'"{name}"\s*:\s*(\d+)', tokens)]
-        return sum(found) or None
-    return AgentResult(payload['response'], total('input_tokens', 'prompt_tokens', 'prompt'), total('output_tokens', 'candidates_tokens', 'candidates'))
+        raise ProviderError(f'{CLI_TOOLS[provider][2]} returned no message. Run `agy` once in a terminal to confirm it is signed in.')
+    usage = result.get('usage') or {}
+    return AgentResult(reply, usage.get('input_tokens') or None, usage.get('output_tokens') or None)
 
 def opencode_events(out):
     for line in out.splitlines():
@@ -563,7 +573,7 @@ class ModelBroker:
             argv = [*(extras.get('argv_prefix') or []), *agent_argv(provider, launch, config['model_name'], mode, root, final, extras)]
             try:
                 async with asyncio.timeout(extras.get('timeout') or TURN_TIMEOUT):
-                    code, out, err = await run_cli(argv, prompt, root, env)
+                    code, out, err = await run_cli(argv, agy_input(prompt) if provider == 'gemini_cli' else prompt, root, env)
                 # A tool may echo the conversation; words like 'quota' in it must not read as the tool running out.
                 err = strip_echo(err, prompt)
             except TimeoutError:

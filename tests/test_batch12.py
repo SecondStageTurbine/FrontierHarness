@@ -299,7 +299,7 @@ def test_claude_and_codex_histories_become_sessions_once(tmp_path, monkeypatch):
     claude = next(s for s in sessions if s['imported_from'] == 'claude')
     assert claude['messages'][1]['content'] == 'Fixed it.' and claude['messages'][1]['model_name'] == 'Claude Code (imported)'
     assert maintenance.import_history(store, 'tenant-a', project) == []  # Already there.
-    assert maintenance.PACKAGES['gemini_cli'] == '@google/gemini-cli'
+    assert 'gemini_cli' not in maintenance.PACKAGES  # The Antigravity CLI updates itself; it is not an npm package.
 
 
 # ── Attachments: files on disk, many of them ──

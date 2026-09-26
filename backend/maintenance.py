@@ -9,7 +9,8 @@ from .broker import CLI_TOOLS, ProviderError, probe_cli, resolve_cli
 from .localprocess import child_env, child_flags, terminate
 from .store import now, uid
 
-PACKAGES = {'claude_cli': '@anthropic-ai/claude-code', 'codex_cli': '@openai/codex', 'opencode_cli': 'opencode-ai', 'gemini_cli': '@google/gemini-cli'}
+# npm packages Frontier can update. The Antigravity CLI is a native install that updates itself (`agy update`).
+PACKAGES = {'claude_cli': '@anthropic-ai/claude-code', 'codex_cli': '@openai/codex', 'opencode_cli': 'opencode-ai'}
 
 
 def npm_argv():
@@ -45,7 +46,7 @@ async def versions():
         try:
             launch = resolve_cli(provider)
             row['updatable'] = any('node_modules' in part or 'npm' in part.lower() for part in launch)
-            code, out, _ = await npm('view', PACKAGES[provider], 'version', timeout=30)
+            code, out, _ = await npm('view', PACKAGES[provider], 'version', timeout=30) if provider in PACKAGES else (1, '', '')
             if code == 0 and out.strip():
                 row['latest'] = out.strip().splitlines()[-1]
         except ProviderError as exc:
@@ -226,7 +227,7 @@ INSTALL = {
     'claude_cli': {'install': 'irm https://claude.ai/install.ps1 | iex', 'signin': 'claude', 'models': ['sonnet', 'opus', 'haiku', 'fable'], 'default': 'sonnet'},
     'codex_cli': {'install': 'npm install -g @openai/codex', 'signin': 'codex login', 'models': ['gpt-6-sol', 'gpt-6-astra', 'gpt-6-luna'], 'default': 'gpt-6-sol'},
     'opencode_cli': {'install': 'npm install -g opencode-ai', 'signin': 'opencode auth login', 'models': [], 'default': ''},
-    'gemini_cli': {'install': 'npm install -g @google/gemini-cli', 'signin': 'gemini', 'models': ['gemini-2.5-pro', 'gemini-2.5-flash'], 'default': 'gemini-2.5-pro'},
+    'gemini_cli': {'install': 'Install the Antigravity CLI from https://antigravity.google', 'signin': 'agy', 'models': [], 'default': ''},
 }
 
 
@@ -246,6 +247,29 @@ async def opencode_models():
         return []
     found = [line.strip() for line in out.decode('utf-8', 'replace').splitlines() if '/' in line.strip() and ' ' not in line.strip()]
     return sorted(found, key=lambda m: (not m.endswith('-free'), m))
+
+
+async def gemini_models():
+    """The model identifiers this machine's Antigravity CLI offers (`agy models`: an id, a tab, a label), and its default."""
+    try:
+        launch = resolve_cli('gemini_cli')
+    except ProviderError:
+        return [], None
+    proc = await asyncio.create_subprocess_exec(*launch, 'models', env=child_env(), stdin=asyncio.subprocess.DEVNULL,
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, **child_flags())
+    try:
+        async with asyncio.timeout(40):
+            out, _ = await proc.communicate()
+    except TimeoutError:
+        await terminate(proc)
+        return [], None
+    rows = [line.split('	', 1) for line in out.decode('utf-8', 'replace').splitlines() if '	' in line]
+    labels = {label.strip(): ident.strip() for ident, label in rows}
+    try:
+        chosen = json.loads((Path.home()/'.gemini'/'antigravity-cli'/'settings.json').read_text(encoding='utf-8')).get('model')
+    except (OSError, ValueError):
+        chosen = None
+    return [ident.strip() for ident, _ in rows], labels.get(chosen or '')
 
 
 async def codex_models():
@@ -299,6 +323,10 @@ async def detect():
             if slugs:
                 row['models'] = slugs
             row['default'] = default if default in row['models'] else (row['models'][0] if row['models'] else row['default'])
+        if provider == 'gemini_cli':
+            listed, default = await gemini_models()
+            row['models'] = listed
+            row['default'] = default or (listed[0] if listed else '')
         if provider == 'opencode_cli':
             listed = await opencode_models()
             configured = opencode_default()

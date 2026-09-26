@@ -120,6 +120,8 @@ def find(model, board):
     if not board or not model.get('model_name'):
         return None
     name = normalise(model['model_name'])
+    # agy names a model with its effort ("gemini-3.8-flash-high"); the boards name the model alone.
+    name = name if name in board else re.sub(r'-(low|medium|high|xhigh|max)$', '', name)
     if name in board:
         return board[name]
     if model.get('provider') == 'claude_cli' and re.fullmatch(r'[a-z]+', name):

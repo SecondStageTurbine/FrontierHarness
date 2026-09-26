@@ -46,6 +46,9 @@ def test_models_are_matched_by_their_identifier_and_only_when_listed(tmp_path):
     assert find('opencode_cli', 'ollama/deepseek-v4-flash:cloud')['deepswe']['model'] == 'deepseek-v4-flash'
     assert find('opencode_cli', 'opencode/nemotron-3-ultra-free') is None
     assert find('codex_cli', 'gpt-6-sol') is None  # Close is not the same model.
+    assert find('gemini_cli', 'gemini-3.8-flash-high') is None  # Not on these test boards...
+    boards['deepswe']['gemini-3-8-flash'] = {'model': 'gemini-3-8-flash', 'pass': 0.74}
+    assert find('gemini_cli', 'gemini-3.8-flash-high')['deepswe']['pass'] == 0.74  # ...found once listed, effort aside.
 
 
 def test_each_board_sets_its_own_skills_and_the_user_still_wins(tmp_path):

@@ -716,3 +716,13 @@ DeepSWE sets coding and repository (35% = 5, 75% = 10) and Terminal-Bench tool u
 live pages: Fable (TB 58%, DeepSWE Fable 5 70%), Opus, Sonnet, gpt-5.6-terra and gpt-6-astra matched both;
 Terra's tool use and debugging fell from 9 to 6, Sonnet's to 5. A page without the rows raises a clear error
 that is logged, and the last copy stays in use.
+
+Version 0.23.1: Gemini turns failed with "exited with code 55". The npm `gemini` command now fails at sign-in
+(throwIneligibleOrProjectIdError); Google's agent is the Antigravity CLI, `agy` 1.2.11, a native binary in
+%LOCALAPPDATA%\agy\bin. agy's print mode takes a prompt only as an argument, too short for a conversation, or as
+stream-json on stdin; the message shape was found by trial against agy's own validation errors:
+{"event":"user","message":{"content":"..."}}. Its output is stream-json events ending in {"event":"result","result":
+{"status","response","error","usage":{"input_tokens","output_tokens"}}}. A turn through Frontier's own broker path
+now reaches agy and comes back with agy's reason. On this machine that reason is agy's account setup ("invalid
+project ID: 764812370197", the Agent Platform project in agy's settings), the same as running agy by hand, and model
+names must be agy's identifiers ("Gemini 3.8 Flash" is refused as an invalid model selection).
