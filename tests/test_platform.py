@@ -48,6 +48,11 @@ def test_antigravity_output_is_read_from_its_result_event():
            '{"event":"result","result":{"status":"SUCCESS","response":"Three widgets.","usage":{"input_tokens":120,"output_tokens":30}}}\n')
     result = read_gemini(out, '', 0, 'gemini_cli')
     assert result.text == 'Three widgets.' and result.input_tokens == 120 and result.output_tokens == 30
+    # Plan mode speaks twice and `response` joins both; the reply is the last one.
+    twice = ''.join('{"event":"step_update","step_update":{"step_index":%d,"step_type":"agent_response","text_delta":"%s"}}\n' % (i, t)
+                    for i, t in [(7, 'ok'), (7, '\\n'), (11, 'ok'), (11, '\\n')])
+    twice += '{"event":"result","result":{"status":"SUCCESS","response":"ok\\nok\\n","usage":{}}}\n'
+    assert read_gemini(twice, '', 0, 'gemini_cli').text == 'ok'
     failed = '{"event":"result","result":{"status":"ERROR","response":"","error":"invalid project ID: \\"7648\\""}}\n'
     with pytest.raises(ProviderError, match='invalid project ID'):  # agy's own reason, not a guess about sign-in.
         read_gemini(failed, '', 0, 'gemini_cli')

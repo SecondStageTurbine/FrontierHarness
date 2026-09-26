@@ -726,3 +726,8 @@ stream-json on stdin; the message shape was found by trial against agy's own val
 now reaches agy and comes back with agy's reason. On this machine that reason is agy's account setup ("invalid
 project ID: 764812370197", the Agent Platform project in agy's settings), the same as running agy by hand, and model
 names must be agy's identifiers ("Gemini 3.8 Flash" is refused as an invalid model selection).
+
+Version 0.23.2: with agy signed in, turns through Frontier's broker path work in all three postures: a plain reply,
+reading a file in the project (Read only), and creating a file (Edit files, written on disk). Under Read only the
+reply came back doubled ("ok\nok"): agy's plan mode writes a plan, answers, then a system step makes it answer again,
+and the result event's `response` concatenates both. The reply is now the last agent_response step's text.

@@ -401,15 +401,22 @@ def agy_input(prompt):
 
 def read_gemini(out, err, code, provider):
     """agy streams events; the last `result` event carries the reply, its status, any error, and the usage."""
-    result = {}
+    result, steps = {}, {}
     for line in out.splitlines():
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(event, dict) and event.get('event') == 'result':
+        if not isinstance(event, dict):
+            continue
+        if event.get('event') == 'result':
             result = event.get('result') or {}
-    reply = (result.get('response') or '').strip()
+        step = event.get('step_update') or {}
+        if step.get('step_type') == 'agent_response' and step.get('text_delta'):
+            steps[step.get('step_index')] = steps.get(step.get('step_index'), '') + step['text_delta']
+    # Plan mode answers, then answers again after reviewing its plan; `response` joins both. The last answer is the reply.
+    spoken = [text for _, text in sorted(steps.items(), key=lambda item: item[0] or 0) if text.strip()]
+    reply = (spoken[-1] if spoken else result.get('response') or '').strip()
     if not reply or result.get('status') == 'ERROR':
         if is_exhausted(result.get('error') or '', err):
             raise exhausted_error(provider)
