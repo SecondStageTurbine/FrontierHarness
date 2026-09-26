@@ -55,10 +55,13 @@ def cooling(broker, tenant_id, model_id):
     return broker.cooldowns.get((tenant_id, model_id), 0) > time.monotonic()
 
 class ProviderError(RuntimeError):
-    def __init__(self, message, retryable=False, exhausted=False):
+    def __init__(self, message, retryable=False, exhausted=False, worked=False):
         super().__init__(message)
         self.retryable = retryable
         self.exhausted = exhausted  # A subscription with nothing left, which another login can serve.
+        # The agent ran and did work before it stopped (it ran out of time). Any other failure means it could not
+        # take the turn at all, which another agent can.
+        self.worked = worked
 
 @dataclass
 class AgentResult:
@@ -541,7 +544,7 @@ class ModelBroker:
             result = await self.run_tool(tenant_id, config, prompt, mode, root, extras)
         except ProviderError as exc:
             if net and net.blocked:
-                raise ProviderError(f'{exc} The sandbox refused network access to {", ".join(net.blocked[:8])}.', exc.retryable, exc.exhausted) from None
+                raise ProviderError(f'{exc} The sandbox refused network access to {", ".join(net.blocked[:8])}.', exc.retryable, exc.exhausted, exc.worked) from None
             raise
         finally:
             self.confined -= 1 if extras.get('outer_sandbox') else 0
@@ -585,7 +588,7 @@ class ModelBroker:
                 err = strip_echo(err, prompt)
             except TimeoutError:
                 limit = (extras.get('timeout') or TURN_TIMEOUT) // 60
-                raise ProviderError(f'{CLI_TOOLS[provider][2]} was still working after {limit} minutes and was stopped. Anything it had already written to the folder is still there. A project whose checks run longer can raise the limit in Project settings.') from None
+                raise ProviderError(f'{CLI_TOOLS[provider][2]} was still working after {limit} minutes and was stopped. Anything it had already written to the folder is still there. A project whose checks run longer can raise the limit in Project settings.', worked=True) from None
             try:
                 return read_output(provider, code, out, err, prompt, final)
             except ProviderError:

@@ -199,7 +199,7 @@ def test_a_task_too_big_for_a_local_model_goes_once_to_a_cloud_agent(tmp_path, m
     asyncio.run(scenario())
     task = store.get('tenant-a', 'sessions', session['id'])['messages'][-1]['team']['tasks'][0]
     assert ran[0] == 'opencode_cli' and len(ran) == 2 and ran[1] != 'opencode_cli'
-    assert task['status'] == 'done' and task['rerouted']
+    assert task['status'] == 'done' and task['model_id'] != 'opencode_cli'  # The worker's turn handed itself over.
     records = {r['id']: r for r in store.list('tenant-a', 'track_records')}
     assert records['opencode_cli']['failed'] == 1 and records['opencode_cli']['overflows'] == 1
     assert records[task['model_id']]['done'] == 1
@@ -243,3 +243,58 @@ def test_a_stopped_team_continues_with_only_its_unfinished_tasks(tmp_path):
     assert reply['team']['objective'] == 'Create a.txt, then b.txt.'
     with pytest.raises(ValueError):
         runner.continue_team('tenant-a', project['id'], session['id'])
+
+
+def test_an_agent_that_cannot_run_hands_the_turn_to_another(tmp_path):
+    seen = []
+    async def respond(config, prompt, mode, root):
+        seen.append(config['provider'])
+        if config['provider'] == 'claude_cli':
+            raise ProviderError('Claude Code is not signed in.')
+        return AgentResult('Done by the next agent.', 1, 1)
+    store = setup_store(tmp_path/'state')
+    runner = AgentRunner(store, ScriptedAgent(respond=respond))
+    project, session = open_project(store, runner, 'tenant-a', repo(tmp_path))
+    reply = asyncio.run(turn(runner, store, 'tenant-a', project, session, 'Fix it.', 'claude_cli'))['messages'][-1]
+    assert reply['status'] == 'complete' and reply['content'] == 'Done by the next agent.'
+    assert seen[0] == 'claude_cli' and seen[1] != 'claude_cli' and reply['model_id'] != 'claude_cli'
+    assert reply['routing']['attempts'][0]['outcome'] == 'could not run'
+
+
+def test_an_agent_stopped_after_working_is_not_handed_over(tmp_path):
+    seen = []
+    async def respond(config, prompt, mode, root):
+        seen.append(config['provider'])
+        raise ProviderError('Claude Code was still working after 90 minutes and was stopped.', worked=True)
+    store = setup_store(tmp_path/'state')
+    runner = AgentRunner(store, ScriptedAgent(respond=respond))
+    project, session = open_project(store, runner, 'tenant-a', repo(tmp_path))
+    reply = asyncio.run(turn(runner, store, 'tenant-a', project, session, 'Fix it.', 'claude_cli'))['messages'][-1]
+    assert reply['status'] == 'failed' and seen == ['claude_cli']
+
+
+def test_a_team_worker_and_lead_that_cannot_run_are_replaced(tmp_path):
+    ran = []
+    async def respond(config, prompt, mode, root):
+        if config['provider'] == 'gemini_cli':
+            raise ProviderError('Antigravity CLI stopped with an error: invalid project ID.')
+        if 'reply with ONLY a JSON object' in prompt and '"tasks"' in prompt and 'REPORTS:' not in prompt:
+            return AgentResult('{"summary": "One step.", "tasks": [{"id": "a", "title": "Write A", "instructions": "Create a.txt.", "agent": "Gemini"}]}', 5, 5)
+        if 'REPORTS:' in prompt:
+            return AgentResult('{"verdict": "done", "reply": "Done."}', 5, 5)
+        ran.append(config['provider'])
+        (Path(root)/'a.txt').write_text('A', encoding='utf-8')
+        return AgentResult('Wrote a.txt.', 1, 1)
+    store = setup_store(tmp_path/'state')
+    store.put('tenant-a', 'models', {'id': 'gemini', 'name': 'Gemini', 'provider': 'gemini_cli', 'model_name': 'gemini-3.8-flash-high'})
+    runner = AgentRunner(store, ScriptedAgent(respond=respond))
+    project, session = open_project(store, runner, 'tenant-a', repo(tmp_path))
+    async def scenario():
+        runner.send('tenant-a', project['id'], session['id'], 'Create a.txt.', 'gemini', 'edit', team=True)
+        await asyncio.gather(runner.turns[('tenant-a', session['id'])], return_exceptions=True)
+    asyncio.run(scenario())
+    reply = store.get('tenant-a', 'sessions', session['id'])['messages'][-1]
+    assert reply['status'] == 'complete', reply.get('error')
+    assert reply['team']['lead'] != 'Gemini'  # The lead's seat moved.
+    task = reply['team']['tasks'][0]
+    assert task['status'] == 'done' and task['model_id'] != 'gemini' and ran and 'gemini_cli' not in ran

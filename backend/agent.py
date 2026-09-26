@@ -327,15 +327,18 @@ class AgentRunner:
         task = self.turns.get((tenant_id, session_id))
         return bool(task and not task.done())
 
-    def fallback(self, tenant_id, tried):
-        """An agent to continue a turn whose agent ran out of usage: connected, enabled, online as far as we know, not yet tried, and not cooling down."""
-        for agent in self.agents(tenant_id):
-            if agent['id'] in tried or agent.get('enabled') is False or agent.get('online') is False:
-                continue
-            if cooling(self.broker, tenant_id, agent['id']):
-                continue
-            return agent
-        return None
+    async def fallback(self, tenant_id, tried, avoid=None, requirements=None):
+        """The agent to continue a turn its agent could not: the cheapest capable one that is connected, enabled, not
+        yet tried, not cooling down and, if it is local, running. When `avoid` names a tool that just failed, another
+        tool comes first: a tool that is not signed in fails the same way for every model on it."""
+        candidates = [a for a in self.agents(tenant_id) if a['id'] not in tried and a.get('enabled') is not False]
+        online = await localhealth.availability(candidates)
+        candidates = [a for a in candidates if online.get(a['id']) is not False]
+        needs = adaptive.TaskRequirements(**requirements) if requirements else adaptive.TaskRequirements(
+            task_type='implementation', complexity='medium', risk='low', requirements=adaptive.TASK_BASE['implementation'], reason='continuing a turn')
+        ranked = [r for r in adaptive.score(needs, candidates, lambda model_id: cooling(self.broker, tenant_id, model_id)) if not r['cooling']]
+        ranked.sort(key=lambda r: r['provider'] == avoid)  # Stable, so the ranking holds within each group.
+        return next((a for r in ranked for a in candidates if a['id'] == r['id']), None)
 
     def busy_anywhere(self, tenant_id, project_id):
         """Whether any conversation of this project has a turn running."""
@@ -645,8 +648,14 @@ class AgentRunner:
                 session, message = self.bind(tenant_id, session_id, message_id, config,
                                              f'Adaptive chose {config["name"]}: {message["routing"]["chosen"]["because"]}.')
             elif (await localhealth.availability([config])).get(config['id']) is False:
-                # Fail in a second with the address, rather than in a minute with the tool's error.
-                raise ProviderError(f'{config["name"]} is not running: nothing at {localhealth.where(config)} is serving it. Start that server, or pick another agent.')
+                # Known in a second rather than a minute: hand the turn to another agent, or fail with the address.
+                down, where = config['name'], localhealth.where(config)
+                tried.add(config['id'])
+                following = await self.fallback(tenant_id, tried)
+                if following is None:
+                    raise ProviderError(f'{down} is not running: nothing at {where} is serving it. Start that server, or pick another agent.')
+                config = following
+                session, message = self.bind(tenant_id, session_id, message_id, config, f'{down} is not running (nothing at {where}); {config["name"]} takes this turn.')
             if message.get('team'):
                 # The lead plans and reviews under Read only; its workers take the real posture.
                 # A continued team keeps its first checkpoint, so the lead reviews everything the team did.
@@ -685,23 +694,32 @@ class AgentRunner:
                     if result is None:
                         result = await self.broker.invoke_agent(tenant_id, config, prompt, mode, root, extras)
                 except ProviderError as exc:
-                    if not exc.exhausted:
+                    # An agent that is out of usage, or that could not take the turn at all (not signed in, not
+                    # installed, a model it does not know, its service down), hands the same turn to another agent
+                    # with a handoff, as an Adaptive escalation would. One stopped after doing work does not: its work
+                    # is in the folder, and a second agent redoing it blind would do more harm than the report.
+                    # An Adaptive turn's other failures escalate below instead.
+                    failover = exc.exhausted or (not exc.worked and not adaptive_turn)
+                    following = await self.fallback(tenant_id, tried, None if exc.exhausted else config['provider'],
+                                                    (message.get('routing') or {}).get('requirements')) if failover and spare else None
+                    if following is None:
+                        if exc.exhausted:
+                            raise
                         error = str(exc)
                     else:
-                        # Every login for this agent is spent. Another connected agent continues the same
-                        # turn with a handoff, as an Adaptive escalation would; with none left, it fails.
-                        following = self.fallback(tenant_id, tried) if spare else None
-                        if following is None:
-                            raise
                         spare -= 1
                         rounds += 1
-                        attempts.append({'id': config['id'], 'name': config['name'], 'outcome': 'out of usage', 'reply': ''})
+                        outcome = 'out of usage' if exc.exhausted else 'could not run'
+                        if 'context window' in str(exc):  # The task outgrew this model; its record should say so.
+                            adaptive.record_outcome(self.store, tenant_id, config, failed=1, overflows=1)
+                        attempts.append({'id': config['id'], 'name': config['name'], 'outcome': outcome, 'reply': ''})
                         message['routing'].update(attempts=attempts, fallbacks=message['routing'].get('fallbacks', 0) + 1)
                         self.save_turn(tenant_id, session_id, message_id, routing=message['routing'])
                         handoff_text = adaptive.render_handoff(adaptive.handoff(session, message, attempts))
                         spent = config['name']
                         config = following
-                        session, message = self.bind(tenant_id, session_id, message_id, config, f'{spent} is out of usage; {config["name"]} continues this turn.')
+                        why = 'is out of usage' if exc.exhausted else f'could not run ({str(exc)[:160]})'
+                        session, message = self.bind(tenant_id, session_id, message_id, config, f'{spent} {why}; {config["name"]} continues this turn.')
                         continue
                 if not adaptive_turn:
                     break

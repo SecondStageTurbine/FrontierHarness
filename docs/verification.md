@@ -731,3 +731,15 @@ Version 0.23.2: with agy signed in, turns through Frontier's broker path work in
 reading a file in the project (Read only), and creating a file (Edit files, written on disk). Under Read only the
 reply came back doubled ("ok\nok"): agy's plan mode writes a plan, answers, then a system step makes it answer again,
 and the result event's `response` concatenates both. The reply is now the last agent_response step's text.
+
+Version 0.24.0: a Crownfall team stopped because three tasks went to Gemini, which could not run (agy not set up),
+and the lead's reply asked the user to reassign them. A turn now fails over whenever the agent could not take it:
+any ProviderError except one marked `worked` (the timeout after the agent had been working). Out of usage already
+did this; now sign-in, install, model-identifier, service and local-server-down failures do too, choosing the cheapest
+capable connected agent that is running and not cooling down, another tool first. Workers inherit it through their
+own turns (the task then records the agent that did it); the lead's plan/review calls fail over in ask_lead. A context
+overflow that fails over still counts against the model's track record. Tests: a manual pick that cannot run is
+answered by another agent (routing attempt "could not run"), a weak reply from a manual pick is not escalated, a
+timed-out agent is not handed over, an offline local pick hands over without spending a turn on either local server
+and fails with the address only when nobody is left, and a team whose lead and worker are both Gemini finishes with
+the lead's seat and the task moved.

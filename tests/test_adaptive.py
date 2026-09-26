@@ -279,13 +279,22 @@ async def test_escalation_is_capped_and_ends_in_a_reported_failure(tmp_path):
 
 @pytest.mark.asyncio
 async def test_a_manual_choice_is_never_second_guessed(tmp_path):
+    # The answer of the agent you picked stands: a weak reply is not escalated. Only an agent that could not
+    # run at all hands over, and when every agent fails the turn fails, having tried at most three.
     async def respond(config, prompt, mode, root):
+        if config['id'] == 'qwen':
+            return AgentResult("I can't do that.", 1, 1)
         raise ProviderError(f'{config["name"]} exited with code 1.')
     store, runner, agent, project, session, _ = make(tmp_path, respond)
     session = await turn(runner, store, 'tenant-a', project, session, 'Explain app.py.', 'qwen', 'read')
     reply = session['messages'][-1]
-    assert reply['status'] == 'failed' and reply['model_id'] == 'qwen' and reply['routing'] == {'mode': 'manual'}
+    assert reply['status'] == 'complete' and reply['model_id'] == 'qwen' and reply['routing'] == {'mode': 'manual'}
     assert [c['model_id'] for c in agent.calls] == ['qwen']
+    session = await turn(runner, store, 'tenant-a', project, session, 'Explain app.py.', 'codex', 'read')
+    reply = session['messages'][-1]
+    assert reply['status'] == 'complete' and reply['model_id'] == 'qwen'  # Codex could not run; Qwen could.
+    attempts = reply['routing']['attempts']
+    assert attempts[0]['id'] == 'codex' and {a['outcome'] for a in attempts} == {'could not run'} and len(attempts) <= 2
 
 
 @pytest.mark.asyncio

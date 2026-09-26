@@ -191,8 +191,23 @@ class Team:
             self.runner.store.event(self.tenant_id, self.session_id, 'team.update', note, message_id=self.message_id)
 
     async def ask_lead(self, prompt):
-        result = await self.runner.broker.invoke_agent(self.tenant_id, self.lead, prompt, 'read', self.root,
-                                                       self.runner.protections(self.tenant_id, self.project_id))
+        tried = {self.lead['id']}
+        while True:
+            try:
+                result = await self.runner.broker.invoke_agent(self.tenant_id, self.lead, prompt, 'read', self.root,
+                                                               self.runner.protections(self.tenant_id, self.project_id))
+                break
+            except ProviderError as exc:
+                # A lead that cannot run (not signed in, out of usage, its service down) hands the lead's seat to
+                # another agent, so the team goes on; a lead that ran out of time has nothing to hand over.
+                following = None if exc.worked or len(tried) > 2 else await self.runner.fallback(self.tenant_id, tried, self.lead['provider'])
+                if following is None:
+                    raise
+                tried.add(following['id'])
+                session, message = self.state()
+                message['team']['lead'] = following['name']
+                self.save(message, session, f'{self.lead["name"]} could not lead ({str(exc)[:160]}); {following["name"]} takes over.')
+                self.lead = following
         self.tokens[0] += result.input_tokens or 0
         self.tokens[1] += result.output_tokens or 0
         return result.text or ''
@@ -376,6 +391,10 @@ class Team:
             await asyncio.gather(turn, return_exceptions=True)
         worker = store.get(self.tenant_id, 'sessions', task['session_id'])
         reply = worker['messages'][-1]
+        if reply.get('model_id') and reply['model_id'] != task['model_id']:
+            # The assigned agent could not run and the turn went to another; the task, the card and the track record follow it.
+            task = self.update_task(task_id, f'{task["model_name"]} could not run; {reply.get("model_name")} did {task["title"]}.',
+                                    model_id=reply['model_id'], model_name=reply.get('model_name'))
         fields = dict(status='done' if reply.get('status') == 'complete' else 'failed', report=(reply.get('content') or reply.get('error') or '')[:6000],
                       changed=[c['path'] for c in reply.get('changes') or []][:50])
         if repo and worker.get('worktree') and reply.get('checkpoint'):

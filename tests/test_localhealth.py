@@ -85,17 +85,21 @@ async def test_adaptive_skips_the_local_agent_whose_server_is_down(opencode_conf
 
 
 @pytest.mark.asyncio
-async def test_a_manual_pick_of_an_offline_local_agent_fails_fast_with_the_address(opencode_config, monkeypatch):
+async def test_a_manual_pick_of_an_offline_local_agent_hands_over_at_once(opencode_config, monkeypatch):
     async def fake(base):
         return None
     monkeypatch.setattr(localhealth, 'served_models', fake)
     async def respond(config, prompt, mode, root):
-        return AgentResult('should not run', 1, 1)
+        return AgentResult('Explained.', 1, 1)
     store, runner, agent, project, session = make(opencode_config.parent, respond)
     session = await turn(runner, store, 'tenant-a', project, session, 'Explain app.py.', 'coder', 'read')
     reply = session['messages'][-1]
-    assert reply['status'] == 'failed' and 'coder at http://localhost:9095/v1' in reply['error']
-    assert agent.calls == []  # No turn was spent on a server that is not there.
+    # No turn was spent on a server that is not there, nor on the other local one, which is down too.
+    assert reply['status'] == 'complete' and reply['model_id'] == 'codex' and [c['model_id'] for c in agent.calls] == ['codex']
+    store.delete('tenant-a', 'models', 'codex')
+    session = await turn(runner, store, 'tenant-a', project, session, 'Explain app.py.', 'coder', 'read')
+    reply = session['messages'][-1]
+    assert reply['status'] == 'failed' and 'coder at http://localhost:9095/v1' in reply['error']  # Nobody left: the address.
 
 
 def test_a_local_model_context_window_comes_from_opencode_settings(opencode_config):
