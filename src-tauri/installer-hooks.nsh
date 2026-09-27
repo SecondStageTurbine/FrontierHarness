@@ -22,7 +22,12 @@
   ${EndIf}
 !macroend
 
+; Before 0.25.1 the main binary was frontier.exe, which Discord's game list names as a game called "Frontier".
+; An update from those versions must close that one too; the installer then deletes it.
+!define LEGACY_EXE "frontier.exe"
+
 !macro NSIS_HOOK_PREINSTALL
+  !insertmacro CheckIfAppIsRunning "${LEGACY_EXE}" "${PRODUCTNAME}"
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
   !insertmacro CheckIfAppIsRunning "${BACKEND_EXE}" "${PRODUCTNAME} backend"
   ; The kill macro trusts its own return code without confirming the image is

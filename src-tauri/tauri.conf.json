@@ -1,7 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Frontier",
-  "version": "0.25.0",
+  "mainBinaryName": "frontier-harness",
+  "version": "0.25.1",
   "identifier": "dev.frontier.harness",
   "build": {
     "beforeDevCommand": "npm run build",

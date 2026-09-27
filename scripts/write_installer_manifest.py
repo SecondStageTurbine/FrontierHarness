@@ -16,8 +16,8 @@ def digest(path):
 assert digest(sidecar)==digest(installed/'frontier-backend.exe'),'Installed backend differs from the current build.'
 report=json.loads((root/'docs/packaged-verification.json').read_text(encoding='utf-8'))
 assert digest(sidecar)==report['executable_sha256'],'The installed backend was not the one tested.'
-desktop=(root/'src-tauri/target/release/frontier.exe').read_bytes()
-installed_desktop=(installed/'frontier.exe').read_bytes()
+desktop=(root/'src-tauri/target/release/frontier-harness.exe').read_bytes()
+installed_desktop=(installed/'frontier-harness.exe').read_bytes()
 # Tauri stamps the installer copy as NSS and restores the loose exe to UNK.
 marker=b'__TAURI_BUNDLE_TYPE_VAR_UNK'
 offset=desktop.index(marker)

@@ -754,3 +754,10 @@ Activity panel every 1.2 s while running. Checked live with each tool on a task 
 "▸ Bash: ls -la", "▸ Read: …notes.txt", "↳ 1 code word: PELICAN"; OpenCode "▸ read: notes.txt", "▸ bash: ls"; Codex its
 session header and commands. agy could not be checked: its account reports RESOURCE_EXHAUSTED (individual quota,
 resets in about 155 hours), which Frontier reads as out of usage and fails over from.
+
+Version 0.25.1: Discord showed the user as playing "Frontier" and drew its game overlay over the window. Discord's public
+detectable-applications list (discord.com/api/v9/applications/detectable, 24,496 entries) has an application "Frontier"
+whose Windows executable is `frontier.exe`, the name of Frontier's main binary. The main binary is now
+`frontier-harness.exe` (tauri.conf.json mainBinaryName), which no entry in that list uses. Tauri's installer already deletes
+a previous main binary recorded under MainBinaryName and retargets Start menu and desktop shortcuts; the preinstall hook
+now also closes a running `frontier.exe`, so an update from an earlier version cannot leave it holding files.
