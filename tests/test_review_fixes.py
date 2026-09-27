@@ -335,3 +335,25 @@ def test_the_live_view_route_returns_new_lines_and_a_workers_lines_reach_its_tea
         assert [l['text'] for l in c.get(f'/api/t/{t}/projects/{project["id"]}/sessions/{worker["id"]}/live?since=1').json()['lines']] == ['3 passed']
         team = c.get(f'/api/t/{t}/projects/{project["id"]}/sessions/{parent["id"]}/live').json()
         assert [l['text'] for l in team['lines']] == ['[Write A] ▸ bash: npm test', '[Write A] 3 passed']
+
+
+def test_a_chat_needs_no_project_and_its_agent_is_told_so(tmp_path):
+    seen = []
+    async def respond(config, prompt, mode, root):
+        seen.append(prompt)
+        return AgentResult('Paris.', 1, 1)
+    with TestClient(create_app(str(tmp_path/'state'), ScriptedAgent(respond=respond))) as c:
+        t = setup(c)
+        chats = c.post(f'/api/t/{t}/chats').json()
+        assert chats['kind'] == 'chats' and chats['name'] == 'Chats' and Path(chats['root']).is_dir()
+        assert c.post(f'/api/t/{t}/chats').json()['id'] == chats['id']  # One per workspace, made once.
+        session = c.post(f'/api/t/{t}/projects/{chats["id"]}/sessions', json={'name': 'New session'}).json()
+        sent = c.post(f'/api/t/{t}/projects/{chats["id"]}/sessions/{session["id"]}/instructions',
+                      json={'content': 'What is the capital of France?', 'model_id': connect_agent(c, t), 'mode': 'read'})
+        assert sent.status_code == 200, sent.text
+        for _ in range(100):
+            reply = c.get(f'/api/t/{t}/projects/{chats["id"]}/sessions/{session["id"]}').json()['messages'][-1]
+            if reply['status'] != 'running':
+                break
+            time.sleep(0.05)
+        assert reply['content'] == 'Paris.' and 'not about a project' in seen[0]

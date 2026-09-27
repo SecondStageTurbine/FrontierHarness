@@ -761,3 +761,10 @@ whose Windows executable is `frontier.exe`, the name of Frontier's main binary. 
 `frontier-harness.exe` (tauri.conf.json mainBinaryName), which no entry in that list uses. Tauri's installer already deletes
 a previous main binary recorded under MainBinaryName and retargets Start menu and desktop shortcuts; the preinstall hook
 now also closes a running `frontier.exe`, so an update from an earlier version cannot leave it holding files.
+
+Version 0.26.0: every conversation belonged to a project, so a question about anything first needed a project. POST
+/api/t/{t}/chats returns the workspace's Chats project, creating it once as a managed project (its own folder under
+Frontier Projects) marked kind "chats"; the sidebar's New chat selects it and opens a new conversation, and lists it
+first with a chat icon. A turn there gets an environment note saying the conversation is not about a project and the
+folder is scratch space. Tested through the API: Chats is made once per workspace, its folder exists, and a turn in
+it answers with the note in the agent's prompt.

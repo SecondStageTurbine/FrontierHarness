@@ -202,6 +202,14 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         scoped(request,tenant_id)
         return files.create(tenant_id,payload.name,payload.root)
 
+    @app.post('/api/t/{tenant_id}/chats')
+    def chats(tenant_id:str,request:Request):
+        """The place for conversations that belong to no project: one per workspace, made the first time it is
+        wanted, in a folder of its own that Frontier manages, because every agent needs a working directory."""
+        scoped(request,tenant_id)
+        existing=next((p for p in store.list(tenant_id,'projects') if p.get('kind')=='chats'),None)
+        return existing or store.put(tenant_id,'projects',{**files.create(tenant_id,'Chats'),'kind':'chats'})
+
     @app.delete('/api/t/{tenant_id}/projects/{project_id}')
     def remove_project(tenant_id:str,project_id:str,request:Request):
         """Untrack a project from this workspace. The folder on disk is left exactly where it is."""

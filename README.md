@@ -22,6 +22,7 @@ looked like before and after so any turn can be reverted.
 
 | | |
 |---|---|
+| **Chats** | **New chat** starts a conversation about anything, with no project open. Chats live together at the top of the project list, in a scratch folder Frontier manages, and the agent is told the conversation is not about a codebase. |
 | **Four agents, your subscriptions** | Claude Code, Codex, Antigravity CLI (Gemini) and OpenCode run as the tools you already installed and signed in to. No API key is needed to take a turn. Several logins per tool can be connected; a spent one hands over to the next. |
 | **Adaptive routing** | Pick Adaptive and each message goes to the least expensive agent whose capability profile covers it, escalating to a stronger one with a handoff if that agent fails. |
 | **Three postures, approval and question cards** | Read only, Edit files, Full auto, translated into each tool's own flags. Claude asks before running a command, and asks you a question instead of guessing; cards in the conversation answer both. |

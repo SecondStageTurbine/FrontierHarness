@@ -656,6 +656,10 @@ class AgentRunner:
         environment = ' '.join(filter(None, [(self.files.python_env(root) or {}).get('note'), browser_note(project, root)])) or None
         board_text = board.render(board.tasks(self.store, tenant_id, project_id))
         environment = ' '.join(filter(None, [environment, sandbox_note(sandbox.policy(project))])) or None
+        if project.get('kind') == 'chats':
+            # A chat is about anything; its folder is only somewhere to stand, not a codebase to look through.
+            environment = ('This is a general conversation, not about a project. The working folder is an empty scratch '
+                           'space for any files the conversation calls for; do not look through it for context.')
         # Read only cannot change the folder, so it is not read twice to prove that.
         # In a repository, the whole working tree is also checkpointed as hidden git objects, so a
         # turn can be put back exactly, binaries included, without touching the user's branch.
