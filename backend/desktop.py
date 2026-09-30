@@ -20,9 +20,16 @@ def watch_parent():
             subprocess.run(['taskkill','/PID',str(os.getpid()),'/T','/F'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=0x08000000)
             os._exit(0)
     else:
-        while os.getppid()==parent:
+        # Not getppid(): the frozen backend's parent is PyInstaller's bootloader, not Frontier.
+        # ponytail: a recycled pid keeps this alive; pidfd_open if that ever shows up.
+        while True:
+            try:
+                os.kill(parent,0)
+            except ProcessLookupError:
+                os._exit(0)
+            except PermissionError:
+                pass
             time.sleep(2)
-        os._exit(0)
 
 def main():
     # The bundled Python interpreter also runs the supported project checks.

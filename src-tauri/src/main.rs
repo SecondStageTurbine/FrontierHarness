@@ -174,7 +174,7 @@ fn launch(app: &mut tauri::App, data: &Path) -> Result<(),Box<dyn std::error::Er
     std::fs::write(port_file,port.to_string())?;
     drop(socket);
     let ticket = uuid::Uuid::new_v4().to_string() + &uuid::Uuid::new_v4().to_string();
-    let packaged = std::env::current_exe()?.parent().unwrap().join("frontier-backend.exe");
+    let packaged = std::env::current_exe()?.parent().unwrap().join(format!("frontier-backend{}",std::env::consts::EXE_SUFFIX));
     let mut command = if packaged.exists() {
         Command::new(packaged)
     } else {

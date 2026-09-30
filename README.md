@@ -314,6 +314,19 @@ The build bundles the backend with PyInstaller, then creates a Tauri NSIS instal
 
 Updates are signed with a minisign key that is not in this repository. Set `TAURI_SIGNING_PRIVATE_KEY` to the private key's text (PowerShell: `$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content ~/.tauri/frontier.key -Raw`) before `npm run desktop:build` so the installer gets its `.sig`; an already built installer can be signed afterwards with `npx tauri signer sign -f ~/.tauri/frontier.key <installer>`. Then run `.venv\Scripts\python scripts/write_update_manifest.py` to write `latest.json` beside it. A GitHub release for tag `v<version>` needs the installer, its `.sig`, and `latest.json`; installed copies read `releases/latest/download/latest.json`. The public key lives in `src-tauri/tauri.conf.json`; losing the private key means shipping a new key with a manually installed version.
 
+#### Linux
+
+The Linux AppImage and `.deb` are built on Linux; PyInstaller cannot cross-compile the backend. Publishing a release starts the `Linux release` GitHub workflow, which builds both, tests the bundled backend, uploads them to the same release, and adds `linux-x86_64` to its `latest.json`. It needs the private key's text in the repository secret `TAURI_SIGNING_PRIVATE_KEY`. To build by hand on Ubuntu 22.04 or newer:
+
+```bash
+sudo apt-get install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
+python3 -m venv .venv && .venv/bin/python -m pip install -r requirements-build.txt
+npm ci && npm run desktop:build:linux
+.venv/bin/python scripts/test_package.py
+```
+
+On Linux, **Confine file changes to this folder** is unavailable (it relies on Windows integrity levels); the network filter works.
+
 ## Verification
 
 ```powershell

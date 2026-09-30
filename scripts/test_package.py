@@ -15,17 +15,21 @@ import httpx
 root=Path(__file__).resolve().parents[1]
 live='--live' in sys.argv
 arguments=[a for a in sys.argv[1:] if a!='--live']
-executable=Path(arguments[0]).resolve() if arguments else root/'src-tauri/binaries/frontier-backend-x86_64-pc-windows-msvc.exe'
+windows=os.name=='nt'
+executable=Path(arguments[0]).resolve() if arguments else root/('src-tauri/binaries/frontier-backend-x86_64-pc-windows-msvc.exe' if windows else 'src-tauri/binaries/frontier-backend-x86_64-unknown-linux-gnu')
 if not executable.is_file():raise SystemExit('Build the bundled backend first.')
-env={k:v for k,v in os.environ.items() if k.upper() in {'SYSTEMROOT','WINDIR','TEMP','TMP','USERPROFILE','APPDATA','LOCALAPPDATA'}}
-env['PATH']=str(Path(os.environ['SYSTEMROOT'])/'System32')
+env={k:v for k,v in os.environ.items() if k.upper() in {'SYSTEMROOT','WINDIR','TEMP','TMP','USERPROFILE','APPDATA','LOCALAPPDATA','HOME','TMPDIR'}}
+# Linux keeps python3 and node in /usr/bin, so it gets an empty PATH: the bundle must not need them.
+env['PATH']=str(Path(os.environ['SYSTEMROOT'])/'System32') if windows else ''
+# No console window on Windows; on Linux a session of its own, so the whole tree can be stopped.
+CHILD={'creationflags':0x08000000} if windows else {'start_new_session':True}
 env['PYTHONUTF8']='1'
 with tempfile.TemporaryDirectory(prefix='frontier-package-') as directory:
     cwd=Path(directory)
     (cwd/'test_runtime.py').write_text('import sys\nimport unittest\nclass BundledRuntime(unittest.TestCase):\n    def test_python_is_bundled(self):\n        self.assertTrue(getattr(sys, "frozen", False))\n    def test_standard_library(self):\n        self.assertEqual(sum([1, 2, 3]), 6)\n',encoding='utf-8')
     checks=[]
     for module,args in [('unittest',['discover']),('pytest',['-q']),('compileall',['-q','.'])]:
-        result=subprocess.run([str(executable),'--project-check',module,*args],cwd=cwd,env=env,capture_output=True,text=True,timeout=120,creationflags=0x08000000)
+        result=subprocess.run([str(executable),'--project-check',module,*args],cwd=cwd,env=env,capture_output=True,text=True,timeout=120,**CHILD)
         assert result.returncode==0,(module,result.stdout,result.stderr)
         checks.append({'module':module,'exit_code':result.returncode,'output':(result.stdout+result.stderr).strip()})
     with socket.socket() as sock:
@@ -42,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix='frontier-package-') as directory:
         if node:env['PATH']=str(Path(node).parent)+os.pathsep+env['PATH']
     live_result=None
     with (cwd/'backend.log').open('w',encoding='utf-8') as log:
-        proc=subprocess.Popen([str(executable)],cwd=cwd,env=env,stdout=log,stderr=log,creationflags=0x08000000)
+        proc=subprocess.Popen([str(executable)],cwd=cwd,env=env,stdout=log,stderr=log,**CHILD)
         try:
             with httpx.Client(base_url=f'http://127.0.0.1:{port}',trust_env=False,timeout=5) as client:
                 for _ in range(180):
@@ -94,7 +98,8 @@ with tempfile.TemporaryDirectory(prefix='frontier-package-') as directory:
                         'changed_files':[{'path':c['path'],'status':c['status']} for c in reply['changes']],
                         'input_tokens':reply['input_tokens'],'output_tokens':reply['output_tokens']}
         finally:
-            subprocess.run(['taskkill','/PID',str(proc.pid),'/T','/F'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=0x08000000)
+            if windows:subprocess.run(['taskkill','/PID',str(proc.pid),'/T','/F'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,**CHILD)
+            else:subprocess.run(['kill','-9','--',f'-{proc.pid}'],stderr=subprocess.DEVNULL)  # the group, even if the leader already died
             proc.wait(timeout=15)
     with executable.open('rb') as binary:checksum=hashlib.file_digest(binary,'sha256').hexdigest()
     report={'executable':executable.name,'executable_sha256':checksum,'no_system_python_or_node_on_path':True,'checks':checks,'packaged_assets':True,'authentication':True,'project_file_access':True,'tenant_isolation':True}

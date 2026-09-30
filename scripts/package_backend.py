@@ -5,13 +5,15 @@ import sys
 from pathlib import Path
 
 root=Path(__file__).resolve().parents[1]
-if sys.platform!='win32':
-    raise SystemExit('Build the Windows installer on Windows.')
+# PyInstaller cannot cross-compile, so each platform's backend is built on that platform.
+TARGETS={'win32':'x86_64-pc-windows-msvc','linux':'x86_64-unknown-linux-gnu'}
+if sys.platform not in TARGETS:
+    raise SystemExit('Frontier packages on Windows x64 and Linux x64 only.')
 if importlib.util.find_spec('PyInstaller') is None:
-    raise SystemExit('Install packaging tools: .venv\\Scripts\\python -m pip install -r requirements-build.txt')
+    raise SystemExit('Install packaging tools: <.venv python> -m pip install -r requirements-build.txt')
 triple=next(line.split(': ',1)[1] for line in subprocess.check_output(['rustc','-vV'],text=True).splitlines() if line.startswith('host: '))
-if triple!='x86_64-pc-windows-msvc':
-    raise SystemExit('This installer configuration targets Windows x64 MSVC.')
+if triple!=TARGETS[sys.platform]:
+    raise SystemExit(f'This installer configuration targets {TARGETS[sys.platform]}, not {triple}.')
 if not (root/'dist/index.html').is_file():
     raise SystemExit('Build frontend assets first with npm run build.')
 command=[sys.executable,'-m','PyInstaller','--noconfirm','--onefile','--console',

@@ -1,0 +1,71 @@
+# Builds the Linux AppImage and .deb. The Windows installer is built and released by hand;
+# publishing that release starts this job, which adds the Linux files to the same release and
+# its platform to latest.json, so the in-app updater serves both. Run it by hand to test a build.
+name: Linux release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    # The oldest supported runner, so the AppImage runs on distributions with an older glibc.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf libfuse2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements-build.txt
+          npm ci
+
+      - name: Build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+        run: npm run desktop:build:linux
+
+      - name: Test the bundled backend
+        run: .venv/bin/python scripts/test_package.py
+
+      - name: Add to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          bundle=src-tauri/target/release/bundle
+          gh release download "$TAG" -p latest.json -D "$RUNNER_TEMP" || true
+          .venv/bin/python scripts/write_update_manifest.py --merge "$RUNNER_TEMP/latest.json"
+          gh release upload "$TAG" --clobber $bundle/appimage/*.AppImage $bundle/appimage/*.AppImage.sig $bundle/deb/*.deb $bundle/appimage/latest.json
+
+      - name: Keep the build
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontier-linux
+          path: |
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/deb/*.deb
