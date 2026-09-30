@@ -243,11 +243,19 @@ async def apply_between(root, before, after):
     patch = await run(root, 'diff', '--binary', before, after)
     if not patch.strip():
         return False
-    proc = await asyncio.create_subprocess_exec('git', 'apply', '--3way', '--whitespace=nowarn', cwd=str(root), env=child_env(GIT_TERMINAL_PROMPT='0'),
-                                                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **child_flags())
-    out, err = await proc.communicate(patch.encode('utf-8', 'surrogateescape'))
-    if proc.returncode != 0:
-        raise GitError((err.decode('utf-8', 'replace').strip() or out.decode('utf-8', 'replace').strip() or 'git apply failed')[:1500])
+    async def apply(*flags):
+        proc = await asyncio.create_subprocess_exec('git', 'apply', *flags, '--whitespace=nowarn', cwd=str(root), env=child_env(GIT_TERMINAL_PROMPT='0'),
+                                                    stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **child_flags())
+        out, err = await proc.communicate(patch.encode('utf-8', 'surrogateescape'))
+        return proc.returncode, (err.decode('utf-8', 'replace').strip() or out.decode('utf-8', 'replace').strip() or 'git apply failed')[:1500]
+    # A plain apply first: it touches only the working tree, so it also lands on files an earlier
+    # task created and left untracked, which a three-way apply refuses ("does not exist in index").
+    # It is all or nothing, so a patch that does not fit exactly falls through to the three-way merge.
+    if (await apply())[0] == 0:
+        return True
+    code, error = await apply('--3way')
+    if code != 0:
+        raise GitError(error)
     # A three-way apply stages what it lands; the user should see plain working-tree changes and commit deliberately.
     await stage(root, [path for _, path in await changed_between(root, before, after)], staged=False)
     return True

@@ -3,12 +3,14 @@
 The lead takes a Read-only turn to plan the work as tasks. Frontier hands each task to an agent,
 the lead's choice or Adaptive's by capability, as its own session, in its own worktree when the
 project is a repository, running independent tasks at the same time. Each worker's changes are
-brought back as a patch, the lead reviews the reports and the diff, may send one round of fixes,
-and writes the final reply. The lead never edits; the workers never see each other's transcripts.
+brought back as a patch. Another model family always reviews the integrated work, the project's
+own tests run, then the lead reviews the reports, the diff and the test result, may send one round
+of fixes, and writes the final reply. The lead never edits; the workers never see each other's transcripts.
 """
 import asyncio
 import json
 import re
+from pathlib import Path
 
 from . import board
 from . import adaptive, benchmark, gitops, localhealth
@@ -67,7 +69,9 @@ REVIEW_ASK = (
     'Judge whether the request is now done. Reply with ONLY a JSON object inside a ```json fence: '
     '{"verdict": "done" or "fix", "fixes": [{"task_id": "t1", "instructions": "what to change"}], '
     '"reply": "your final message to the user, in markdown, describing what was done, by whom, and anything left open"}. '
-    'Ask for fixes only for real defects a worker can correct in one more pass; otherwise say done.'
+    'Ask for fixes only for real defects a worker can correct in one more pass; otherwise say done. '
+    'If the project\'s tests failed because of the team\'s work, ask for fixes; say done with failing tests only '
+    'when the failure plainly has nothing to do with this work, and say so in your reply.'
 )
 
 
@@ -109,6 +113,43 @@ def normalise_plan(plan):
     for task in tasks:
         task['depends_on'] = [d for d in task['depends_on'] if d in seen and d != task['id']]
     return {'summary': (plan or {}).get('summary') or '', 'tasks': tasks}
+
+
+def ensure_review(tasks, agents, lead):
+    """Every team's work gets a review by another model family, whether or not the lead planned one.
+
+    Added last and after every other task, so it sees the integrated result; `assign` then gives it
+    to a family other than the lead's and the authors'. With only the lead's family connected, the
+    lead's own final review is all there is, so nothing is added.
+    """
+    if not tasks or any(is_review(t) for t in tasks) or all(a['provider'] == lead['provider'] for a in agents):
+        return
+    ids = [t['id'] for t in tasks]
+    tasks.append({'id': 'review', 'title': 'Review the integrated result', 'needs': ['review'], 'agent': None, 'parallel': False, 'depends_on': ids,
+                  'instructions': 'The other tasks are finished and their changes are in this folder. Review them against the user\'s request: '
+                                  'read the changed files, run the project\'s tests or build if it has them, and fix clear defects directly. '
+                                  'Report what you checked, what you fixed, and anything still wrong.',
+                  'status': 'pending', 'session_id': None, 'model_id': None, 'model_name': None, 'report': '', 'merge': None})
+
+
+def project_tests(root):
+    """The project's own test command when it plainly has one, else None. Only commands the project
+    check runner accepts, so the gate runs exactly what the user could run from the Terminal panel."""
+    root = Path(root)
+    try:
+        scripts = json.loads((root/'package.json').read_text(encoding='utf-8')).get('scripts')
+    except (OSError, ValueError, AttributeError):
+        scripts = None
+    test = scripts.get('test') if isinstance(scripts, dict) else None
+    if isinstance(test, str) and test.strip() and 'no test specified' not in test:
+        return 'npm test'
+    try:
+        pyproject = (root/'pyproject.toml').read_text(encoding='utf-8')
+    except OSError:
+        pyproject = ''
+    if (root/'pytest.ini').exists() or (root/'conftest.py').exists() or '[tool.pytest' in pyproject or any((root/'tests').glob('test_*.py')):
+        return 'python -m pytest -q'
+    return None
 
 
 REVIEW_WORDS = re.compile(r'\b(review|audit|verify|verification|integrat\w*|final gate|check)\b', re.I)
@@ -237,6 +278,7 @@ class Team:
             plan = normalise_plan(parse_json(raw))
             if not plan['tasks']:
                 raise ProviderError(f'{self.lead["name"]} did not return a plan the team could run. Its reply: {raw[:600]}')
+            ensure_review(plan['tasks'], agents, self.lead)
             session, message = self.state()
             team = message['team']
             team.update(status='working', summary=plan['summary'], tasks=plan['tasks'])
@@ -262,7 +304,8 @@ class Team:
             team = message['team']
             team['status'] = 'reviewing'
             self.save(message, session, f'{self.lead["name"]} is reviewing the team’s work.')
-            verdict = parse_json(await self.ask_lead(await self.review_prompt(objective, team, repo))) or {}
+            tests = await self.run_tests()
+            verdict = parse_json(await self.ask_lead(await self.review_prompt(objective, team, repo, tests))) or {}
             reply = (verdict.get('reply') or '').strip()
             planned = {t['id'] for t in team['tasks']}
             fixes = [f for f in (verdict.get('fixes') or []) if isinstance(f, dict) and str(f.get('task_id')) in planned and f.get('instructions')]
@@ -282,7 +325,11 @@ class Team:
             team = message['team']
             team['status'] = 'done'
             self.save(message, session, 'The team finished.')
-            return AgentResult(reply or self.summary(team), self.tokens[0] or None, self.tokens[1] or None)
+            reply = reply or self.summary(team)
+            if tests and not tests['passed']:
+                # The lead may judge a failure unrelated, but the user is never left thinking the tests passed.
+                reply += f'\n\n**Tests:** `{tests["command"]}` failed after the team\'s work. The output is in the Terminal panel.'
+            return AgentResult(reply, self.tokens[0] or None, self.tokens[1] or None)
         return AgentResult(self.summary(team), self.tokens[0] or None, self.tokens[1] or None)
 
     async def resume(self, agents, repo, cooling):
@@ -328,7 +375,18 @@ class Team:
     def summary(self, team):
         return 'The team finished.\n\n' + '\n'.join(f'- **{t["title"]}** ({t["model_name"]}): {t["status"]}' + (f' — {t["report"][:300]}' if t.get('report') else '') for t in team['tasks'])
 
-    async def review_prompt(self, objective, team, repo):
+    async def run_tests(self):
+        """The project's own tests on the integrated result, recorded in the lead's session like a check the user ran."""
+        command = project_tests(self.root)
+        if not command:
+            return None
+        session, message = self.state()
+        self.save(message, session, f'Running the project’s tests: {command}.')
+        # ponytail: no baseline run, so a failure that predates the team is left to the lead to recognise.
+        record = await self.runner.files.run_command(self.tenant_id, self.project_id, self.session_id, command)
+        return {'command': command, 'passed': record['status'] == 'completed', 'output': (record.get('output') or '')[-4000:]}
+
+    async def review_prompt(self, objective, team, repo, tests=None):
         reports = '\n\n'.join(f'TASK {t["id"]} — {t["title"]} — {t["model_name"]} — {t["status"]}' + (f' (merge: {t["merge"]})' if t.get('merge') else '') + f'\n{t["report"][:3000]}' for t in team['tasks'])
         diff = ''
         if repo and team.get('checkpoint'):
@@ -339,7 +397,10 @@ class Team:
                 diff += '\n' + body[:40000] + ('\n… (diff truncated)' if len(body) > 40000 else '')
             except gitops.GitError as exc:
                 diff = f'(diff unavailable: {exc})'
-        return f'{REVIEW_ASK}\n\nREQUEST FROM THE USER:\n{objective}\n\nPLAN:\n{team.get("summary")}\n\nREPORTS:\n{reports}\n\nDIFF OF THE PROJECT AFTER THE TEAM WORKED:\n{diff or "(not a git repository; see the reports)"}'
+        checks = ('(the project has no test command Frontier recognises)' if tests is None else
+                  f'{tests["command"]}: {"passed" if tests["passed"] else "FAILED"}\n{tests["output"]}')
+        return (f'{REVIEW_ASK}\n\nREQUEST FROM THE USER:\n{objective}\n\nPLAN:\n{team.get("summary")}\n\nREPORTS:\n{reports}\n\n'
+                f'DIFF OF THE PROJECT AFTER THE TEAM WORKED:\n{diff or "(not a git repository; see the reports)"}\n\nTHE PROJECT\'S TESTS:\n{checks}')
 
     def update_task(self, task_id, note=None, **fields):
         """Change one task on a fresh read of the session, so parallel workers never overwrite each other."""

@@ -768,3 +768,16 @@ Frontier Projects) marked kind "chats"; the sidebar's New chat selects it and op
 first with a chat icon. A turn there gets an environment note saying the conversation is not about a project and the
 folder is scratch space. Tested through the API: Chats is made once per workspace, its folder exists, and a turn in
 it answers with the note in the agent's prompt.
+
+Version 0.27.0: a team's cross-model review depended on the lead planning a review task, and its final verdict never
+saw a test run. team.ensure_review now appends a review task depending on every other task when the plan has none
+and another provider than the lead's is connected; assign gives it to a family other than the lead's and the
+authors'. team.project_tests picks `npm test` (a real test script, not npm's placeholder) or `python -m pytest -q`
+(pytest.ini, conftest.py, [tool.pytest] or tests/test_*.py); Team.run_tests runs it through the project check runner
+before each lead review, the result goes into the review prompt, and a failure still present at the end is appended
+to the reply. Building the test exposed gitops.apply_between failing with "does not exist in index" when a fix touched
+a file an earlier task created (untracked in the lead's folder): it now tries a plain git apply first and falls back
+to --3way. Tested: ensure_review's three cases, test command detection, and a full team run in both directions (a
+failing test becomes a fix and the rerun passes; a lead that says done with failing tests still gets them named).
+The Linux AppImage and .deb were built and the frozen backend passed scripts/test_package.py under WSL Ubuntu and on
+GitHub's ubuntu-22.04 runner; the linux-release workflow adds them to each published release.

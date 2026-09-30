@@ -186,6 +186,8 @@ def test_a_task_too_big_for_a_local_model_goes_once_to_a_cloud_agent(tmp_path, m
             return AgentResult('{"summary": "One step.", "tasks": [{"id": "a", "title": "Read the logs", "instructions": "Summarise every log.", "agent": "OpenCode"}]}', 5, 5)
         if 'REPORTS:' in prompt:
             return AgentResult('{"verdict": "done", "reply": "Done."}', 5, 5)
+        if 'YOUR TASK — Review the integrated result' in prompt:
+            return AgentResult('Checked.', 1, 1)  # The review Frontier adds after the work.
         ran.append(config['provider'])
         if config['provider'] == 'opencode_cli':
             raise ProviderError("OpenCode stopped with an error: request exceeds the available context size. The conversation outgrew the model's context window.")
@@ -202,7 +204,9 @@ def test_a_task_too_big_for_a_local_model_goes_once_to_a_cloud_agent(tmp_path, m
     assert task['status'] == 'done' and task['model_id'] != 'opencode_cli'  # The worker's turn handed itself over.
     records = {r['id']: r for r in store.list('tenant-a', 'track_records')}
     assert records['opencode_cli']['failed'] == 1 and records['opencode_cli']['overflows'] == 1
-    assert records[task['model_id']]['done'] == 1
+    tasks = store.get('tenant-a', 'sessions', session['id'])['messages'][-1]['team']['tasks']
+    # Its done count also holds the added review when that went to the same agent.
+    assert records[task['model_id']]['done'] == sum(t['model_id'] == task['model_id'] for t in tasks)
 
 
 def test_a_stopped_team_continues_with_only_its_unfinished_tasks(tmp_path):
@@ -214,6 +218,8 @@ def test_a_stopped_team_continues_with_only_its_unfinished_tasks(tmp_path):
         if 'REPORTS:' in prompt:
             ran.append('review')
             return AgentResult('{"verdict": "done", "reply": "Both written."}', 5, 5)
+        if 'YOUR TASK — Review the integrated result' in prompt:
+            return AgentResult('Checked.', 1, 1)  # The review Frontier adds after the work.
         name = 'a' if 'YOUR TASK — Write A' in prompt else 'b'
         ran.append(name)
         if name == 'b' and ran.count('b') == 1:
@@ -239,7 +245,7 @@ def test_a_stopped_team_continues_with_only_its_unfinished_tasks(tmp_path):
     reply = store.get('tenant-a', 'sessions', session['id'])['messages'][-1]
     assert reply['status'] == 'complete' and reply['content'] == 'Both written.', reply.get('error')
     assert ran == ['a', 'b', 'b', 'review']  # A was not redone; the lead did not plan again.
-    assert [t['status'] for t in reply['team']['tasks']] == ['done', 'done']
+    assert [t['status'] for t in reply['team']['tasks']] == ['done', 'done', 'done']
     assert reply['team']['objective'] == 'Create a.txt, then b.txt.'
     with pytest.raises(ValueError):
         runner.continue_team('tenant-a', project['id'], session['id'])
@@ -282,6 +288,8 @@ def test_a_team_worker_and_lead_that_cannot_run_are_replaced(tmp_path):
             return AgentResult('{"summary": "One step.", "tasks": [{"id": "a", "title": "Write A", "instructions": "Create a.txt.", "agent": "Gemini"}]}', 5, 5)
         if 'REPORTS:' in prompt:
             return AgentResult('{"verdict": "done", "reply": "Done."}', 5, 5)
+        if 'YOUR TASK — Review the integrated result' in prompt:
+            return AgentResult('Checked.', 1, 1)  # The review Frontier adds after the work.
         ran.append(config['provider'])
         (Path(root)/'a.txt').write_text('A', encoding='utf-8')
         return AgentResult('Wrote a.txt.', 1, 1)

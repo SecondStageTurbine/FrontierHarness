@@ -76,6 +76,8 @@ def test_a_lead_plans_workers_do_the_tasks_in_worktrees_and_the_lead_reviews(tmp
         if 'REPORTS:' in prompt:
             assert mode == 'read' and 'a.txt' in prompt and 'b.txt' in prompt
             return AgentResult('```json\n{"verdict": "done", "fixes": [], "reply": "Both files are in place."}\n```', 30, 10)
+        if 'YOUR TASK — Review the integrated result' in prompt:
+            return AgentResult('Both files read correctly.', 10, 5)
         # A worker: write the file its task names, in its own worktree.
         name = 'a.txt' if 'YOUR TASK — Write A' in prompt else 'b.txt'
         (Path(root)/name).write_text(name[0].upper(), encoding='utf-8')
@@ -92,9 +94,11 @@ def test_a_lead_plans_workers_do_the_tasks_in_worktrees_and_the_lead_reviews(tmp
     assert reply['status'] == 'complete', reply.get('error')
     assert reply['content'] == 'Both files are in place.'
     tasks = reply['team']['tasks']
-    assert reply['team']['status'] == 'done' and [t['status'] for t in tasks] == ['done', 'done']
+    assert reply['team']['status'] == 'done' and [t['status'] for t in tasks] == ['done', 'done', 'done']
     assert tasks[1]['model_id'] == 'codex_cli' and tasks[0]['model_id'] in ('claude_cli', 'codex_cli', 'opencode_cli')
-    assert all(t['merge'] == 'applied' for t in tasks)
+    # The lead planned no review, so one was added after the work, for a family other than the lead's.
+    assert tasks[2]['id'] == 'review' and tasks[2]['depends_on'] == ['a', 'b'] and tasks[2]['model_id'] != 'claude_cli'
+    assert all(t['merge'] == 'applied' for t in tasks[:2])
     # The plan is on the project's board too, done, each task pointing at its worker's session.
     from backend import board
     on_board = board.tasks(store, 'tenant-a', project['id'])
@@ -104,7 +108,7 @@ def test_a_lead_plans_workers_do_the_tasks_in_worktrees_and_the_lead_reviews(tmp
     assert (root/'a.txt').read_text(encoding='utf-8') == 'A' and (root/'b.txt').read_text(encoding='utf-8') == 'B'
     worker_ids = {t['session_id'] for t in tasks}
     workers = [s for s in store.list('tenant-a', 'sessions') if s['id'] in worker_ids]
-    assert len(workers) == 2 and all(w['team_parent'] == session['id'] and w.get('worktree') for w in workers)
+    assert len(workers) == 3 and all(w['team_parent'] == session['id'] and w.get('worktree') for w in workers)
     assert not (Path(workers[0]['worktree']['path'])/'.env').exists()  # Nothing copied unless configured.
     lead_calls = [p for p in prompts if p[1] == 'read']
     assert len(lead_calls) == 2 and all(p[0] == 'claude_cli' for p in lead_calls)
@@ -338,3 +342,72 @@ def test_review_tasks_are_recognised_by_their_title_alone():
     assert team.is_review({'title': 'Review and integrate Web fixes, final gate', 'needs': ['coding']})
     assert team.is_review({'title': 'Audit the auth changes', 'needs': []})
     assert not team.is_review({'title': 'Previewing the checkout page', 'needs': []})  # A word boundary, not a substring.
+
+
+def test_a_plan_without_a_review_gets_one_from_another_family_when_one_is_connected():
+    claude = {'id': 'claude_cli', 'name': 'Claude', 'provider': 'claude_cli'}
+    codex = {'id': 'codex_cli', 'name': 'Codex', 'provider': 'codex_cli'}
+    work = lambda: [{'id': 'a', 'title': 'Write A', 'needs': ['coding']}, {'id': 'b', 'title': 'Write B', 'needs': ['coding']}]
+    tasks = work()
+    team.ensure_review(tasks, [claude, codex], claude)
+    assert [t['id'] for t in tasks] == ['a', 'b', 'review'] and tasks[-1]['depends_on'] == ['a', 'b'] and team.is_review(tasks[-1])
+    planned = work() + [{'id': 'r', 'title': 'Audit the changes', 'needs': []}]
+    team.ensure_review(planned, [claude, codex], claude)
+    assert len(planned) == 3  # The lead already planned one.
+    alone = work()
+    team.ensure_review(alone, [claude], claude)
+    assert len(alone) == 2  # Only the lead's family: its own final review is all there is.
+
+
+def test_the_projects_own_test_command_is_recognised(tmp_path):
+    assert team.project_tests(tmp_path) is None
+    (tmp_path/'package.json').write_text('{"scripts": {"test": "echo \\"Error: no test specified\\" && exit 1"}}', encoding='utf-8')
+    assert team.project_tests(tmp_path) is None  # npm init's placeholder is not a test suite.
+    (tmp_path/'pytest.ini').write_text('[pytest]\n', encoding='utf-8')
+    assert team.project_tests(tmp_path) == 'python -m pytest -q'
+    (tmp_path/'package.json').write_text('{"scripts": {"test": "vitest run"}}', encoding='utf-8')
+    assert team.project_tests(tmp_path) == 'npm test'
+    (tmp_path/'package.json').write_text('not json', encoding='utf-8')
+    assert team.project_tests(tmp_path) == 'python -m pytest -q'
+
+
+@needs_git
+@pytest.mark.parametrize('lead_fixes', [True, False])
+def test_the_projects_tests_run_before_the_leads_verdict(tmp_path, lead_fixes):
+    reviews = []
+    async def respond(config, prompt, mode, root):
+        if 'REPORTS:' in prompt:
+            reviews.append(prompt)
+            if 'FAILED' in prompt and lead_fixes:
+                return AgentResult('```json\n{"verdict": "fix", "fixes": [{"task_id": "a", "instructions": "a.txt must contain A."}], "reply": ""}\n```', 1, 1)
+            return AgentResult('```json\n{"verdict": "done", "fixes": [], "reply": "Done."}\n```', 1, 1)
+        if '"tasks"' in prompt:
+            return AgentResult('```json\n{"summary": "One file.", "tasks": [{"id": "a", "title": "Write A", "instructions": "Create a.txt containing A.", "needs": ["coding"]}]}\n```', 1, 1)
+        if 'YOUR TASK — Review' in prompt:
+            return AgentResult('Looked at it.', 1, 1)
+        # The first pass writes the wrong content; the fix writes the right one.
+        (Path(root)/'a.txt').write_text('A' if 'must contain A' in prompt else 'X', encoding='utf-8')
+        return AgentResult('Wrote a.txt.', 1, 1)
+    store = setup_store(tmp_path/'state')
+    root = repo(tmp_path)
+    (root/'pytest.ini').write_text('[pytest]\n', encoding='utf-8')
+    (root/'test_a.py').write_text("from pathlib import Path\ndef test_a():\n    assert Path('a.txt').read_text() == 'A'\n", encoding='utf-8')
+    git(root, 'add', '-A'); git(root, 'commit', '-q', '-m', 'tests')
+    runner = AgentRunner(store, ScriptedAgent(respond=respond))
+    project, session = open_project(store, runner, 'tenant-a', root)
+    async def scenario():
+        runner.send('tenant-a', project['id'], session['id'], 'Create a.txt.', 'claude_cli', 'edit', team=True)
+        await asyncio.gather(runner.turns[('tenant-a', session['id'])], return_exceptions=True)
+    asyncio.run(scenario())
+    detail = store.get('tenant-a', 'sessions', session['id'])
+    reply = detail['messages'][-1]
+    assert reply['status'] == 'complete', reply.get('error')
+    assert 'python -m pytest -q: FAILED' in reviews[0]
+    ran = [c['command'] for c in detail['commands']]
+    if lead_fixes:
+        # The failure became a fix, the tests ran again on the fixed result, and they passed.
+        assert len(reviews) == 2 and 'python -m pytest -q: passed' in reviews[1] and ran == ['python -m pytest -q'] * 2
+        assert reply['content'] == 'Done.'
+    else:
+        # The lead called it done anyway: the reply still says the tests failed.
+        assert len(reviews) == 1 and '**Tests:** `python -m pytest -q` failed' in reply['content']
