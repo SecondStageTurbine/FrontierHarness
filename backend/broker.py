@@ -313,6 +313,13 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
         # `-a` is a global flag and must precede the subcommand. Approvals are never waited on:
         # exec has no one to ask, so an unanswerable prompt would hang the turn to its timeout.
         argv = [*launch, '-a', 'never']
+        if mode == 'edit' and not extras.get('outer_sandbox'):
+            # Workspace-write is offline by default, independently of Frontier's
+            # project network setting. Open projects need outbound access; restricted
+            # projects may connect only once run_agent has installed their proxy.
+            network = (extras.get('sandbox') or {}).get('network', 'open')
+            network_access = network == 'open' or bool(extras.get('network_filter_active'))
+            argv += ['-c', 'sandbox_workspace_write.network_access=' + str(network_access).lower()]
         for server in servers:
             key = 'mcp_servers.' + re.sub(r'[^A-Za-z0-9_-]', '_', server['name'])
             if server.get('transport') == 'http':
@@ -623,6 +630,7 @@ class ModelBroker:
             net = sandbox.NetworkFilter(sandbox.PROVIDER_HOSTS.get(config['provider'], []) + sandbox.tool_hosts(extras.get('mcp_servers'))
                                         + (policy['allow'] if policy['network'] == 'allowlist' else []))
             added.update(sandbox.proxy_env(await net.start()))
+            extras['network_filter_active'] = True
         extras['sandbox_env'] = added
         self.confined += 1 if extras.get('outer_sandbox') else 0
         try:

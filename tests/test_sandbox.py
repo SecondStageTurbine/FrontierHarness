@@ -72,6 +72,48 @@ def test_codex_hands_its_own_sandbox_to_frontiers_and_telemetry_refusals_stay_qu
     assert net.blocked == ['example.com']
 
 
+@pytest.mark.parametrize('resume', [None, 'existing-session'])
+@pytest.mark.parametrize('network,filtered,enabled', [
+    ('open', False, True),
+    ('agent', False, False),
+    ('allowlist', False, False),
+    ('agent', True, True),
+    ('allowlist', True, True),
+])
+def test_codex_edit_network_matches_project_policy(tmp_path, resume, network, filtered, enabled):
+    from backend.broker import agent_argv
+    extras = {'sandbox': {'network': network}, 'network_filter_active': filtered, 'resume': resume}
+    argv = agent_argv('codex_cli', ['codex'], 'model', 'edit', tmp_path, tmp_path/'final', extras)
+    setting = 'sandbox_workspace_write.network_access=' + str(enabled).lower()
+    assert setting in argv[:argv.index('exec')]
+    assert '--dangerously-bypass-approvals-and-sandbox' not in argv
+    assert 'workspace-write' in ' '.join(argv)
+
+
+def test_codex_default_edit_network_is_open_but_other_postures_are_unchanged(tmp_path):
+    from backend.broker import agent_argv
+    argv = lambda mode, extras=None: agent_argv('codex_cli', ['codex'], 'model', mode, tmp_path, tmp_path/'final', extras)
+    assert 'sandbox_workspace_write.network_access=true' in argv('edit')
+    for mode, extras in [('read', None), ('auto', None), ('edit', {'outer_sandbox': True})]:
+        assert not any(a.startswith('sandbox_workspace_write.network_access=') for a in argv(mode, extras))
+
+
+@pytest.mark.parametrize('network', ['agent', 'allowlist'])
+def test_codex_restricted_network_gets_a_running_frontier_filter(tmp_path, monkeypatch, network):
+    from backend.broker import ModelBroker, AgentResult, agent_argv
+    broker = ModelBroker(None)
+    async def capture(tenant, config, prompt, mode, root, extras):
+        assert extras['network_filter_active'] is True
+        assert extras['sandbox_env']['HTTPS_PROXY'].startswith('http://127.0.0.1:')
+        argv = agent_argv('codex_cli', ['codex'], 'model', mode, root, root/'final', extras)
+        assert 'sandbox_workspace_write.network_access=true' in argv
+        return AgentResult('ok', None, None)
+    monkeypatch.setattr(broker, 'run_tool', capture)
+    result = asyncio.run(broker.run_agent('t', {'provider': 'codex_cli'}, 'test', 'edit', tmp_path,
+        {'sandbox': {'files': False, 'network': network, 'allow': ['purelymail.com']}}))
+    assert result.text == 'ok'
+
+
 def test_a_named_gemini_login_gets_its_own_home_and_signs_in(tmp_path):
     from fastapi.testclient import TestClient
     from backend.app import create_app
