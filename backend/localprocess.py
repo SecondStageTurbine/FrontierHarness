@@ -13,8 +13,12 @@ CHILD_ENV_KEYS = {'PATH','SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','TEMP','TMP',
                   'PROGRAMFILES','PROGRAMFILES(X86)','PROGRAMW6432','COMMONPROGRAMFILES','COMMONPROGRAMFILES(X86)','PROGRAMDATA','SYSTEMDRIVE',
                   'USERNAME','USERDOMAIN','COMPUTERNAME','OS','PROCESSOR_ARCHITECTURE','NUMBER_OF_PROCESSORS','HOMEDRIVE','HOMEPATH'}
 
+# Switches that only turn a tool's features off (OPENCODE_DISABLE_CLAUDE_CODE_SKILLS, say): never a credential,
+# and a user who sets one expects it to hold inside Frontier's turns too.
+CHILD_ENV_PREFIXES = ('OPENCODE_DISABLE_',)
+
 def child_env(**extra):
-    env={k:v for k,v in os.environ.items() if k.upper() in CHILD_ENV_KEYS}
+    env={k:v for k,v in os.environ.items() if k.upper() in CHILD_ENV_KEYS or k.upper().startswith(CHILD_ENV_PREFIXES)}
     env.update(extra)
     return env
 

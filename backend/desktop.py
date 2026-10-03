@@ -31,6 +31,24 @@ def watch_parent():
                 pass
             time.sleep(2)
 
+def log_to_data_dir(directory):
+    """Frontier's own warnings (a failed agent turn's stderr tail, for one) go to frontier.log in the data
+    folder. Without a handler they fell through to stderr, which the desktop host may never flush to
+    backend.log, so a failed turn left nothing to diagnose it with."""
+    if not directory:
+        return
+    import logging
+    from logging.handlers import RotatingFileHandler
+    from pathlib import Path
+    try:
+        handler = RotatingFileHandler(Path(directory)/'frontier.log', maxBytes=1_000_000, backupCount=2, encoding='utf-8')
+    except OSError:
+        return
+    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
+    logger = logging.getLogger('frontier')
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+
 def main():
     # The bundled Python interpreter also runs the supported project checks.
     # Do this before importing server modules or opening the private database.
@@ -55,6 +73,7 @@ def main():
         from backend.permission_tool import serve
         serve()
         return
+    log_to_data_dir(os.environ.get('HARNESS_DATA_DIR'))
     import uvicorn
     from backend.app import app
     from backend.remote import remote_host
