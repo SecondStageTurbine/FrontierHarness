@@ -78,6 +78,8 @@ def main():
     from backend.app import app
     from backend.remote import remote_host
     threading.Thread(target=watch_parent,daemon=True).start()
+    from backend import tempsweep
+    tempsweep.start()
     uvicorn.run(app,host=remote_host(os.environ.get('HARNESS_DATA_DIR')),port=int(os.environ.get('HARNESS_DESKTOP_PORT','8765')),access_log=False)
 
 if __name__=='__main__':
