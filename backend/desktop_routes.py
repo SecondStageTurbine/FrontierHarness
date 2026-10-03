@@ -1055,6 +1055,27 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
             session['auto_named']=False  # A name the user chose is never replaced by the agent's.
         return store.put(tenant_id,'sessions',session)
 
+    @app.delete('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}')
+    async def delete_session(tenant_id:str,project_id:str,session_id:str,request:Request):
+        """Delete a conversation for good: its messages, its run history and the team workers it started. A worktree
+        it made is removed too (its branch and commits stay in the repository); project files are never touched."""
+        scoped(request,tenant_id)
+        session=get_session(tenant_id,project_id,session_id)
+        workers=[s for s in store.list(tenant_id,'sessions') if s.get('team_parent')==session_id and s['project_id']==project_id]
+        doomed=[session,*workers]
+        if any(runner.busy(tenant_id,s['id']) for s in doomed):
+            raise ValueError('Stop the conversation that is still working before deleting it.')
+        root=store.get(tenant_id,'projects',project_id)['root']
+        for s in doomed:
+            if s.get('worktree'):
+                await gitops.worktree_remove(root,s['worktree']['path'])
+        with store.db() as db:
+            for s in doomed:
+                db.execute('DELETE FROM events WHERE tenant_id=? AND run_id=?',(tenant_id,s['id']))
+        for s in doomed:
+            store.delete(tenant_id,'sessions',s['id'])
+        return {'ok':True,'deleted':[s['id'] for s in doomed]}
+
     @app.delete('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/queue/{item_id}')
     def unqueue(tenant_id:str,project_id:str,session_id:str,item_id:str,request:Request):
         scoped(request,tenant_id)
