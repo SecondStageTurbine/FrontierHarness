@@ -273,5 +273,18 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await expect.poll(()=>sent.length).toBe(3);
  expect(sent.map(s=>s.body)).toEqual([{event:'request_changes',body:'The token is never checked.'},{add_labels:['security']},{method:'squash',auto:true,delete_branch:false}]);
  await page.unrouteAll({behavior:'ignoreErrors'});
+ // Delete a whole chat from its menu: it asks first, then the conversation is gone from the list for good.
+ await page.keyboard.press('Escape');
+ const rows=page.locator('.session-list>button');
+ const rowsBefore=await rows.count();
+ expect(rowsBefore).toBeGreaterThan(0);
+ const doomed=(await rows.first().innerText()).split('\n')[0];
+ await rows.first().click({button:'right'});
+ await page.getByRole('menu').getByRole('menuitem',{name:'Delete',exact:true}).click();
+ await expect(page.getByRole('dialog')).toContainText('cannot be undone');
+ await page.getByRole('button',{name:'Confirm',exact:true}).click();
+ await expect.poll(()=>rows.count()).toBe(rowsBefore-1);
+ await expect(page.getByText('Chat deleted')).toBeVisible();
+ expect(doomed.length).toBeGreaterThan(0);
  expect(errors).toEqual([]);
 });
