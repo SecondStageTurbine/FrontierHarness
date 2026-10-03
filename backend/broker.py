@@ -350,7 +350,9 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
         # conversation. Plan mode is agy's read only; Full auto approves every tool without asking.
         argv = [*launch, '--input-format', 'stream-json', '--output-format', 'stream-json', '--print=', '--model', model_name]
         return argv + (['--dangerously-skip-permissions'] if mode == 'auto' else ['--mode', 'plan' if mode == 'read' else 'accept-edits'])
-    argv = [*launch, 'run', '--format', 'json', '--model', model_name,
+    # --print-logs at ERROR: OpenCode exits on an internal error before its log file is flushed, so the
+    # cause behind "Unexpected server error" is only ever on stderr (opencode_reason reads it from there).
+    argv = [*launch, 'run', '--format', 'json', '--print-logs', '--log-level', 'ERROR', '--model', model_name,
             '--agent', 'plan' if mode == 'read' else 'build']
     return argv + (['--auto'] if mode == 'auto' else [])
 
@@ -541,10 +543,30 @@ def opencode_failure(out):
             failure = str((error.get('data') or {}).get('message') or error.get('message') or json.dumps(error))
     return failure
 
+OPENCODE_ERROR_LINE = re.compile(r'level=ERROR\b.*?\berror="((?:[^"\\]|\\.)*)"')
+OPENCODE_PLUGIN = re.compile(r'opencode[\\/]+packages[\\/]+(@?[\w.-]+(?:[\\/]+[\w.-]+)?)@')
+
+def opencode_reason(out, err):
+    """OpenCode's error event, plus the cause it printed to stderr when the event only says "Unexpected server
+    error". That message alone named nothing to fix: a broken OpenCode plugin failed every turn of every OpenCode
+    model with it, and the cause was only in the log line OpenCode prints before it exits."""
+    failure = opencode_failure(out)
+    if 'unexpected server error' not in failure.lower():
+        return failure
+    found = OPENCODE_ERROR_LINE.findall(err or '')
+    if not found:
+        return failure
+    detail = found[-1].replace('\\\\', '\\').replace('\\n', '\n')
+    plugin = OPENCODE_PLUGIN.search(detail)
+    first = next((line.strip() for line in detail.splitlines() if line.strip()), '')
+    where = f'the OpenCode plugin {plugin.group(1).replace(chr(92), "/")} failed: ' if plugin else ''
+    return f'{failure.rstrip(".")} ({where}{first[:240]}). Turning that plugin off in opencode.json lets the turn run' if plugin \
+        else f'{failure.rstrip(".")} ({first[:300]})'
+
 def read_opencode(out, err, provider):
     """Newline-delimited events: the reply is every text part, usage the step totals."""
     text, input_tokens, output_tokens = '', 0, 0
-    failure = opencode_failure(out)  # OpenCode reports a refusal as an event, not always an exit code.
+    failure = opencode_reason(out, err)  # OpenCode reports a refusal as an event, not always an exit code.
     for event in opencode_events(out):
         part = event.get('part') or {}
         if part.get('type') == 'text':
@@ -565,7 +587,7 @@ def read_output(provider, code, out, err, prompt, final):
     if provider == 'gemini_cli':
         return read_gemini(out, err, code, provider)
     if code != 0:
-        raise cli_exit_error(provider, code, strip_echo(out, prompt), err, opencode_failure(out) if provider == 'opencode_cli' else '')
+        raise cli_exit_error(provider, code, strip_echo(out, prompt), err, opencode_reason(out, err) if provider == 'opencode_cli' else '')
     if provider == 'opencode_cli':
         return read_opencode(out, err, provider)
     text = final.read_text(encoding='utf-8') if final.is_file() else ''
@@ -689,5 +711,9 @@ class ModelBroker:
             except ProviderError:
                 # The tool's stderr stays out of the conversation, but its tail goes to the local
                 # backend log so a failed turn can be diagnosed on this machine.
-                logging.getLogger('frontier.broker').warning('%s turn failed (exit %s). stderr tail: %s', CLI_TOOLS[provider][2], code, ' '.join((err or '')[-1500:].split()))
+                logging.getLogger('frontier.broker').warning('%s turn failed (exit %s). stderr tail: %s', CLI_TOOLS[provider][2], code, ' '.join((err or '')[-(8000 if provider == 'opencode_cli' else 1500):].split()))
+                if provider == 'opencode_cli':
+                    # OpenCode's own error event carries more than the one-line message the turn shows.
+                    errors = [e for e in opencode_events(out) if e.get('type') == 'error']
+                    logging.getLogger('frontier.broker').warning('OpenCode error event: %s', json.dumps(errors[-1])[:3000] if errors else '(none)')
                 raise
