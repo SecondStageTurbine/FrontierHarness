@@ -37,6 +37,15 @@ def test_ordinary_errors_are_unchanged():
     assert opencode_reason(out, PLUGIN_STDERR) == 'Model not found: x/y'
 
 
+def test_opencode_off_switches_reach_the_tool(monkeypatch):
+    from backend.localprocess import child_env
+    monkeypatch.setenv('OPENCODE_DISABLE_CLAUDE_CODE_SKILLS', '1')
+    monkeypatch.setenv('OPENCODE_API_KEY', 'secret')
+    env = child_env()
+    assert env.get('OPENCODE_DISABLE_CLAUDE_CODE_SKILLS') == '1'
+    assert 'OPENCODE_API_KEY' not in env
+
+
 def test_opencode_prints_its_errors():
     argv = agent_argv('opencode_cli', ['opencode'], 'strata/m', 'edit', '.', 'final.txt')
     assert argv[argv.index('--log-level') + 1] == 'ERROR' and '--print-logs' in argv
