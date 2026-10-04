@@ -114,6 +114,63 @@ def test_a_lead_plans_workers_do_the_tasks_in_worktrees_and_the_lead_reviews(tmp
     assert len(lead_calls) == 2 and all(p[0] == 'claude_cli' for p in lead_calls)
 
 
+@needs_git
+def test_an_adversary_attacks_the_result_in_a_throwaway_worktree_and_the_lead_checks_its_findings(tmp_path):
+    reviews = []
+    async def respond(config, prompt, mode, root):
+        if 'REPORTS:' in prompt:
+            reviews.append(prompt)
+            if len(reviews) == 1:
+                return AgentResult('```json\n{"verdict": "fix", "fixes": [{"task_id": "adversary", "instructions": "Fix it yourself."}, {"task_id": "a", "instructions": "Write AA."}],'
+                                   ' "requirements": [{"what": "a.txt holds the right text", "status": "unmet"}], "suspicions": ["empty input"], "reply": ""}\n```', 30, 10)
+            return AgentResult('```json\n{"verdict": "done", "fixes": [], "reply": "Done."}\n```', 30, 10)
+        if 'reply with ONLY a JSON object' in prompt and '"tasks"' in prompt:
+            return AgentResult('```json\n{"summary": "One file.", "tasks": [{"id": "a", "title": "Write A", "instructions": "Create a.txt containing A.", "needs": ["coding"]}]}\n```', 50, 20)
+        if 'USER:\nThe lead reviewed your work' in prompt:
+            (Path(root)/'a.txt').write_text('AA', encoding='utf-8')
+            return AgentResult('Now AA.', 10, 5)
+        if 'USER:\nYou did not write this work' in prompt:
+            # Given the request, not the plan, the board or the workers' reports; its probes stay in its own worktree.
+            assert 'Create a.txt' in prompt and 'TEAM PLAN' not in prompt and 'Wrote a.txt' not in prompt and 'Looks fine' not in prompt
+            (Path(root)/'probe.txt').write_text('junk', encoding='utf-8')
+            return AgentResult('FINDINGS: a.txt should say AA.\nOBSERVATIONS: none\nHELD: the file exists.', 10, 5)
+        if 'YOUR TASK — Review the integrated result' in prompt:
+            return AgentResult('Looks fine.', 10, 5)
+        (Path(root)/'a.txt').write_text('A', encoding='utf-8')
+        return AgentResult('Wrote a.txt.', 10, 5)
+    store = setup_store(tmp_path/'state')
+    root = repo(tmp_path)
+    runner = AgentRunner(store, ScriptedAgent(respond=respond))
+    project, session = open_project(store, runner, 'tenant-a', root)
+    store.put('tenant-a', 'projects', {**store.get('tenant-a', 'projects', project['id']), 'team_adversary': True})
+    async def scenario():
+        runner.send('tenant-a', project['id'], session['id'], 'Create a.txt.', 'claude_cli', 'edit', team=True)
+        await asyncio.gather(runner.turns[('tenant-a', session['id'])], return_exceptions=True)
+    asyncio.run(scenario())
+    reply = store.get('tenant-a', 'sessions', session['id'])['messages'][-1]
+    assert reply['status'] == 'complete', reply.get('error')
+    tasks = reply['team']['tasks']
+    assert [t['id'] for t in tasks] == ['a', 'review', 'adversary'] and all(t['status'] == 'done' for t in tasks), [(t['status'], t['report']) for t in tasks]
+    adversary = tasks[2]
+    assert adversary['adversary'] and adversary['model_id'] != 'claude_cli' and not adversary.get('merge')
+    assert not (root/'probe.txt').exists() and (root/'a.txt').read_text(encoding='utf-8') == 'AA'
+    # The lead is told the findings are claims and where fixes may go; a fix aimed at the adversary itself is dropped.
+    assert 'ADVERSARIAL CHECK' in reviews[0] and 'a.txt should say AA' in reviews[0] and 'never to the adversarial check' in reviews[0]
+    assert 'claims, not proof' in reviews[0] and 'YOUR PREVIOUS REVIEW' not in reviews[0]
+    # The second review starts from the first one's requirements and suspicions.
+    assert 'YOUR PREVIOUS REVIEW' in reviews[1] and 'a.txt holds the right text' in reviews[1] and 'empty input' in reviews[1]
+
+
+def test_the_adversary_is_added_once_after_everything_else():
+    tasks = [{'id': 'a', 'title': 'Write A', 'needs': ['coding']}, {'id': 'review', 'title': 'Review', 'needs': ['review']}]
+    team.ensure_adversary(tasks)
+    team.ensure_adversary(tasks)
+    assert [t['id'] for t in tasks] == ['a', 'review', 'adversary'] and tasks[-1]['depends_on'] == ['a', 'review'] and team.is_review(tasks[-1])
+    empty = []
+    team.ensure_adversary(empty)
+    assert empty == []
+
+
 def test_team_mode_refuses_adaptive_leads_and_read_only(tmp_path):
     store = setup_store(tmp_path/'state'); folder = tmp_path/'work'; folder.mkdir()
     runner = AgentRunner(store, ScriptedAgent())
