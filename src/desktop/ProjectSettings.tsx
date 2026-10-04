@@ -1,6 +1,6 @@
 import {useEffect,useState} from 'react';
 import {useQuery} from '@tanstack/react-query';
-import {KeyRound,Download,Brain,GitBranch,Play,ShieldCheck} from 'lucide-react';
+import {KeyRound,Download,Brain,GitBranch,Play,ShieldCheck,Users} from 'lucide-react';
 import {useWorkspace,useRefresh} from '../app/context';
 import {Field,Modal} from '../components/ui';
 import {api} from '../lib/api';
@@ -10,12 +10,12 @@ import {ADAPTIVE,agentProviders,modes,modeLabels,type Model,type Project,type Mo
 export function ProjectSettings({project,models,open,onClose}:{project:Project;models:Model[];open:boolean;onClose:()=>void}){
  const {path,notify}=useWorkspace(),refresh=useRefresh();
  const agents=models.filter(m=>agentProviders.includes(m.provider));
- const [form,setForm]=useState({default_mode:'',default_model_id:'',worktree_setup:'',worktree_copy:'',protect_env:true,dev_command:'',memory:'',turn_minutes:'',sb_files:false,sb_network:'open',sb_allow:''});
+ const [form,setForm]=useState({default_mode:'',default_model_id:'',worktree_setup:'',worktree_copy:'',protect_env:true,dev_command:'',memory:'',turn_minutes:'',sb_files:false,sb_network:'open',sb_allow:'',team_adversary:false});
  const [busy,setBusy]=useState(''),[error,setError]=useState(''),[imported,setImported]=useState<string>('');
  const credentials=useQuery({queryKey:['tenant',project.id,'credentials'],enabled:open,queryFn:({signal})=>api.get<{file:string;names:string[]}[]>(path(`/projects/${project.id}/credentials`),signal)});
- useEffect(()=>{if(open)setForm({default_mode:project.default_mode||'',default_model_id:project.default_model_id||'',worktree_setup:project.worktree_setup||'',worktree_copy:(project.worktree_copy||[]).join(', '),protect_env:project.protect_env!==false,dev_command:project.dev_command||'',memory:project.memory||'',turn_minutes:project.turn_minutes?String(project.turn_minutes):'',sb_files:!!project.sandbox?.files,sb_network:project.sandbox?.network||'open',sb_allow:(project.sandbox?.allow||[]).join(', ')})},[open,project.id]);
+ useEffect(()=>{if(open)setForm({default_mode:project.default_mode||'',default_model_id:project.default_model_id||'',worktree_setup:project.worktree_setup||'',worktree_copy:(project.worktree_copy||[]).join(', '),protect_env:project.protect_env!==false,dev_command:project.dev_command||'',memory:project.memory||'',turn_minutes:project.turn_minutes?String(project.turn_minutes):'',sb_files:!!project.sandbox?.files,sb_network:project.sandbox?.network||'open',sb_allow:(project.sandbox?.allow||[]).join(', '),team_adversary:!!project.team_adversary})},[open,project.id]);
  async function save(e:React.FormEvent){e.preventDefault();setBusy('save');setError('');try{
-  await api.put(path(`/projects/${project.id}/settings`),{default_mode:form.default_mode||null,default_model_id:form.default_model_id||null,worktree_setup:form.worktree_setup.trim()||null,worktree_copy:form.worktree_copy.split(',').map(s=>s.trim()).filter(Boolean),protect_env:form.protect_env,dev_command:form.dev_command.trim()||null,memory:form.memory.trim()||null,turn_minutes:form.turn_minutes?Number(form.turn_minutes):null,sandbox:{files:form.sb_files,network:form.sb_network,allow:form.sb_allow.split(/[,\s]+/).map(s=>s.trim()).filter(Boolean)}});
+  await api.put(path(`/projects/${project.id}/settings`),{default_mode:form.default_mode||null,default_model_id:form.default_model_id||null,worktree_setup:form.worktree_setup.trim()||null,worktree_copy:form.worktree_copy.split(',').map(s=>s.trim()).filter(Boolean),protect_env:form.protect_env,dev_command:form.dev_command.trim()||null,memory:form.memory.trim()||null,turn_minutes:form.turn_minutes?Number(form.turn_minutes):null,sandbox:{files:form.sb_files,network:form.sb_network,allow:form.sb_allow.split(/[,\s]+/).map(s=>s.trim()).filter(Boolean)},team_adversary:form.team_adversary});
   await refresh();notify('Project settings saved');onClose()}catch(err){setError((err as Error).message)}finally{setBusy('')}}
  async function importHistory(){setBusy('import');setError('');try{const made=await api.post<{name:string;source:string;messages:number}[]>(path(`/projects/${project.id}/import`),{sources:['claude','codex']});setImported(made.length?`${made.length} conversation${made.length===1?'':'s'} imported: ${made.map(m=>`${m.name} (${m.source}, ${m.messages} messages)`).join('; ')}`:'Nothing new to import.');await refresh()}catch(err){setError((err as Error).message)}finally{setBusy('')}}
  return <Modal open={open} onClose={onClose} title={`${project.name} · settings`} description="What new sessions in this project start with, and what the agents are told." wide>
@@ -26,6 +26,8 @@ export function ProjectSettings({project,models,open,onClose}:{project:Project;m
    <h3><GitBranch size={15}/> Worktrees</h3>
    <div className="form-grid"><Field label="Setup command" hint="Run once in every new worktree, such as npm ci. Your shell, your environment, five-minute limit."><input value={form.worktree_setup} onChange={e=>setForm({...form,worktree_setup:e.target.value})} placeholder="npm ci"/></Field>
     <Field label="Copy into worktrees" hint="Ignored files a fresh branch needs, comma separated. Copied, never linked."><input value={form.worktree_copy} onChange={e=>setForm({...form,worktree_copy:e.target.value})} placeholder=".env, .env.local"/></Field></div>
+   <h3><Users size={15}/> Team mode</h3>
+   <label className="toggle-row"><div><strong>Try to break the team's work</strong><p>After the work and its review, one more agent from another model family gets the request and the code, without the plan or the reports, and attacks the result in a throwaway worktree: edge cases, invalid input, features meeting. Nothing it changes is kept. The lead checks each problem it reports before sending any back as a fix. Adds a turn to every team; needs a git repository.</p></div><input type="checkbox" role="switch" checked={form.team_adversary} onChange={e=>setForm({...form,team_adversary:e.target.checked})}/></label>
    <h3><Play size={15}/> Dev server</h3>
    <Field label="Command" hint="Started and stopped from the Preview panel, in the session's folder."><input value={form.dev_command} onChange={e=>setForm({...form,dev_command:e.target.value})} placeholder="npm run dev"/></Field>
    <h3><KeyRound size={15}/> Credentials</h3>

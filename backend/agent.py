@@ -654,7 +654,8 @@ class AgentRunner:
         rules = (self.store.tenant_internal(tenant_id) or {}).get('rules')
         memory = project.get('memory')
         environment = ' '.join(filter(None, [(self.files.python_env(root) or {}).get('note'), browser_note(project, root)])) or None
-        board_text = board.render(board.tasks(self.store, tenant_id, project_id))
+        # An adversarial check judges the work, not the story of it, so it is not shown the board's reports.
+        board_text = None if session.get('blind') else board.render(board.tasks(self.store, tenant_id, project_id))
         environment = ' '.join(filter(None, [environment, sandbox_note(sandbox.policy(project))])) or None
         if project.get('kind') == 'chats':
             # A chat is about anything; its folder is only somewhere to stand, not a codebase to look through.

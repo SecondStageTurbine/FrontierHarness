@@ -3,9 +3,10 @@
 The lead takes a Read-only turn to plan the work as tasks. Frontier hands each task to an agent,
 the lead's choice or Adaptive's by capability, as its own session, in its own worktree when the
 project is a repository, running independent tasks at the same time. Each worker's changes are
-brought back as a patch. Another model family always reviews the integrated work, the project's
-own tests run, then the lead reviews the reports, the diff and the test result, may send one round
-of fixes, and writes the final reply. The lead never edits; the workers never see each other's transcripts.
+brought back as a patch. Another model family always reviews the integrated work; where the project
+asks for it, an adversarial check then tries to break the result in a throwaway worktree. The
+project's own tests run, then the lead reviews the reports, the diff and the test result, may send
+one round of fixes, and writes the final reply. The lead never edits; the workers never see each other's transcripts.
 """
 import asyncio
 import json
@@ -68,10 +69,32 @@ REVIEW_ASK = (
     'You are the lead. Your workers have finished; their reports and the resulting diff of the project are below. '
     'Judge whether the request is now done. Reply with ONLY a JSON object inside a ```json fence: '
     '{"verdict": "done" or "fix", "fixes": [{"task_id": "t1", "instructions": "what to change"}], '
+    '"requirements": [{"what": "one thing the request requires", "status": "met" or "unmet" or "unverified"}], '
+    '"suspicions": ["a possible defect you could not confirm"], '
     '"reply": "your final message to the user, in markdown, describing what was done, by whom, and anything left open"}. '
+    'Start by listing what the request requires, as kinds of behaviour rather than single examples, and judge each '
+    'against the code itself. The workers\' reports and their passing tests are claims, not proof: read the changed '
+    'code, and weigh what a test asserts, since a test that would still pass with the behaviour wrong proves nothing. '
+    'Look hardest at edge cases, error paths and where the tasks meet. '
     'Ask for fixes only for real defects a worker can correct in one more pass; otherwise say done. '
     'If the project\'s tests failed because of the team\'s work, ask for fixes; say done with failing tests only '
     'when the failure plainly has nothing to do with this work, and say so in your reply.'
+)
+ADVERSARY_NOTE = (
+    'A task marked ADVERSARIAL CHECK tried to break the result in a throwaway copy of the folder; nothing it changed '
+    'is in the project. Its FINDINGS are claims too: ask for a fix only for one you confirm by reading the code, and '
+    'send it to the task whose work it concerns, never to the adversarial check. Its OBSERVATIONS are leads to look '
+    'at, not defects.'
+)
+ADVERSARY_ASK = (
+    'You did not write this work, and you are not here to improve it: try to break it. The changes in this folder are '
+    'meant to fulfil the user\'s request below. Attack them where defects hide: edge cases, invalid and empty input, '
+    'error paths, interactions between features, and anything the request requires that the work may have missed. '
+    'Run real probes (commands, small scripts, the project\'s tests) in this folder; it is a throwaway copy and nothing '
+    'you change here is kept, so do not fix anything. Reply with a report in three parts. FINDINGS: each a defect '
+    'against the request, with the exact reproduction (command or input) and what happened against what the request '
+    'requires; write "none" if you found none. OBSERVATIONS: suspicions you could not reproduce. HELD: what you '
+    'attacked that held up.'
 )
 
 
@@ -129,6 +152,21 @@ def ensure_review(tasks, agents, lead):
                   'instructions': 'The other tasks are finished and their changes are in this folder. Review them against the user\'s request: '
                                   'read the changed files, run the project\'s tests or build if it has them, and fix clear defects directly. '
                                   'Report what you checked, what you fixed, and anything still wrong.',
+                  'status': 'pending', 'session_id': None, 'model_id': None, 'model_name': None, 'report': '', 'merge': None})
+
+
+def ensure_adversary(tasks):
+    """An adversarial check after every other task: a fresh agent that tries to break the integrated result.
+
+    It works in its own worktree and its changes are never folded back, so it needs a repository.
+    It is given the request and the code, not the plan or the reports, and it counts as a review, so
+    `assign` gives it to a family other than the lead's and the authors'. The lead checks its
+    findings before any becomes a fix.
+    """
+    if not tasks or any(t.get('adversary') for t in tasks):
+        return
+    tasks.append({'id': 'adversary', 'title': 'Try to break the result', 'needs': ['debugging', 'review'], 'agent': None, 'parallel': False,
+                  'depends_on': [t['id'] for t in tasks], 'adversary': True, 'instructions': ADVERSARY_ASK,
                   'status': 'pending', 'session_id': None, 'model_id': None, 'model_name': None, 'report': '', 'merge': None})
 
 
@@ -279,6 +317,8 @@ class Team:
             if not plan['tasks']:
                 raise ProviderError(f'{self.lead["name"]} did not return a plan the team could run. Its reply: {raw[:600]}')
             ensure_review(plan['tasks'], agents, self.lead)
+            if repo and self.runner.store.get(self.tenant_id, 'projects', self.project_id).get('team_adversary'):
+                ensure_adversary(plan['tasks'])
             session, message = self.state()
             team = message['team']
             team.update(status='working', summary=plan['summary'], tasks=plan['tasks'])
@@ -299,15 +339,17 @@ class Team:
             else:
                 for task in batch:
                     await self.work(task['id'], objective, team, repo)
+        previous = None
         for round_number in range(2):
             session, message = self.state()
             team = message['team']
             team['status'] = 'reviewing'
             self.save(message, session, f'{self.lead["name"]} is reviewing the team’s work.')
             tests = await self.run_tests()
-            verdict = parse_json(await self.ask_lead(await self.review_prompt(objective, team, repo, tests))) or {}
+            verdict = parse_json(await self.ask_lead(await self.review_prompt(objective, team, repo, tests, previous))) or {}
+            previous = verdict
             reply = (verdict.get('reply') or '').strip()
-            planned = {t['id'] for t in team['tasks']}
+            planned = {t['id'] for t in team['tasks'] if not t.get('adversary')}
             fixes = [f for f in (verdict.get('fixes') or []) if isinstance(f, dict) and str(f.get('task_id')) in planned and f.get('instructions')]
             if verdict.get('verdict') == 'fix' and fixes and round_number == 0:
                 session, message = self.state()
@@ -350,7 +392,7 @@ class Team:
             except Exception:
                 worker = None
             last = next((m for m in reversed((worker or {}).get('messages', [])) if m['role'] == 'assistant'), {})
-            if repo and worker and worker.get('worktree') and last.get('checkpoint') and not task.get('merge'):
+            if repo and worker and worker.get('worktree') and last.get('checkpoint') and not task.get('merge') and not task.get('adversary'):
                 try:
                     applied = await gitops.apply_between(self.root, last['checkpoint']['before'], last['checkpoint']['after'])
                     task['merge'] = 'partial work applied' if applied else None
@@ -386,8 +428,9 @@ class Team:
         record = await self.runner.files.run_command(self.tenant_id, self.project_id, self.session_id, command)
         return {'command': command, 'passed': record['status'] == 'completed', 'output': (record.get('output') or '')[-4000:]}
 
-    async def review_prompt(self, objective, team, repo, tests=None):
-        reports = '\n\n'.join(f'TASK {t["id"]} — {t["title"]} — {t["model_name"]} — {t["status"]}' + (f' (merge: {t["merge"]})' if t.get('merge') else '') + f'\n{t["report"][:3000]}' for t in team['tasks'])
+    async def review_prompt(self, objective, team, repo, tests=None, previous=None):
+        reports = '\n\n'.join(f'TASK {t["id"]} — {t["title"]} — {t["model_name"]} — {t["status"]}' + (' — ADVERSARIAL CHECK' if t.get('adversary') else '')
+                                + (f' (merge: {t["merge"]})' if t.get('merge') else '') + f'\n{t["report"][:3000]}' for t in team['tasks'])
         diff = ''
         if repo and team.get('checkpoint'):
             try:
@@ -399,7 +442,14 @@ class Team:
                 diff = f'(diff unavailable: {exc})'
         checks = ('(the project has no test command Frontier recognises)' if tests is None else
                   f'{tests["command"]}: {"passed" if tests["passed"] else "FAILED"}\n{tests["output"]}')
-        return (f'{REVIEW_ASK}\n\nREQUEST FROM THE USER:\n{objective}\n\nPLAN:\n{team.get("summary")}\n\nREPORTS:\n{reports}\n\n'
+        ask = REVIEW_ASK + (' ' + ADVERSARY_NOTE if any(t.get('adversary') for t in team['tasks']) else '')
+        if previous:
+            # The second look starts from the first: what it required, what it suspected, and what it sent back.
+            earlier = json.dumps({k: previous.get(k) for k in ('requirements', 'suspicions', 'fixes') if previous.get(k)}, ensure_ascii=False)[:6000]
+            ask += ('\n\nYOUR PREVIOUS REVIEW sent fixes back; the workers have made them. Confirm each fix in the code, start '
+                    'with your suspicions, and recheck every requirement, not only the fixed ones. Keep every requirement in '
+                    f'your new list; add one only if the request calls for it.\n{earlier}')
+        return (f'{ask}\n\nREQUEST FROM THE USER:\n{objective}\n\nPLAN:\n{team.get("summary")}\n\nREPORTS:\n{reports}\n\n'
                 f'DIFF OF THE PROJECT AFTER THE TEAM WORKED:\n{diff or "(not a git repository; see the reports)"}\n\nTHE PROJECT\'S TESTS:\n{checks}')
 
     def update_task(self, task_id, note=None, **fields):
@@ -426,7 +476,8 @@ class Team:
         project = store.get(self.tenant_id, 'projects', self.project_id)
         if not task.get('session_id'):
             worker = {'id': uid(), 'project_id': self.project_id, 'name': f'{task["title"]} · {task["model_name"]}', 'messages': [], 'commands': [],
-                      'created_at': now(), 'updated_at': now(), 'auto_named': False, 'team_parent': self.session_id}
+                      'created_at': now(), 'updated_at': now(), 'auto_named': False, 'team_parent': self.session_id,
+                      **({'blind': True} if task.get('adversary') else {})}
             if repo:
                 branch = gitops.branch_name(task['title'] + ' ' + task['model_name'], worker['id'][:6])
                 location = self.runner.files.worktree_location(self.tenant_id, self.project_id, branch)
@@ -441,8 +492,12 @@ class Team:
             store.put(self.tenant_id, 'sessions', worker)
             task = self.update_task(task_id, session_id=worker['id'])
         reports = [t for t in self.state()[1]['team']['tasks'] if t['id'] != task_id and t.get('report')]
-        prompt = (('The lead reviewed your work and asks for this change:\n' + fix + '\n\nOriginal task — ' + task['title'] + ':\n' + task['instructions']) if fix
-                  else worker_prompt(objective, team, task, reports))
+        if fix:
+            prompt = 'The lead reviewed your work and asks for this change:\n' + fix + '\n\nOriginal task — ' + task['title'] + ':\n' + task['instructions']
+        elif task.get('adversary'):
+            prompt = f'{task["instructions"]}\n\nTHE USER\'S REQUEST:\n{objective}'  # No plan, no reports: it judges the work, not the story of it.
+        else:
+            prompt = worker_prompt(objective, team, task, reports)
         try:
             self.runner.send(self.tenant_id, self.project_id, task['session_id'], prompt, task['model_id'], self.mode)
         except (ValueError, FileNotFoundError) as exc:
@@ -459,7 +514,7 @@ class Team:
                                     model_id=reply['model_id'], model_name=reply.get('model_name'))
         fields = dict(status='done' if reply.get('status') == 'complete' else 'failed', report=(reply.get('content') or reply.get('error') or '')[:6000],
                       changed=[c['path'] for c in reply.get('changes') or []][:50])
-        if repo and worker.get('worktree') and reply.get('checkpoint'):
+        if repo and worker.get('worktree') and reply.get('checkpoint') and not task.get('adversary'):
             try:
                 async with self.apply_lock:
                     applied = await gitops.apply_between(self.root, reply['checkpoint']['before'], reply['checkpoint']['after'])

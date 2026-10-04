@@ -138,6 +138,7 @@ class ProjectSettings(StrictModel):
     agent_browser_channel: Literal['chrome', 'msedge'] = 'chrome'
     agent_browser_token: str | None = Field(default=None, max_length=200)  # The Playwright extension's token; stored encrypted.
     sandbox: SandboxSettings | None = None
+    team_adversary: bool = False
 
 class PrCreateInput(StrictModel):
     title: str = Field(min_length=1, max_length=200)
