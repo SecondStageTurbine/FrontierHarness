@@ -2,8 +2,11 @@ import {test,expect} from '@playwright/test';
 
 test('a project row folds its sessions open underneath and starts a new session in place',async({page})=>{
  const request=page.request;
- await request.post('/api/auth/setup',{data:{username:'sidebar-tester',password:'sidebar-test-password-2026'}});
- const t=(await (await request.post('/api/tenants',{data:{name:'Sidebar workspace'}})).json()).id;
+ // The browser server is shared across specs: set up the owner if this runs first, else sign in as it.
+ const owner={username:'desktop-tester',password:'desktop-test-password-2026'};
+ await request.post('/api/auth/setup',{data:owner});
+ expect((await request.post('/api/auth/login',{data:owner})).ok()).toBeTruthy();
+ const t=(await (await request.get('/api/tenants')).json())[0]?.id??(await (await request.post('/api/tenants',{data:{name:'Sidebar workspace'}})).json()).id;
  await request.post(`/api/t/${t}/models`,{data:{name:'Claude',provider:'claude_cli',model_name:'sonnet'}});
  const a=await (await request.post(`/api/t/${t}/projects`,{data:{name:'Alpha'}})).json();
  const b=await (await request.post(`/api/t/${t}/projects`,{data:{name:'Beta'}})).json();

@@ -150,7 +150,8 @@ async def test_typesafe_requirements_reads_answers_through_the_same_derivation_a
     # The request actually sent to TypeSafe carries the request text and the repo signals, and
     # nothing else - no project file contents.
     assert sent[0]['state'] == {'request': 'Design a zero-downtime migration strategy.', 'repository': repo}
-    assert set(sent[0]['questions']) == {'task_type', 'broad_scope', 'ambiguous', 'security_risk', 'data_risk', 'money_risk', 'external_risk'}
+    assert set(sent[0]['questions']) == {'task_type', 'broad_scope', 'ambiguous', 'effort', 'security_risk', 'data_risk', 'money_risk', 'external_risk'}
+    assert result.effort is None  # No effort answer leaves the tool at its own default.
 
 
 @pytest.mark.asyncio
@@ -348,3 +349,25 @@ def test_a_track_record_moves_a_profile_and_resets_with_a_new_model(tmp_path):
     assert track_for({**model, 'model_name': 'opencode/other'}, records) is None  # A new model starts clean.
     clean = {'done': 4, 'failed': 0, 'fixes': 0, 'model_name': model['model_name']}
     assert profile({**model, 'track': clean})['coding'] == plain['coding'] + 1
+
+
+@pytest.mark.asyncio
+async def test_jev_sets_how_hard_codex_thinks_on_the_agent_the_user_picked(tmp_path, monkeypatch):
+    from backend.broker import agent_argv
+    answers = {'task_type': choice('edit_simple'), 'broad_scope': noul(0.1), 'ambiguous': noul(0.1), 'effort': choice('low'),
+               'security_risk': noul(0.1), 'data_risk': noul(0.1), 'money_risk': noul(0.1), 'external_risk': noul(0.1)}
+    monkeypatch.setattr(adaptive.httpx, 'AsyncClient', lambda **kw: FakeTypesafeClient(answers))
+    async def respond(config, prompt, mode, root):
+        return AgentResult('done', 10, 5)
+    store, runner, agent, project, session, _ = make(tmp_path, respond)
+    jev = ModelConfig(name='Jev', provider='typesafe', model_name='jev-latest')
+    store.put('tenant-a', 'models', {'id': 'jev', **jev.model_dump(exclude={'api_key'}), 'encrypted_key': store.encrypt('sk-test'), 'key_hint': '', 'status': 'connected'})
+    with store.db() as db:
+        value = json.loads(db.execute("SELECT data FROM tenants WHERE id='tenant-a'").fetchone()[0])
+        db.execute("UPDATE tenants SET data=? WHERE id='tenant-a'", (json.dumps({**value, 'router_model_id': 'jev'}),))
+    session = await turn(runner, store, 'tenant-a', project, session, 'Rename the button label.', 'codex', 'edit')
+    assert agent.calls[-1]['extras']['effort'] == 'low' and session['messages'][-1]['routing']['effort'] == 'low'
+    session = await turn(runner, store, 'tenant-a', project, session, 'Rename it back.', 'claude', 'edit')
+    assert agent.calls[-1]['extras']['effort'] is None  # Claude keeps its own effort: its prompt cache is keyed on it.
+    argv = agent_argv('codex_cli', ['codex'], 'gpt-6-sol', 'edit', tmp_path, tmp_path/'f', {'effort': 'low'})
+    assert argv[argv.index('model_reasoning_effort="low"') - 1] == '-c' and argv.index('model_reasoning_effort="low"') < argv.index('exec')

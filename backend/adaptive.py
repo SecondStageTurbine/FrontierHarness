@@ -153,6 +153,8 @@ class TaskRequirements(BaseModel):
     requirements: dict[str, int]
     needs_repository_inspection: bool = True
     reason: str = Field(default='', max_length=300)
+    # How hard the agent should think, from Jev; None leaves the tool at its own default.
+    effort: str | None = Field(default=None, pattern=r'^(low|medium|high|xhigh)$')
 
     def need(self, capability):
         return self.requirements.get(capability, 0)
@@ -367,6 +369,14 @@ TYPESAFE_AMBIGUOUS = {
         'false': "Names a specific, concrete target and a clear intended outcome, even without file paths or line numbers (e.g. 'change this button from blue to green', 'add pagination to the customer API').",
     },
 }
+# Reasoning effort, asked in the same call: the agent stays whichever was chosen, and only how hard it
+# thinks changes. Wording from the opencode-jev-router plugin (github.com/robertn702/opencode-jev-router).
+TYPESAFE_EFFORTS = {
+    'low': 'Simple, mechanical, or well-understood work.',
+    'medium': 'Routine engineering work needing some reasoning.',
+    'high': 'Hard problems, debugging, or multi-step reasoning.',
+    'xhigh': 'Deeply complex or ambiguous work.',
+}
 # Only task types with a determinate target; see the note above.
 AMBIGUITY_APPLIES_TO = ('debugging', 'implementation', 'refactor', 'edit_simple')
 
@@ -376,7 +386,8 @@ async def typesafe_requirements(content, repo, api_key, model='jev-latest'):
     instead of regexes. Returns `None` on any failure so the caller falls back to heuristics."""
     questions = {'task_type': {'type': 'choice', 'instructions': 'What kind of software-engineering request is this?', 'criteria': TYPESAFE_TASK_TYPES},
                 'broad_scope': {'type': 'noul', 'instructions': 'Is completing this request likely to require touching many files, multiple modules, or the whole project, rather than one narrow, well-contained change?'},
-                'ambiguous': {'type': 'noul', **TYPESAFE_AMBIGUOUS}}
+                'ambiguous': {'type': 'noul', **TYPESAFE_AMBIGUOUS},
+                'effort': {'type': 'choice', 'instructions': 'Select the reasoning effort for the agent that takes this request.', 'criteria': TYPESAFE_EFFORTS}}
     questions.update({name: {'type': 'noul', 'instructions': f'Does this request involve {name.removesuffix("_risk")}-sensitive work?', 'criteria': criteria}
                       for name, criteria in TYPESAFE_RISK_NOULS.items()})
     body = {'state': {'request': content[:4000], 'repository': repo}, 'model': model, 'questions': questions}
@@ -392,7 +403,8 @@ async def typesafe_requirements(content, repo, api_key, model='jev-latest'):
         ambiguous = task_type in AMBIGUITY_APPLIES_TO and answers['ambiguous']['noul'] > 0.6
         risks = [name.removesuffix('_risk') for name in TYPESAFE_RISK_NOULS if answers[name]['noul'] > 0.6]
         note = f"{answers['task_type']['confidence']:.2f} confidence"
-        return _derive(task_type, broad, ambiguous, risks, repo, note=note)
+        effort = (answers.get('effort') or {}).get('choice')
+        return _derive(task_type, broad, ambiguous, risks, repo, note=note).model_copy(update={'effort': effort if effort in TYPESAFE_EFFORTS else None})
     except Exception:
         return None
 

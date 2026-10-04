@@ -313,6 +313,8 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
         # `-a` is a global flag and must precede the subcommand. Approvals are never waited on:
         # exec has no one to ask, so an unanswerable prompt would hang the turn to its timeout.
         argv = [*launch, '-a', 'never']
+        if extras.get('effort'):
+            argv += ['-c', f'model_reasoning_effort={toml_value(extras["effort"])}']
         if mode == 'edit' and not extras.get('outer_sandbox'):
             # Workspace-write is offline by default, independently of Frontier's
             # project network setting. Open projects need outbound access; restricted

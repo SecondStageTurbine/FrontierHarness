@@ -585,16 +585,27 @@ class AgentRunner:
                 return message
         return None
 
+    def classifier(self, tenant_id):
+        """The workspace's router model row, if it names one that is still connected."""
+        model_id = self.store.tenant_internal(tenant_id).get('router_model_id')
+        try:
+            return self.store.get(tenant_id, 'models', model_id) if model_id else None
+        except Exception:
+            return None  # A classifier that was disconnected is not a reason to refuse a turn.
+
+    async def effort(self, tenant_id, session):
+        """Jev's reasoning effort for a turn on an agent the user picked; None without a TypeSafe router."""
+        classifier = self.classifier(tenant_id)
+        if not classifier or classifier['provider'] != 'typesafe' or not classifier.get('encrypted_key'):
+            return None
+        content = next(m['content'] for m in reversed(session['messages']) if m['role'] == 'user')
+        found = await adaptive.typesafe_requirements(content, {}, self.store.decrypt(classifier['encrypted_key']), classifier.get('model_name') or 'jev-latest')
+        return found.effort if found else None
+
     async def route(self, tenant_id, project_id, session, message):
         """Choose an agent for an Adaptive turn and write the decision onto the message."""
         content = next(m['content'] for m in reversed(session['messages']) if m['role'] == 'user')
-        tenant = self.store.tenant_internal(tenant_id)
-        classifier = None
-        if tenant.get('router_model_id'):
-            try:
-                classifier = self.store.get(tenant_id, 'models', tenant['router_model_id'])
-            except Exception:
-                classifier = None  # A classifier that was disconnected is not a reason to refuse a turn.
+        classifier = self.classifier(tenant_id)
         # Folder scans read up to thousands of files; off the event loop, so the window stays responsive.
         repo = await asyncio.to_thread(adaptive.repository_signals, self.files, tenant_id, project_id)
         requirements, classified_by = await adaptive.classify(content, repo, classifier, self.store.decrypt)
@@ -683,6 +694,11 @@ class AgentRunner:
                     raise ProviderError(f'{down} is not running: nothing at {where} is serving it. Start that server, or pick another agent.')
                 config = following
                 session, message = self.bind(tenant_id, session_id, message_id, config, f'{down} is not running (nothing at {where}); {config["name"]} takes this turn.')
+            # How hard Codex thinks this turn, from Jev. Other tools keep their own setting: Claude's cache is keyed on it.
+            effort = (message['routing'].get('requirements') or {}).get('effort') if adaptive_turn else                 await self.effort(tenant_id, session) if config['provider'] == 'codex_cli' and not message.get('team') else None
+            if effort:
+                message['routing']['effort'] = effort
+                self.save_turn(tenant_id, session_id, message_id, routing=message['routing'])
             if message.get('team'):
                 # The lead plans and reviews under Read only; its workers take the real posture.
                 # A continued team keeps its first checkpoint, so the lead reviews everything the team did.
@@ -698,6 +714,7 @@ class AgentRunner:
             while rounds > 0:
                 rounds -= 1
                 tried.add(config['id'])
+                extras['effort'] = effort if config['provider'] == 'codex_cli' else None
                 visible, summary = conversation(session)
                 prompt = build_prompt(visible, bool(message.get('switched_from')), handoff_text, mode, summary,
                                       first=sum(1 for m in session['messages'] if m['role'] == 'user') == 1, rules=rules, memory=memory, environment=environment, board=board_text)
@@ -757,7 +774,9 @@ class AgentRunner:
                                  'reply': result.text if result else ''})
                 if not reason or following is None:
                     break
-                # Escalate: a stronger agent continues this same turn, told what happened so far.
+                # Escalate: a stronger agent continues this same turn, told what happened so far, at its own default effort.
+                effort = None
+                message['routing'].pop('effort', None)
                 message['routing'].update(attempts=attempts, escalations=message['routing'].get('escalations', 0) + 1)
                 message['changes'] = changed
                 self.save_turn(tenant_id, session_id, message_id, routing=message['routing'], changes=changed)

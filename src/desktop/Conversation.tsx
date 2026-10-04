@@ -65,7 +65,7 @@ function AgentMessage({message,onInspect,onRevert,approvals=[],onDecide,onOpenSe
   <div className="frontier-author">
    <span className="frontier-spark">{running?<LoaderCircle size={14} className="spin"/>:'✳'}</span>
    <strong>{message.model_name||'Agent'}</strong>
-   <span className="agent-mode-badge" title={modeLabels[(message.mode||'edit') as Mode]}><ModeIcon size={12}/>{modeLabels[(message.mode||'edit') as Mode]}</span>
+   <span className="agent-mode-badge" title={modeLabels[(message.mode||'edit') as Mode]}><ModeIcon size={12}/>{modeLabels[(message.mode||'edit') as Mode]}</span>{message.routing?.effort&&<span className="agent-mode-badge" title="Reasoning effort Jev chose for this turn">{message.routing.effort} effort</span>}
    <small>{running?`Working · ${duration(message.created_at,null)}`:[message.status!=='complete'?message.status:'',turnStats(message)].filter(Boolean).join(' · ')}</small>
   </div>
   {message.switched_from&&<div className="handover-note"><ArrowRightLeft size={13}/>Took over from {message.switched_from}. It was given this conversation and the project folder.</div>}
