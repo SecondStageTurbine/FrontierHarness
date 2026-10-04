@@ -25,7 +25,7 @@ export default function Tenants(){
  <div className="model-grid">{tenants.map(t=><article className="model-card" key={t.id}>
   <div className="section-head"><span className="provider-symbol"><Layers size={22}/></span>{tenant?.id===t.id?<small className="muted">Current</small>:<button onClick={()=>switchTenant(t.id)}>Switch to</button>}</div>
   <h3>{t.name}</h3><p className="model-id">{t.environment}{t.router_model_id&&` · Adaptive classifier: ${(models.data||[]).find(m=>m.id===t.router_model_id)?.name||'set'}`}</p>
-  <div className="model-card-footer"><button onClick={()=>edit(t)}>Rename</button><button className="icon-button" aria-label={`Delete ${t.name}`} title="Delete workspace" onClick={()=>{setConfirmName('');setRemove(t)}}><Trash2 size={15}/></button></div>
+  <div className="model-card-footer"><button onClick={()=>edit(t)}>Edit</button><button className="icon-button" aria-label={`Delete ${t.name}`} title="Delete workspace" onClick={()=>{setConfirmName('');setRemove(t)}}><Trash2 size={15}/></button></div>
  </article>)}</div>
  <Modal open={open} onClose={()=>setOpen(false)} title={editing?'Workspace':'New workspace'} description="A separate set of projects, conversations, and agent logins.">
   <form onSubmit={save}>{error&&<p className="error-text" role="alert">{error.message}</p>}
