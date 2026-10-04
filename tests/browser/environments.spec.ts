@@ -39,7 +39,7 @@ test('another machine is paired from Settings, and its project runs from this wi
  // Everything now comes from the other machine: its workspace, its project, its agent's reply, streamed live.
  await expect(page.locator('.env-banner')).toContainText('Studio');
  await expect(page.locator('.project-list')).toContainText('Render farm');
- await page.locator('.project-list>button',{hasText:'Render farm'}).click();
+ await page.locator('.project-list .project-main',{hasText:'Render farm'}).click();
  await page.getByLabel('Agent',{exact:true}).selectOption({label:'Claude'});
  await page.getByLabel('Ask Frontier',{exact:true}).fill('Build it over there.');
  await page.getByRole('button',{name:'Send',exact:true}).click();

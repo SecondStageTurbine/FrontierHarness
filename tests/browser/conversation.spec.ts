@@ -115,12 +115,12 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await expect(page.locator('.slash-menu')).toContainText('/resume');
  await page.getByPlaceholder(/Ask|Message|Tell/).first().fill('');
  // Project settings from the project's own menu: memory saved and read back.
- await page.locator('.project-list>button').first().click({button:'right'});
+ await page.locator('.project-list .project-main').first().click({button:'right'});
  await page.getByRole('menuitem',{name:'Project settings…'}).click();
  await page.getByLabel('Notes every agent is given',{exact:true}).fill('- Uses tabs.');
  await page.getByRole('button',{name:'Save settings',exact:true}).click();
  await expect(page.locator('.toast')).toContainText('Project settings saved');
- await page.locator('.project-list>button').first().click({button:'right'});
+ await page.locator('.project-list .project-main').first().click({button:'right'});
  await page.getByRole('menuitem',{name:'Project settings…'}).click();
  await expect(page.getByLabel('Notes every agent is given',{exact:true})).toHaveValue('- Uses tabs.');
  await page.keyboard.press('Escape');

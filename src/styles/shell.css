@@ -35,6 +35,20 @@ body{overflow:hidden}
 .project-list button:hover,.session-list button:hover,.project-shortcuts button:hover{background:var(--card);color:var(--foreground)}
 .project-list button.active,.session-list button.active{background:var(--elevated);color:var(--foreground)}
 .session-list>p{margin:4px 8px;color:var(--subtle);font-size:11.5px;line-height:1.5}
+.project-list{flex:1}
+.project-row{display:flex;align-items:center;border-radius:var(--radius-sm)}
+.project-row:hover{background:var(--card)}
+.project-row.active{background:var(--elevated)}
+.project-row.active>button{color:var(--foreground)}
+.project-list .project-row>button:hover{background:transparent;color:var(--foreground)}
+.project-list .project-row-action{width:auto;flex:0 0 auto;padding:5px}
+.project-list .project-main{flex:1;min-width:0}
+.project-row-action.new{opacity:0}
+.project-row:hover .project-row-action.new,.project-row.active .project-row-action.new,.project-row-action.new:focus-visible{opacity:1}
+.collapsed-chevron{transform:rotate(-90deg)}
+.project-sessions{padding-left:12px}
+.project-sessions .sidebar-section-label{padding-top:6px}
+.project-sessions .session-list{overflow:visible}
 .project-shortcuts{display:flex;flex-direction:column;gap:1px;padding-top:8px;margin-top:4px;border-top:1px solid var(--border)}
 .project-sidebar-footer{display:flex;flex-direction:column;gap:2px;padding-top:8px;margin-top:4px;border-top:1px solid var(--border)}
 .project-sidebar-footer>button{justify-content:flex-start;gap:8px;border:0;background:transparent;color:var(--muted);padding:6px 8px}
@@ -275,7 +289,7 @@ body{overflow:hidden}
 @media(max-width:800px){.project-sidebar{width:190px}.context-inspector{position:absolute;right:0;top:0;bottom:0;width:min(520px,100vw);max-width:100vw;z-index:40;box-shadow:-20px 0 70px #0006}.panel-resizer.right{display:none}.workspace-center{min-width:0}.conversation-scroll{padding:0 18px}.composer-region{padding:12px 16px}.session-title>strong,.session-divider{display:none}.composer-footnote{font-size:7px}.frontier-author>span:not(.frontier-spark){display:none}.workspace-empty h1{font-size:24px}.suggestion-grid{flex-direction:column;max-width:270px}.suggestion-grid button>svg:last-child{margin-left:auto}.empty-team{max-width:280px}.empty-team>div{font-size:9px}.desktop-settings>nav{width:140px}.desktop-settings-body{padding:18px}.desktop-settings-body .model-grid{grid-template-columns:1fr}.modal.wide:has(.desktop-settings){width:calc(100vw - 24px)}.desktop-settings-body .page-heading{flex-direction:column;align-items:flex-start}}
 @media(max-width:560px){.project-sidebar{display:none}.panel-resizer.left{display:none}.session-header{padding:0 15px}.composer-context-controls select{font-size:9px;max-width:100px}.composer-control-divider{margin:0 2px}.conversation-scroll{padding:0 16px}.composer-region{padding:10px 13px}.composer>textarea{font-size:12px;padding:14px 14px 6px}.composer-toolbar{padding:6px 9px 9px}.composer-footnote{font-size:7px;gap:10px}.composer-footnote>span:last-child{max-width:42%}.inline-build{padding-left:39px;padding-right:14px}.frontier-author>small{font-size:8px}.thread-completion{font-size:9px}.thread-completion>small{font-size:8px}.desktop-settings>nav{width:110px;padding:12px 6px}.desktop-settings>nav>button{font-size:9px;padding:9px 7px;white-space:normal;text-align:left}.desktop-settings-body{padding:15px}.desktop-settings-body .page-heading h1{font-size:18px}.workspace-empty{padding:30px 10px}.empty-frontier-mark{margin-bottom:20px}}
 /* Readable desktop scale, including compact secondary controls. */
-.desktop-workspace{font-size:13px}.desktop-search input,.session-list>button,.project-shortcuts>button,.project-sidebar-footer>button,.project-sidebar-footer select{font-size:11px}.sidebar-section-label{font-size:11px}.session-title>strong{font-size:11px}.agent-working-caption,.composer-footnote,.file-tree button,.terminal-help,.inspector-tabs button{font-size:10px}.inline-build{font-size:12px}.empty-team small{font-size:10px}.composer>textarea{font-size:13px}.code-view,.unified-diff,.terminal-output{font-size:12px}.project-list>button.working{color:var(--foreground)}
+.desktop-workspace{font-size:13px}.desktop-search input,.session-list>button,.project-shortcuts>button,.project-sidebar-footer>button,.project-sidebar-footer select{font-size:11px}.sidebar-section-label{font-size:11px}.session-title>strong{font-size:11px}.agent-working-caption,.composer-footnote,.file-tree button,.terminal-help,.inspector-tabs button{font-size:10px}.inline-build{font-size:12px}.empty-team small{font-size:10px}.composer>textarea{font-size:13px}.code-view,.unified-diff,.terminal-output{font-size:12px}.project-row.has-status>button{color:var(--foreground)}
 @keyframes project-pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 color-mix(in srgb,var(--primary) 45%,transparent)}50%{opacity:.55;box-shadow:0 0 0 4px transparent}}
 .project-list>button.has-status,.session-list>button.has-status{color:var(--foreground)}
 .sidebar-status{display:inline-flex;align-items:center;gap:4px;min-width:0;flex-shrink:0;padding:2px 5px;border-radius:999px;border:1px solid color-mix(in srgb,currentColor 28%,transparent);background:color-mix(in srgb,currentColor 8%,transparent);font-size:8px;line-height:1.1;font-weight:600;text-transform:uppercase;letter-spacing:0;color:var(--subtle)}
