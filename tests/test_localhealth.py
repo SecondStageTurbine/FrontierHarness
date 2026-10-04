@@ -109,3 +109,11 @@ def test_a_local_model_context_window_comes_from_opencode_settings(opencode_conf
     assert localhealth.context_limit({'provider': 'opencode_cli', 'model_name': 'big/Prometheus'}) == 81920
     assert localhealth.context_limit({'provider': 'opencode_cli', 'model_name': 'coder/qwen3-coder'}) is None
     assert localhealth.context_limit({'provider': 'codex_cli', 'model_name': 'gpt'}) is None
+
+
+def test_a_model_on_a_local_server_is_free_whatever_its_provider_is_called(opencode_config):
+    from backend import adaptive
+    local = adaptive.profile({'id': 'big', 'name': 'Qwen', 'provider': 'opencode_cli', 'model_name': 'big/Prometheus'})
+    cloud = adaptive.profile({'id': 'x', 'name': 'X', 'provider': 'opencode_cli', 'model_name': 'cloud/x'})
+    assert (local['location'], local['cost_class']) == ('local', 'free')
+    assert (cloud['location'], cloud['cost_class']) == ('cloud', 'low')

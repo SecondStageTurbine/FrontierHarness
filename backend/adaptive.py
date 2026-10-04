@@ -19,7 +19,7 @@ from pathlib import Path
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
-from . import benchmark
+from . import benchmark, localhealth
 
 ADAPTIVE = 'adaptive'
 CAPABILITIES = ('coding', 'reasoning', 'planning', 'debugging', 'architecture', 'review',
@@ -120,6 +120,9 @@ def profile(model):
     for needle, refinement in FAMILY_PROFILES:
         if needle in name:
             base.update(refinement)
+    if localhealth.server_for(model):
+        # OpenCode's own config points this provider at this machine, whatever the provider is called.
+        base.update(location='local', cost_class='free')
     bench = model.get('benchmark')
     if bench:
         base.update(benchmark.skills(bench))
