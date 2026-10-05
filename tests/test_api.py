@@ -21,6 +21,32 @@ def test_auth_required_and_first_setup_only(tmp_path):
         c.post('/api/logout')
         assert c.get('/api/tenants').status_code==401
 
+def test_three_wrong_passwords_lock_login_across_restarts(tmp_path):
+    state = tmp_path/'state'
+    with TestClient(create_app(str(state), ScriptedAgent())) as c:
+        setup(c)
+        c.post('/api/logout')
+        login = '/api/auth/login'
+        wrong = {'username':'tester','password':'incorrect-long-password'}
+        correct = {'username':'tester','password':'a-secure-test-password'}
+        assert [c.post(login,json=wrong).status_code for _ in range(3)] == [401,401,429]
+        locked = c.post(login,json=correct)
+        assert locked.status_code == 429 and int(locked.headers['retry-after']) > 0
+    with TestClient(create_app(str(state), ScriptedAgent())) as c:
+        assert c.post(login,json=correct).status_code == 429
+        with c.app.state.store.db() as db:
+            db.execute('UPDATE login_failures SET locked_until=0, first_failure=0')
+        assert c.post(login,json=correct).status_code == 200
+        with c.app.state.store.db() as db:
+            assert db.execute('SELECT COUNT(*) FROM login_failures').fetchone()[0] == 0
+
+def test_https_login_uses_secure_cookie_and_hsts(tmp_path):
+    with TestClient(create_app(str(tmp_path), ScriptedAgent()), base_url='https://frontier.example') as c:
+        response = c.post('/api/auth/setup', json={'username':'tester','password':'a-secure-test-password'})
+        assert response.status_code == 200
+        assert 'Secure' in response.headers['set-cookie']
+        assert response.headers['strict-transport-security'] == 'max-age=31536000'
+
 def test_credentials_are_encrypted_and_never_returned(tmp_path):
     app=create_app(str(tmp_path),ScriptedAgent())
     with TestClient(app) as c:

@@ -36,6 +36,7 @@ class Store:
             PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT UNIQUE, password TEXT);
             CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT, expires REAL);
+            CREATE TABLE IF NOT EXISTS login_failures (username TEXT PRIMARY KEY, attempts INTEGER NOT NULL, first_failure REAL NOT NULL, locked_until REAL NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS tenants (id TEXT PRIMARY KEY, owner TEXT, data TEXT);
             CREATE TABLE IF NOT EXISTS entities (tenant_id TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(tenant_id,kind,id));
             CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, run_id TEXT NOT NULL, data TEXT NOT NULL);

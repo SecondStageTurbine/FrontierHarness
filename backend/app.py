@@ -26,6 +26,8 @@ from .projects import pdf_text
 from .broker import ProviderError, probe_cli, account_env, account_home, ACCOUNT_HOME_VARS, SIGNIN_COMMANDS
 
 SESSION_LIFETIME = 86400*7  # Seconds of inactivity before a stored session expires.
+LOGIN_WINDOW = 900  # Three wrong passwords lock the account for fifteen minutes.
+LOGIN_FAILURE_LIMIT = 3
 
 def password_hash(password, salt=None):
     salt = salt or secrets.token_hex(16)
@@ -105,6 +107,8 @@ def create_app(directory=None, broker=None):
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'same-origin'
         response.headers['X-Frame-Options'] = 'DENY'
+        if request.url.scheme == 'https' or request.headers.get('x-forwarded-proto') == 'https':
+            response.headers['Strict-Transport-Security'] = 'max-age=31536000'
         if request.url.path.startswith('/api'):
             response.headers['Cache-Control'] = 'no-store'
         return response
@@ -150,7 +154,7 @@ def create_app(directory=None, broker=None):
     def scoped(request, tenant_id):
         return store.tenant(tenant_id, user(request)['id'])
 
-    def session(response, user_id):
+    def session(response, user_id, request=None):
         token = secrets.token_urlsafe(48)
         with store.db() as db:
             db.execute('DELETE FROM sessions WHERE expires<?',(time.time(),))
@@ -158,7 +162,8 @@ def create_app(directory=None, broker=None):
         # The stored expiry is the real control and slides on use, so the cookie outlives it
         # deliberately: a browser dropping the cookie on its own would strand the desktop
         # session, which cannot sign in again.
-        response.set_cookie('harness_session',token,httponly=True,samesite='strict',secure=os.environ.get('HARNESS_SECURE_COOKIE')=='1',max_age=86400*400)
+        tls = request is not None and (request.url.scheme == 'https' or request.headers.get('x-forwarded-proto') == 'https')
+        response.set_cookie('harness_session',token,httponly=True,samesite='strict',secure=os.environ.get('HARNESS_SECURE_COOKIE')=='1' or tls,max_age=86400*400)
 
     @app.get('/api/health')
     def health():
@@ -185,6 +190,7 @@ def create_app(directory=None, broker=None):
         if len(queue) >= 10:
             raise HTTPException(429,'Too many sign-in attempts. Try again in five minutes.')
         queue.append(time.time())
+        denied = None
         with store.db() as db:
             if action == 'setup':
                 if db.execute('SELECT COUNT(*) FROM users').fetchone()[0]:
@@ -192,6 +198,12 @@ def create_app(directory=None, broker=None):
                 current = {'id':uid(),'username':payload.username}
                 db.execute('INSERT INTO users VALUES(?,?,?)',(current['id'],payload.username,password_hash(payload.password)))
             else:
+                login_name = payload.username.casefold()
+                moment = time.time()
+                failures = db.execute('SELECT attempts,first_failure,locked_until FROM login_failures WHERE username=?', (login_name,)).fetchone()
+                if failures and failures['locked_until'] > moment:
+                    retry = max(1, int(failures['locked_until'] - moment + 0.999))
+                    raise HTTPException(429, 'Too many incorrect passwords. Try again in fifteen minutes.', headers={'Retry-After': str(retry)})
                 row = db.execute('SELECT * FROM users WHERE username=?',(payload.username,)).fetchone()
                 if row and ':' not in row['password']:
                     # A desktop-managed account stores no password hash and signs in through
@@ -199,9 +211,17 @@ def create_app(directory=None, broker=None):
                     raise HTTPException(401,'This workspace signs in automatically from the Frontier desktop app. Quit Frontier, then start it again.')
                 valid = password_hash(payload.password, row['password'].split(':')[0] if row else 'missing')
                 if not row or not hmac.compare_digest(valid,row['password']):
-                    raise HTTPException(401,'The username or password is incorrect.')
-                current = {'id':row['id'],'username':row['username']}
-        session(response,current['id'])
+                    count = failures['attempts'] + 1 if failures and moment - failures['first_failure'] < LOGIN_WINDOW else 1
+                    first = failures['first_failure'] if count > 1 else moment
+                    locked_until = moment + LOGIN_WINDOW if count >= LOGIN_FAILURE_LIMIT else 0
+                    db.execute('INSERT OR REPLACE INTO login_failures VALUES(?,?,?,?)', (login_name, count, first, locked_until))
+                    denied = HTTPException(429, 'Too many incorrect passwords. Try again in fifteen minutes.', headers={'Retry-After': str(LOGIN_WINDOW)}) if locked_until else HTTPException(401, 'The username or password is incorrect.')
+                else:
+                    db.execute('DELETE FROM login_failures WHERE username=?', (login_name,))
+                    current = {'id':row['id'],'username':row['username']}
+        if action == 'login' and denied:
+            raise denied
+        session(response,current['id'],request)
         attempts.pop(address,None)
         return current
 
@@ -211,6 +231,7 @@ def create_app(directory=None, broker=None):
         current = user(request)
         with store.db() as db:
             db.execute('UPDATE users SET password=? WHERE id=?', (password_hash(payload.password), current['id']))
+            db.execute('DELETE FROM login_failures WHERE username=?', (current['username'].casefold(),))
         return {'ok':True}
 
     @app.get('/api/remote')
@@ -292,13 +313,13 @@ def create_app(directory=None, broker=None):
         return {'token': token, 'expires_in': 600, 'urls': [f'http://{i["address"]}:{port}/pair?code={token}' for i in found], 'labels': [i['label'] for i in found]}
 
     @app.get('/pair')
-    def pair(code:str=''):
+    def pair(request:Request, code:str=''):
         found = pairings.pop(hashlib.sha256(code.encode()).hexdigest(), None)
         if not found or found[1] < time.time():
             return HTMLResponse('<!doctype html><meta name="viewport" content="width=device-width"><body style="font:16px system-ui;padding:24px;background:#09090b;color:#fafafa">'
                                 '<h2>This pairing code has expired or was already used.</h2><p>Show a new QR code in Frontier: Settings, Remote access.</p>', status_code=410)
         response = RedirectResponse('/', status_code=303)
-        session(response, found[0])
+        session(response, found[0], request)
         return response
 
     @app.get('/api/push')
