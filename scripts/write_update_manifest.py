@@ -15,9 +15,9 @@ root = Path(__file__).resolve().parents[1]
 version = json.loads((root/'src-tauri/tauri.conf.json').read_text(encoding='utf-8'))['version']
 bundle = root/'src-tauri/target/release/bundle'
 if sys.platform == 'win32':
-    platform, bundles = 'windows-x86_64', sorted((bundle/'nsis').glob('Frontier_*_x64-setup.exe'))
+    platform, bundles = 'windows-x86_64', sorted((bundle/'nsis').glob(f'Frontier_{version}_x64-setup.exe'))
 else:
-    platform, bundles = 'linux-x86_64', sorted((bundle/'appimage').glob('Frontier_*_amd64.AppImage'))
+    platform, bundles = 'linux-x86_64', sorted((bundle/'appimage').glob(f'Frontier_{version}_amd64.AppImage'))
 if len(bundles) != 1: raise SystemExit(f'Expected exactly one built installer, found {[b.name for b in bundles]}.')
 installer = bundles[0]
 signature = installer.with_name(installer.name+'.sig')
