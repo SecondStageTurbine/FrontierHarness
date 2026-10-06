@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 
 from . import board
-from . import adaptive, benchmark, gitops, localhealth
+from . import adaptive, agentstack, benchmark, gitops, localhealth
 from .adaptive import TaskRequirements
 from .broker import CLI_TOOLS, AgentResult, ProviderError, cooling as broker_cooling
 from .store import now, uid
@@ -85,6 +85,11 @@ ADVERSARY_NOTE = (
     'is in the project. Its FINDINGS are claims too: ask for a fix only for one you confirm by reading the code, and '
     'send it to the task whose work it concerns, never to the adversarial check. Its OBSERVATIONS are leads to look '
     'at, not defects.'
+)
+GATE_NOTE = (
+    'Verified delivery is on: the INDEPENDENT REVIEW below is by another model family, bound to the exact files staged '
+    'for commit. On NO-GO, send a fix for every finding you cannot disprove from the code; its findings go back to the '
+    'workers in any case. Only a GO is committed.'
 )
 ADVERSARY_ASK = (
     'You did not write this work, and you are not here to improve it: try to break it. The changes in this folder are '
@@ -195,6 +200,21 @@ REVIEW_WORDS = re.compile(r'\b(review|audit|verify|verification|integrat\w*|fina
 
 def is_review(task):
     return 'review' in (task.get('needs') or []) or bool(REVIEW_WORDS.search(task.get('title') or ''))
+
+
+def findings_as_fixes(findings, tasks):
+    """An independent review's findings as fixes, each to the task that changed the files it names, else the first worker's."""
+    workers = [t for t in tasks if not t.get('adversary') and not is_review(t)] or [t for t in tasks if not t.get('adversary')]
+    grouped = {}
+    for f in findings:
+        paths = set(f.get('affectedPaths') or [])
+        task = next((t for t in workers if paths & set(t.get('changed') or [])), workers[0] if workers else None)
+        if task:
+            grouped.setdefault(task['id'], []).append(
+                f'[{f.get("id")} {f.get("severity")}] {f.get("impact")}\nEvidence: {f.get("evidence")}\n'
+                f'Required change: {f.get("requiredChange")}\nHow it will be checked: {f.get("closingProbe")}')
+    return [{'task_id': tid, 'instructions': 'The independent review found these defects; fix each one:\n\n' + '\n\n'.join(items)}
+            for tid, items in grouped.items()]
 
 
 def assign(task, agents, lead, in_cooldown=lambda model_id: False, authors=()):
@@ -339,19 +359,25 @@ class Team:
             else:
                 for task in batch:
                     await self.work(task['id'], objective, team, repo)
-        previous = None
+        previous, gate = None, None
+        verified = bool(repo and self.runner.store.get(self.tenant_id, 'projects', self.project_id).get('verified_delivery'))
         for round_number in range(2):
             session, message = self.state()
             team = message['team']
             team['status'] = 'reviewing'
             self.save(message, session, f'{self.lead["name"]} is reviewing the team’s work.')
             tests = await self.run_tests()
-            verdict = parse_json(await self.ask_lead(await self.review_prompt(objective, team, repo, tests, previous))) or {}
+            gate = await self.verify(objective, gate) if verified else None
+            verdict = parse_json(await self.ask_lead(await self.review_prompt(objective, team, repo, tests, previous, gate))) or {}
             previous = verdict
             reply = (verdict.get('reply') or '').strip()
             planned = {t['id'] for t in team['tasks'] if not t.get('adversary')}
             fixes = [f for f in (verdict.get('fixes') or []) if isinstance(f, dict) and str(f.get('task_id')) in planned and f.get('instructions')]
-            if verdict.get('verdict') == 'fix' and fixes and round_number == 0:
+            vetoed = bool(gate and gate['status'] == 'NO-GO')
+            if vetoed and not fixes:
+                # The lead may not wave an independent NO-GO through: its findings go back to the workers as they stand.
+                fixes = findings_as_fixes(gate['findings'], team['tasks'])
+            if (verdict.get('verdict') == 'fix' or vetoed) and fixes and round_number == 0:
                 session, message = self.state()
                 team = message['team']
                 team['status'] = 'fixing'
@@ -368,6 +394,8 @@ class Team:
             team['status'] = 'done'
             self.save(message, session, 'The team finished.')
             reply = reply or self.summary(team)
+            if gate:
+                reply += await self.deliver(gate, objective)
             if tests and not tests['passed']:
                 # The lead may judge a failure unrelated, but the user is never left thinking the tests passed.
                 reply += f'\n\n**Tests:** `{tests["command"]}` failed after the team\'s work. The output is in the Terminal panel.'
@@ -428,7 +456,70 @@ class Team:
         record = await self.runner.files.run_command(self.tenant_id, self.project_id, self.session_id, command)
         return {'command': command, 'passed': record['status'] == 'completed', 'output': (record.get('output') or '')[-4000:]}
 
-    async def review_prompt(self, objective, team, repo, tests=None, previous=None):
+    def author_provider(self, team):
+        """Whose family wrote most of the changed files, as agent-stack names it; its reviewer is the other one.
+        Work by OpenCode or Gemini counts as not Claude's, so Claude reviews it."""
+        providers = {a['id']: a['provider'] for a in getattr(self, 'agents', [])}
+        weight = {'claude': 0, 'codex': 0}
+        for t in team['tasks']:
+            if not is_review(t) and not t.get('adversary'):
+                weight['claude' if providers.get(t.get('model_id')) == 'claude_cli' else 'codex'] += len(t.get('changed') or []) or 1
+        return max(weight, key=weight.get)
+
+    async def verify(self, objective, previous=None):
+        """Seal the integrated work and have the other model family review it. After a NO-GO the same change is
+        routed again, so the reviewer rechecks its findings; after a GO it is a new change, since a GO is final for what it saw."""
+        session, message = self.state()
+        team = message['team']
+        team['verified'] = {'status': 'sealing'}
+        self.save(message, session, 'Sealing the team’s work for an independent review.')
+        rounds = (previous or {}).get('round', 0) + (1 if (previous or {}).get('status') == 'GO' else 0)
+        change = f'frontier-{self.message_id[:12]}' + (f'-{rounds}' if rounds else '')
+        gate = {'round': rounds, 'change': change}
+        try:
+            if not agentstack.installed():
+                raise agentstack.AgentStackError('agent-stack is not installed on this computer, so the work could not be independently reviewed.')
+            if not await gitops.has_head(self.root):
+                raise agentstack.AgentStackError('The repository has no commits yet; agent-stack reviews changes against one.')
+            sealed = await agentstack.route(self.root, change, f'frontier-{self.session_id}', objective, self.author_provider(team))
+            if sealed is None:
+                gate.update(status='nothing', error='The team left no changes to review.')
+            else:
+                gate.update(sealed=sealed, reviewer=f'{sealed["reviewer"]["model"]} ({sealed["reviewer"]["provider"]})')
+                session, message = self.state()
+                message['team']['verified'] = {'status': 'reviewing', 'reviewer': gate['reviewer'], 'files': len(sealed['paths'])}
+                self.save(message, session, f'{gate["reviewer"]} is reviewing {len(sealed["paths"])} changed files.')
+                result = await agentstack.review(self.root, sealed)
+                gate.update(status=result['verdict'], findings=result.get('findings') or [])
+        except (agentstack.AgentStackError, gitops.GitError, OSError) as exc:
+            gate.update(status='failed', error=str(exc))
+        self.show_gate(gate, f'Independent review: {gate["status"]}.')
+        return gate
+
+    def show_gate(self, gate, note=None):
+        session, message = self.state()
+        message['team']['verified'] = {k: v for k, v in gate.items() if k not in ('sealed', 'round')}
+        self.save(message, session, note)
+
+    async def deliver(self, gate, objective):
+        """Commit what got GO, through agent-stack, which checks it is still exactly the content reviewed."""
+        if gate['status'] == 'GO':
+            try:
+                done = await agentstack.finish(self.root, gate['sealed'], f'{objective.splitlines()[0][:150]} (Frontier team, reviewed by {gate["reviewer"]})')
+                gate.update(status='committed', commit=done['head'], files=len(gate['sealed']['paths']))
+            except agentstack.AgentStackError as exc:
+                gate.update(status='failed', error=str(exc))
+        self.show_gate(gate)
+        if gate['status'] == 'committed':
+            return (f'\n\n**Verified delivery:** {gate["reviewer"]} reviewed the exact staged changes and gave GO. Committed locally as '
+                    f'`{gate["commit"][:10]}` ({gate["files"]} files); nothing was pushed.')
+        if gate['status'] == 'nothing':
+            return '\n\n**Verified delivery:** the team left no changes, so nothing was reviewed or committed.'
+        why = gate.get('error') or '\n'.join(f'- {f.get("id")} ({f.get("severity")}): {f.get("impact")}' for f in gate.get('findings') or [])
+        return (f'\n\n**Not committed.** The independent review ({gate.get("reviewer") or "agent-stack"}) did not give GO '
+                f'({gate["status"]}).\n{why}\nThe changes are staged in the folder for you to look at.')
+
+    async def review_prompt(self, objective, team, repo, tests=None, previous=None, gate=None):
         reports = '\n\n'.join(f'TASK {t["id"]} — {t["title"]} — {t["model_name"]} — {t["status"]}' + (' — ADVERSARIAL CHECK' if t.get('adversary') else '')
                                 + (f' (merge: {t["merge"]})' if t.get('merge') else '') + f'\n{t["report"][:3000]}' for t in team['tasks'])
         diff = ''
@@ -449,8 +540,14 @@ class Team:
             ask += ('\n\nYOUR PREVIOUS REVIEW sent fixes back; the workers have made them. Confirm each fix in the code, start '
                     'with your suspicions, and recheck every requirement, not only the fixed ones. Keep every requirement in '
                     f'your new list; add one only if the request calls for it.\n{earlier}')
+        independent = ''
+        if gate:
+            ask += ' ' + GATE_NOTE
+            independent = (f'\n\nINDEPENDENT REVIEW (agent-stack, {gate.get("reviewer") or "another model family"}): {gate["status"]}'
+                           + (f'\n{gate["error"]}' if gate.get('error') else '')
+                           + (f'\n{json.dumps(gate["findings"], ensure_ascii=False)[:8000]}' if gate.get('findings') else ''))
         return (f'{ask}\n\nREQUEST FROM THE USER:\n{objective}\n\nPLAN:\n{team.get("summary")}\n\nREPORTS:\n{reports}\n\n'
-                f'DIFF OF THE PROJECT AFTER THE TEAM WORKED:\n{diff or "(not a git repository; see the reports)"}\n\nTHE PROJECT\'S TESTS:\n{checks}')
+                f'DIFF OF THE PROJECT AFTER THE TEAM WORKED:\n{diff or "(not a git repository; see the reports)"}\n\nTHE PROJECT\'S TESTS:\n{checks}{independent}')
 
     def update_task(self, task_id, note=None, **fields):
         """Change one task on a fresh read of the session, so parallel workers never overwrite each other."""

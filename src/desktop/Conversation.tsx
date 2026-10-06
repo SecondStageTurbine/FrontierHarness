@@ -3,7 +3,7 @@ import {Check,ChevronRight,LoaderCircle,FileCode2,AlertTriangle,Square,ArrowRigh
 import {MarkdownOutput} from '../components/Markdown';
 import {duration,money} from '../lib/api';
 import {working} from '../types';
-import {modeLabels,type Approval,type Message,type Mode,type Session,type Team as TeamState} from '../types';
+import {modeLabels,type Approval,type Message,type Mode,type Session,type Team as TeamState,type TeamVerified} from '../types';
 export type InspectorTab='Activity'|'Files'|'Changes'|'Terminal'|'Preview'|'Tasks';
 const modeIcon={read:Eye,edit:Pencil,auto:Zap};
 
@@ -43,6 +43,16 @@ const compact=(n:number)=>n>=1000?`${(n/1000).toFixed(n>=10000?0:1)}k`:String(n)
 
 /** What a tool asked to do, in one line the user can judge: the command, the file, or the arguments. */
 function describeInput(tool:string,input:Record<string,unknown>){const s=(k:string)=>typeof input[k]==='string'?input[k] as string:'';return s('command')||s('file_path')||s('path')||s('url')||s('pattern')||s('query')||(Object.keys(input).length?JSON.stringify(input).slice(0,400):tool)}
+/** agent-stack's independent review of the team's staged work, and whether it was committed. */
+function Verified({v,running}:{v:TeamVerified;running:boolean}){
+ const text={sealing:'sealing the changes for review',reviewing:`${v.reviewer} is reviewing ${v.files??''} changed files`,GO:`${v.reviewer} gave GO`,
+  'NO-GO':`${v.reviewer} gave NO-GO: ${v.findings?.length??0} finding${v.findings?.length===1?'':'s'}`,committed:`${v.reviewer} gave GO · committed ${v.commit?.slice(0,10)} (${v.files} files, local only)`,
+  failed:`not reviewed: ${v.error}`,nothing:'no changes to review'}[v.status];
+ const busy=running&&(v.status==='sealing'||v.status==='reviewing');
+ return <div className={`team-verified ${v.status}`}>{busy?<LoaderCircle size={11} className="spin"/>:v.status==='committed'||v.status==='GO'?<Check size={11}/>:<AlertTriangle size={11}/>}
+  <span><strong>Verified delivery</strong> · {text}</span>
+  {v.findings?.length?<ul>{v.findings.map(f=><li key={f.id}><code>{f.id}</code> {f.severity}: {f.impact}</li>)}</ul>:null}</div>;
+}
 /** The lead's plan and every worker's progress, while a team turn runs and after it ends. */
 function TeamCard({team,running,onOpenSession,onContinue}:{team:TeamState;running:boolean;onOpenSession?:(id:string)=>void;onContinue?:()=>void}){
  const label=team.status==='done'?'finished':running?{planning:'planning the work',working:'workers are on it',reviewing:'reviewing the results',fixing:'sending fixes back'}[team.status]:'stopped';
@@ -54,6 +64,7 @@ function TeamCard({team,running,onOpenSession,onContinue}:{team:TeamState;runnin
    <div><strong>{t.title}</strong><small>{t.model_name||'unassigned'}{t.adversary?' · adversarial check':t.cross_review?' · cross-model review':''}{t.merge?` · ${t.merge.startsWith('conflict')?'conflict on merge':t.merge}`:''}{t.changed?.length?` · ${t.changed.length} file${t.changed.length===1?'':'s'}`:''}</small>{t.report&&t.status!=='working'&&<p>{t.report.slice(0,240)}{t.report.length>240?'…':''}</p>}</div>
    {t.session_id&&onOpenSession&&<button className="icon-button" title="Open this worker's session" aria-label="Open worker session" onClick={()=>onOpenSession(t.session_id!)}><ExternalLink size={12}/></button>}
   </li>)}</ol>}
+  {team.verified&&<Verified v={team.verified} running={running}/>}
   {onContinue&&<button className="team-continue" title="Run the unfinished tasks again with the same lead and plan; finished tasks stay done" onClick={onContinue}><Users size={12}/>Continue the team</button>}
  </div>;
 }

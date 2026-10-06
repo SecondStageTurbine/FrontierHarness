@@ -51,8 +51,32 @@ TURN_TIMEOUT = 5400
 LIMIT_PHRASES = ('usage limit', 'rate limit', 'rate_limit', 'limit reached', 'quota', 'too many requests', 'out of credit', 'insufficient_quota')
 
 def cooling(broker, tenant_id, model_id):
-    """Whether a login ran out of usage recently and is being given a rest."""
-    return broker.cooldowns.get((tenant_id, model_id), 0) > time.monotonic()
+    """Whether a login ran out of usage recently and is being given a rest, or its subscription already
+    reports a spent window, so routing moves on before a turn is lost finding out."""
+    return broker.cooldowns.get((tenant_id, model_id), 0) > time.monotonic() or window_spent(broker, tenant_id, model_id)
+
+
+def window_spent(broker, tenant_id, model_id):
+    """A usage window at 100% that has not reset yet, from the limits Frontier last read for the Usage view.
+    Only what is cached is consulted: routing never waits on, or adds to, calls to the providers' endpoints."""
+    from datetime import datetime, timezone
+    from .maintenance import LIMITS_CACHE
+    try:
+        model = broker.store.get(tenant_id, 'models', model_id)
+    except Exception:
+        return False
+    account = model.get('account')
+    home = str(Path(broker.store.directory)/'subscriptions'/tenant_id/model['provider']/account) if account else str(None)
+    result = LIMITS_CACHE.get((model.get('provider'), home), (0, None))[1]
+    now_at = datetime.now(timezone.utc)
+    for limit in (result or {}).get('limits') or []:
+        try:
+            resets = datetime.fromisoformat(limit['resets_at']) if limit.get('resets_at') else None
+        except (TypeError, ValueError):
+            resets = None
+        if limit.get('percent', 0) >= 100 and (resets is None or resets > now_at):
+            return True
+    return False
 
 class ProviderError(RuntimeError):
     def __init__(self, message, retryable=False, exhausted=False, worked=False):

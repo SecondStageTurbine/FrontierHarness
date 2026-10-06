@@ -118,11 +118,13 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await page.locator('.project-list .project-main').first().click({button:'right'});
  await page.getByRole('menuitem',{name:'Project settings…'}).click();
  await page.getByLabel('Notes every agent is given',{exact:true}).fill('- Uses tabs.');
+ await page.locator('.toggle-row',{hasText:'Verified delivery'}).getByRole('switch').check();
  await page.getByRole('button',{name:'Save settings',exact:true}).click();
  await expect(page.locator('.toast')).toContainText('Project settings saved');
  await page.locator('.project-list .project-main').first().click({button:'right'});
  await page.getByRole('menuitem',{name:'Project settings…'}).click();
  await expect(page.getByLabel('Notes every agent is given',{exact:true})).toHaveValue('- Uses tabs.');
+ await expect(page.locator('.toggle-row',{hasText:'Verified delivery'}).getByRole('switch')).toBeChecked();
  await page.keyboard.press('Escape');
 
  // Settings: every page is there, the workspace rules save, and the tools table renders.
