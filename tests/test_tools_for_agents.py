@@ -150,6 +150,9 @@ def test_agents_can_use_the_users_own_browser_with_its_token_kept_secret(tmp_pat
     # Codex runs the browser's tools unasked, as it does Frontier's own; otherwise `exec` would refuse every one.
     argv = agent_argv('codex_cli', ['codex'], 'gpt-6-sol', 'edit', tmp_path, tmp_path/'f', {'mcp_servers': [server]})
     assert 'mcp_servers.frontier-browser.default_tools_approval_mode="approve"' in argv
+    # Codex's own browser plugins are off for the turn, so it cannot go around the user's browser to one it may not use.
+    assert 'plugins.unified-computer-use@openai-bundled.enabled=false' in argv and 'plugins.chrome@openai-bundled.enabled=false' in argv
+    assert not any(a.startswith('plugins.') for a in agent_argv('codex_cli', ['codex'], 'gpt-6-sol', 'edit', tmp_path, tmp_path/'f', {}))
     with TestClient(create_app(str(tmp_path/'state'), ScriptedAgent())) as c:
         t = setup(c)
         root = tmp_path/'project'; root.mkdir()
