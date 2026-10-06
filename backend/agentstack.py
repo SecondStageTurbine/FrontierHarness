@@ -19,6 +19,10 @@ from .localprocess import child_env, child_flags, terminate
 
 HOME = Path(os.environ.get('AGENT_STACK_HOME') or Path.home()/'.agent-stack')
 REVIEW_BUDGET = 45*60  # agent-stack's own ceiling for one review cycle.
+# ponytail: on Windows a Codex reviewer cannot read agent-stack's protected review snapshot (Access is denied), so
+# Claude-written work is reviewed by Claude Fable instead, which agent-stack records as same-provider assurance.
+# Drop this once agent-stack's Codex review works on Windows.
+CLAUDE_WORK_REVIEWER = ('claude', 'claude-fable-5') if os.name == 'nt' else None
 POLL = 15
 REF_HINT = re.compile(r'no applicable (acceptance|decision|dependency|verification) contract')
 
@@ -77,7 +81,7 @@ async def exclude_own_files(root):
         exclude.write_text('\n'.join(lines + missing) + '\n', encoding='utf-8')
 
 
-async def route(root, change, session, reason, author, refs=None):
+async def route(root, change, session, reason, author, refs=None, reviewer=None):
     """Stage everything and seal it for review. agent-stack finds the project's README, AGENTS.md, package.json
     and the like as the review's reference contracts; a kind the project lacks points at a changed file instead."""
     await exclude_own_files(root)
@@ -89,7 +93,8 @@ async def route(root, change, session, reason, author, refs=None):
     for _ in range(5):
         args = ['route', '--root', str(root), '--change', change, '--session', session, '--route', 'standard', '--reason', reason[:500],
                 '--author-provider', author, *[a for p in paths for a in ('--changed-path', p)],
-                *[a for kind, p in refs.items() for a in (f'--{kind}-ref', p)], '--json']
+                *[a for kind, p in refs.items() for a in (f'--{kind}-ref', p)],
+                *(['--reviewer-provider', reviewer[0], '--reviewer-model', reviewer[1], '--reviewer-effort', 'max'] if reviewer else []), '--json']
         code, out, err = await call('agent-stack', args, root)
         sealed = first_json(out) if code == 0 else None
         if sealed and sealed.get('routeToken'):

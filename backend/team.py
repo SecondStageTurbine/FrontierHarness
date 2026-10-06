@@ -481,11 +481,15 @@ class Team:
                 raise agentstack.AgentStackError('agent-stack is not installed on this computer, so the work could not be independently reviewed.')
             if not await gitops.has_head(self.root):
                 raise agentstack.AgentStackError('The repository has no commits yet; agent-stack reviews changes against one.')
-            sealed = await agentstack.route(self.root, change, f'frontier-{self.session_id}', objective, self.author_provider(team))
+            author = self.author_provider(team)
+            sealed = await agentstack.route(self.root, change, f'frontier-{self.session_id}', objective, author,
+                                            reviewer=agentstack.CLAUDE_WORK_REVIEWER if author == 'claude' else None)
             if sealed is None:
                 gate.update(status='nothing', error='The team left no changes to review.')
             else:
-                gate.update(sealed=sealed, reviewer=f'{sealed["reviewer"]["model"]} ({sealed["reviewer"]["provider"]})')
+                same = sealed['reviewer'].get('assurance') == 'operator-selected-same-provider'
+                gate.update(sealed=sealed, same_family=same,
+                            reviewer=f'{sealed["reviewer"]["model"]} ({sealed["reviewer"]["provider"]}{", same family as the authors" if same else ""})')
                 session, message = self.state()
                 message['team']['verified'] = {'status': 'reviewing', 'reviewer': gate['reviewer'], 'files': len(sealed['paths'])}
                 self.save(message, session, f'{gate["reviewer"]} is reviewing {len(sealed["paths"])} changed files.')
@@ -511,7 +515,9 @@ class Team:
                 gate.update(status='failed', error=str(exc))
         self.show_gate(gate)
         if gate['status'] == 'committed':
-            return (f'\n\n**Verified delivery:** {gate["reviewer"]} reviewed the exact staged changes and gave GO. Committed locally as '
+            caveat = (' This was a same-family review, a weaker check than a cross-family one: the Codex reviewer does not work on '
+                      'Windows yet.') if gate.get('same_family') else ''
+            return (f'\n\n**Verified delivery:** {gate["reviewer"]} reviewed the exact staged changes and gave GO.{caveat} Committed locally as '
                     f'`{gate["commit"][:10]}` ({gate["files"]} files); nothing was pushed.')
         if gate['status'] == 'nothing':
             return '\n\n**Verified delivery:** the team left no changes, so nothing was reviewed or committed.'

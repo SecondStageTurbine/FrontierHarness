@@ -23,7 +23,7 @@ def test_a_no_go_goes_back_to_the_workers_even_when_the_lead_says_done_and_only_
             return AgentResult('{"verdict": "done", "reply": "Done."}', 5, 5)  # The lead would let the NO-GO through.
         (Path(root)/'a.txt').write_text('A\n' if 'independent review found' in prompt else 'A', encoding='utf-8')
         return AgentResult('Wrote a.txt.', 1, 1)
-    async def route(root, change, session, reason, author, refs=None):
+    async def route(root, change, session, reason, author, refs=None, reviewer=None):
         return {'routeToken': 't', 'reviewPacketPath': 'p', 'baseline': {'token': 'b'}, 'paths': ['a.txt'], 'change': change,
                 'reviewer': {'provider': 'codex', 'model': 'gpt-6-sol'}}
     async def review(root, sealed):
@@ -63,7 +63,7 @@ def test_a_review_that_never_returns_go_is_not_committed(tmp_path, monkeypatch):
             return AgentResult('{"verdict": "done", "reply": "Done."}', 5, 5)
         (Path(root)/'a.txt').write_text('A', encoding='utf-8')
         return AgentResult('Wrote a.txt.', 1, 1)
-    async def route(root, change, session, reason, author, refs=None):
+    async def route(root, change, session, reason, author, refs=None, reviewer=None):
         return {'routeToken': 't', 'reviewPacketPath': 'p', 'baseline': {'token': 'b'}, 'paths': ['a.txt'], 'reviewer': {'provider': 'claude', 'model': 'claude-fable-5'}}
     async def review(root, sealed):
         raise agentstack.AgentStackError('The review did not return a verdict: timed out')
@@ -126,3 +126,39 @@ def test_routing_skips_a_subscription_whose_window_is_spent_until_it_resets(tmp_
     assert cooling(broker, 'tenant-a', 'claude_cli')
     maintenance.LIMITS_CACHE[('claude_cli', 'None')][1]['limits'][0]['resets_at'] = '2000-01-01T00:00:00+00:00'
     assert not cooling(broker, 'tenant-a', 'claude_cli')  # The window has reset since it was read.
+
+
+def test_claude_written_work_goes_to_fable_and_the_reply_says_it_was_a_same_family_review(tmp_path, monkeypatch):
+    from backend.team import Team
+    asked = {}
+    async def respond(config, prompt, mode, root):
+        if '"tasks"' in prompt and 'REPORTS:' not in prompt:
+            return AgentResult('{"summary": "One step.", "tasks": [{"id": "a", "title": "Write A", "instructions": "Create a.txt.", "parallel": false}]}', 5, 5)
+        if 'REPORTS:' in prompt:
+            return AgentResult('{"verdict": "done", "reply": "Done."}', 5, 5)
+        (Path(root)/'a.txt').write_text('A', encoding='utf-8')
+        return AgentResult('Wrote a.txt.', 1, 1)
+    async def route(root, change, session, reason, author, refs=None, reviewer=None):
+        asked['reviewer'] = reviewer
+        return {'routeToken': 't', 'reviewPacketPath': 'p', 'baseline': {'token': 'b'}, 'paths': ['a.txt'],
+                'reviewer': {'provider': 'claude', 'model': 'claude-fable-5', 'assurance': 'operator-selected-same-provider'}}
+    async def review(root, sealed):
+        return {'verdict': 'GO', 'findings': []}
+    async def finish(root, sealed, message):
+        return {'head': 'abcdef1234567890'}
+    monkeypatch.setattr(Team, 'author_provider', lambda self, team: 'claude')
+    monkeypatch.setattr(agentstack, 'CLAUDE_WORK_REVIEWER', ('claude', 'claude-fable-5'))
+    for name, fake in (('installed', lambda: True), ('route', route), ('review', review), ('finish', finish)):
+        monkeypatch.setattr(agentstack, name, fake)
+    store = setup_store(tmp_path/'state')
+    root = repo(tmp_path)
+    runner = AgentRunner(store, ScriptedAgent(respond=respond))
+    project, session = open_project(store, runner, 'tenant-a', root)
+    store.put('tenant-a', 'projects', {**project, 'verified_delivery': True})
+    async def scenario():
+        runner.send('tenant-a', project['id'], session['id'], 'Create a.txt.', 'claude_cli', 'edit', team=True)
+        await asyncio.gather(runner.turns[('tenant-a', session['id'])], return_exceptions=True)
+    asyncio.run(scenario())
+    reply = store.get('tenant-a', 'sessions', session['id'])['messages'][-1]
+    assert asked['reviewer'] == ('claude', 'claude-fable-5')
+    assert 'same family as the authors' in reply['content'] and 'weaker check' in reply['content']
