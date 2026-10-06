@@ -73,3 +73,18 @@ def test_the_dashboard_sees_and_controls_a_projects_dev_server(tmp_path):
         assert dev['running'] and dev['port'] == 5199 and dev['command'] == command
         c.post(f'/api/t/{t}/projects/{p["id"]}/devserver', json={'action': 'stop'})
         assert c.get(f'/api/t/{t}/dashboard').json()[0]['dev']['running'] is False
+
+
+def test_time_worked_counts_overlapping_turns_once_and_a_running_turn_until_now():
+    from datetime import datetime, timezone
+    from backend.desktop_routes import time_worked
+    now = datetime(2026, 10, 6, 18, 0, tzinfo=timezone.utc)
+    turns = [('p', '2026-10-06T17:00:00+00:00', '2026-10-06T17:30:00+00:00', 'complete'),
+             ('p', '2026-10-06T17:20:00+00:00', '2026-10-06T17:40:00+00:00', 'complete'),  # A parallel worker: 17:00-17:40 once.
+             ('p', '2026-10-06T17:50:00+00:00', None, 'running'),                          # Still working: 10 min so far.
+             ('p', '2026-10-06T16:00:00+00:00', None, 'failed'),                           # No finish time: not counted.
+             ('p', '2026-09-01T10:00:00+00:00', '2026-09-01T11:00:00+00:00', 'complete'),  # Last month: total only.
+             ('q', '2026-10-06T17:00:00+00:00', '2026-10-06T17:05:00+00:00', 'cancelled')]
+    worked = time_worked(turns, now)
+    assert worked['p']['week'] == 50*60 and worked['p']['total'] == 110*60
+    assert worked['q']['total'] == 5*60 and set(worked) == {'p', 'q'}

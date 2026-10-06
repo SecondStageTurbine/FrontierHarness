@@ -85,6 +85,30 @@ def shown(project):
 
 STATE_RANK={'working':3,'waiting':2,'done':1}  # Which state a project shows when its sessions differ.
 
+def time_worked(turns,now_at):
+    """Seconds agents spent working on each project: today (local), the last 7 days, and all time.
+    Overlapping turns, as in a team's parallel workers, count once: it is time the project was being worked on."""
+    spans={}
+    for project_id,start,end,status in turns:
+        if not project_id or not start or (not end and status!='running'):
+            continue  # A turn that ended without a finish time has no length to count.
+        a,b=datetime.fromisoformat(start),(datetime.fromisoformat(end) if end else now_at)
+        if b>a:
+            spans.setdefault(project_id,[]).append((a,b))
+    day=now_at.astimezone().replace(hour=0,minute=0,second=0,microsecond=0)
+    week=now_at-timedelta(days=7)
+    out={}
+    for project_id,rows in spans.items():
+        merged=[]
+        for a,b in sorted(rows):
+            if merged and a<=merged[-1][1]:
+                merged[-1][1]=max(merged[-1][1],b)
+            else:
+                merged.append([a,b])
+        since=lambda floor:sum(max(0,(b-max(a,floor)).total_seconds()) for a,b in merged)
+        out[project_id]={'today':round(since(day)),'week':round(since(week)),'total':round(since(datetime.min.replace(tzinfo=timezone.utc)))}
+    return out
+
 def session_sidebar_state(session,active_sessions):
     """Small status model for the desktop rail: working, waiting, done, or quiet."""
     if session.get('id') in active_sessions:
@@ -138,6 +162,12 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
     def writer_for(tenant_id,project_id,session_id):
         """The agent that writes a commit message, a pull request or a summary for this conversation."""
         return runner.writer(tenant_id,store.get(tenant_id,'sessions',session_id) if session_id else {'messages':[]},store.get(tenant_id,'projects',project_id))
+
+    @app.get('/api/t/{tenant_id}/time-worked')
+    async def time_worked_route(tenant_id:str,request:Request):
+        """Its own read, polled slowly: it walks every turn, which the dashboard's five-second poll should not."""
+        scoped(request,tenant_id)
+        return time_worked(await asyncio.to_thread(store.turn_times,tenant_id),datetime.now(timezone.utc))
 
     @app.get('/api/t/{tenant_id}/dashboard')
     async def dashboard(tenant_id:str,request:Request):

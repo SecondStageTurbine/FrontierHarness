@@ -113,6 +113,15 @@ class Store:
                  'team_parent': r['team_parent'], 'messages': [{'role': r['role'], 'status': r['status'], 'content': r['content']}] if r['count'] else []}
                 for r in rows]
 
+    def turn_times(self, tenant_id):
+        """(project_id, started, finished, status) for every agent turn, team workers' included, read in SQL."""
+        self.tenant_internal(tenant_id)
+        with self.db() as db:
+            return [tuple(r) for r in db.execute("""SELECT json_extract(s.data,'$.project_id'), json_extract(m.value,'$.created_at'),
+                json_extract(m.value,'$.finished_at'), json_extract(m.value,'$.status')
+                FROM entities s, json_each(s.data,'$.messages') m
+                WHERE s.tenant_id=? AND s.kind='sessions' AND json_extract(m.value,'$.role')='assistant'""", (tenant_id,))]
+
     def delete(self, tenant_id, kind, entity_id):
         self.get(tenant_id, kind, entity_id)
         with self.db() as db:

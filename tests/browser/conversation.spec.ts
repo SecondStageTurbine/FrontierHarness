@@ -218,6 +218,7 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  const card=page.locator('.dashboard-card',{hasText:'Authentication project'});
  await expect(card).toContainText('No dev server command');
  await expect(card.locator('.dashboard-last')).toContainText('Style the button, but ask me first.');
+ await expect(card.locator('.dashboard-facts')).toContainText('this week');
  await page.screenshot({path:'test-results/dashboard.png'});
  await card.locator('.dashboard-name').click();
  await expect(page.locator('.projects-dashboard')).toHaveCount(0);

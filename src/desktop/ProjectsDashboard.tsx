@@ -1,6 +1,6 @@
 import {useState} from 'react';
 import {useQuery} from '@tanstack/react-query';
-import {FolderOpen,GitBranch,Play,Square,RotateCw,ExternalLink,LoaderCircle,Settings2,AlertTriangle,MessageSquare} from 'lucide-react';
+import {FolderOpen,GitBranch,Play,Square,RotateCw,ExternalLink,LoaderCircle,Settings2,AlertTriangle,MessageSquare,Clock} from 'lucide-react';
 import {useWorkspace} from '../app/context';
 import {api} from '../lib/api';
 
@@ -18,10 +18,20 @@ function ago(at:string|null){
  return new Date(at).toLocaleDateString([],{month:'short',day:'numeric'});
 }
 
+type Worked={today:number;week:number;total:number};
+
+/** 4 h 05 min, 12 min, <1 min. */
+function span(s:number){
+ if(s<60)return s?'<1 min':'0 min';
+ const h=Math.floor(s/3600),m=Math.floor(s%3600/60);
+ return h?`${h} h ${String(m).padStart(2,'0')} min`:`${m} min`;
+}
+
 /** Every project at a glance: its agents, its dev server, its branch, its board, and when it last moved. */
 export function ProjectsDashboard({onOpen,onOpenSession,onSettings}:{onOpen:(id:string)=>void;onOpenSession:(projectId:string,sessionId:string)=>void;onSettings:(id:string)=>void}){
  const {path,tenant,notify}=useWorkspace();
  const rows=useQuery({queryKey:['tenant',tenant?.id,'/dashboard'],queryFn:({signal})=>api.get<Row[]>(path('/dashboard'),signal),refetchInterval:5000,enabled:!!tenant});
+ const worked=useQuery({queryKey:['tenant',tenant?.id,'/time-worked'],queryFn:({signal})=>api.get<Record<string,Worked>>(path('/time-worked'),signal),refetchInterval:60000,enabled:!!tenant});
  const [busy,setBusy]=useState('');
  async function dev(row:Row,action:'start'|'stop'|'restart'){
   setBusy(row.id);
@@ -40,6 +50,7 @@ export function ProjectsDashboard({onOpen,onOpenSession,onSettings}:{onOpen:(id:
    {r.last_session?.snippet&&<p className="dashboard-snippet">{r.last_session.snippet}</p>}
    <div className="dashboard-facts">
     {r.git&&<span title={`${r.git.changes} uncommitted change${r.git.changes===1?'':'s'}`}><GitBranch size={12}/>{r.git.branch}{r.git.changes?<em>{r.git.changes} changed</em>:null}{r.git.ahead?<em>↑{r.git.ahead}</em>:null}{r.git.behind?<em>↓{r.git.behind}</em>:null}</span>}
+    {worked.data?.[r.id]&&<span title="Time agents spent working on this project; parallel turns count once"><Clock size={12}/>{span(worked.data[r.id].today)} today · {span(worked.data[r.id].week)} this week · {span(worked.data[r.id].total)} total</span>}
     {(r.board.doing+r.board.todo+r.board.blocked)>0&&<span title="Open tasks on the board">{r.board.doing} doing · {r.board.todo} to do{r.board.blocked?` · ${r.board.blocked} blocked`:''}</span>}
    </div>
    <div className="dashboard-dev">
