@@ -65,8 +65,9 @@ HOST = ('You are running inside Frontier, a desktop application; this turn is on
 # discovering it and telling the user to run git by hand.
 POSTURE = {
     'read': 'This turn is Read only: you may not change files or run commands.',
-    'edit': ('This turn is Edit files: you may change files in the project, but git commit and push '
-             'are not possible — the .git directory and the network are off limits under this posture. '
+    'edit': ('This turn is Edit files: you may change files in the project and use the network (web pages, APIs, '
+             'package installs), but git commit and push are not possible — the .git directory is read only and '
+             'git credentials are out of reach under this posture. '
              'If the task needs a commit or push, do the file work, then say the user should resend '
              'that part under Full auto. Do not ask the user to run git by hand.'),
     'auto': 'This turn is Full auto: you may edit, run commands, commit, and push as the task needs.',

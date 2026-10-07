@@ -162,3 +162,9 @@ def test_claude_written_work_goes_to_fable_and_the_reply_says_it_was_a_same_fami
     reply = store.get('tenant-a', 'sessions', session['id'])['messages'][-1]
     assert asked['reviewer'] == ('claude', 'claude-fable-5')
     assert 'same family as the authors' in reply['content'] and 'weaker check' in reply['content']
+
+
+def test_an_edit_files_turn_is_told_it_has_the_network():
+    # Codex runs Edit files with network_access=true; telling the agent otherwise made it refuse web pages.
+    from backend.agent import POSTURE
+    assert 'use the network' in POSTURE['edit'] and 'network are off limits' not in POSTURE['edit']
