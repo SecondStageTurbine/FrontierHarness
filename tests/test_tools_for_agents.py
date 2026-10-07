@@ -185,3 +185,10 @@ def test_codex_runs_workspace_mcp_tools_once_the_turn_may_act_and_one_browser_is
     names = lambda project: [s['name'] for s in runner.extras('tenant-a', 't', 'edit', project)['mcp_servers']]
     assert names({'root': str(tmp_path), 'agent_browser': True, 'agent_browser_mode': 'mine'}) == ['github', 'frontier-browser']
     assert sorted(names({'root': str(tmp_path)})) == ['github', 'playwright']  # Without the project's browser, the workspace's stays.
+
+
+def test_agents_in_the_users_browser_keep_to_one_tab():
+    # Agents opened a new tab per page (ten in one HUD Energy turn) because they were told to prefer new tabs.
+    from backend.agent import browser_note
+    note = browser_note({'agent_browser': True, 'agent_browser_mode': 'mine'}, '.')
+    assert 'at most one tab of your own' in note and 'open new tabs rather than' not in note
