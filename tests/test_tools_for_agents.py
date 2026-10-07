@@ -192,3 +192,20 @@ def test_agents_in_the_users_browser_keep_to_one_tab():
     from backend.agent import browser_note
     note = browser_note({'agent_browser': True, 'agent_browser_mode': 'mine'}, '.')
     assert 'at most one tab of your own' in note and 'open new tabs rather than' not in note
+
+
+def test_a_fresh_browser_can_be_firefox_but_the_users_own_browser_never_is(tmp_path, monkeypatch):
+    from backend import agent
+    fresh = browser_server({'root': str(tmp_path), 'agent_browser': True, 'agent_browser_channel': 'firefox'})
+    assert fresh['args'][fresh['args'].index('--browser')+1] == 'firefox' and '--isolated' in fresh['args']
+    mine = browser_server({'root': str(tmp_path), 'agent_browser': True, 'agent_browser_mode': 'mine', 'agent_browser_channel': 'firefox'})
+    assert mine['args'][mine['args'].index('--browser')+1] == 'chrome'  # The Playwright extension exists only for Chrome and Edge.
+    runs = []
+    monkeypatch.setattr(agent, 'FIREFOX_READY', False)
+    monkeypatch.setattr('subprocess.run', lambda argv, **kw: runs.append(argv) or type('Done', (), {'returncode': 0})())
+    agent.ensure_firefox({'agent_browser': True, 'agent_browser_channel': 'chrome'})
+    agent.ensure_firefox({'agent_browser': True, 'agent_browser_mode': 'mine', 'agent_browser_channel': 'firefox'})
+    assert runs == []  # Only a fresh Firefox needs Playwright's own build.
+    agent.ensure_firefox({'agent_browser': True, 'agent_browser_channel': 'firefox'})
+    agent.ensure_firefox({'agent_browser': True, 'agent_browser_channel': 'firefox'})
+    assert len(runs) == 1 and runs[0][-2:] == ['install-browser', 'firefox']  # Fetched once per run of Frontier.

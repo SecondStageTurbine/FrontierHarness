@@ -106,19 +106,25 @@ def browser_server(project, token=None):
     """A real browser the agent can open, click and read, through Playwright's MCP server.
 
     Screenshots land in .frontier/browser in the project, where the Preview panel shows them. By default a
-    fresh browser, headed when the user asked to watch and otherwise headless. With "my own browser", it is
+    fresh browser (Edge, Chrome, or Playwright's own Firefox), headed when the user asked to watch and otherwise headless.
+    With "my own browser", it is
     the Chrome or Edge the user already has open, reached through the Playwright extension, with their tabs
     and sign-ins; the extension's token, when given, connects without the user approving each time.
     On Windows npx is a .cmd, so it goes through cmd. Its tools run unasked in every tool, Codex included.
     """
     output = str(Path(project['root'])/'.frontier'/'browser')
     if project.get('agent_browser_mode') == 'mine':
-        args = ['-y', '@playwright/mcp@latest', '--extension', '--browser', project.get('agent_browser_channel') or 'chrome', '--output-dir', output]
+        # The Playwright extension exists only for Chrome and Edge, so a user's own browser is never Firefox.
+        channel = project.get('agent_browser_channel') if project.get('agent_browser_channel') in ('chrome', 'msedge') else 'chrome'
+        args = ['-y', '@playwright/mcp@latest', '--extension', '--browser', channel, '--output-dir', output]
         command, args = (('cmd', ['/c', 'npx', *args]) if os.name == 'nt' else ('npx', args))
         return {'name': 'frontier-browser', 'transport': 'stdio', 'command': command, 'args': args, 'trusted': True, 'enabled': True,
                 'env': {'PLAYWRIGHT_MCP_EXTENSION_TOKEN': token} if token else {}}
     args = ['-y', '@playwright/mcp@latest', '--isolated', '--output-dir', output] + ([] if project.get('agent_browser_visible') else ['--headless'])
-    if os.name == 'nt':
+    channel = project.get('agent_browser_channel')
+    if channel in ('firefox', 'chrome'):
+        args += ['--browser', channel]  # Firefox is Playwright's own build, fetched by ensure_firefox before the turn.
+    elif os.name == 'nt':
         # Playwright wants Chrome by default; Edge ships with every Windows 10 and 11, so it is named outright.
         edge = next((str(p) for p in (Path(os.environ.get('PROGRAMFILES(X86)', r'C:\Program Files (x86)'))/'Microsoft/Edge/Application/msedge.exe',
                                       Path(os.environ.get('PROGRAMFILES', r'C:\Program Files'))/'Microsoft/Edge/Application/msedge.exe',
@@ -140,6 +146,25 @@ def sandbox_note(policy):
     if not parts:
         return None
     return 'This turn runs in Frontier\'s sandbox, set by the user. ' + ' '.join(parts) + ' If the sandbox stops something the task needs, say so plainly instead of working around it.'
+
+
+FIREFOX_READY = False
+
+
+def ensure_firefox(project):
+    """Playwright drives its own build of Firefox, not one the user installed: downloaded once (about 120 MB) before the
+    first turn that needs it, so the turn does not fail on a missing browser. A repeat is a one-second no-op."""
+    global FIREFOX_READY
+    if FIREFOX_READY or not project.get('agent_browser') or project.get('agent_browser_mode') == 'mine' or project.get('agent_browser_channel') != 'firefox':
+        return
+    import subprocess
+    from .localprocess import child_flags
+    command = ['cmd', '/c', 'npx'] if os.name == 'nt' else ['npx']
+    try:
+        done = subprocess.run([*command, '-y', '@playwright/mcp@latest', 'install-browser', 'firefox'], capture_output=True, timeout=900, **child_flags())
+        FIREFOX_READY = done.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # The turn goes on; the browser tool then reports what is missing.
 
 
 def browser_note(project, root):
@@ -661,6 +686,7 @@ class AgentRunner:
         root = str(self.files.root(tenant_id, project_id, session_id))
         token = secrets.token_urlsafe(24)
         self.turn_tokens[token] = (tenant_id, project_id, session_id, message_id)
+        await asyncio.to_thread(ensure_firefox, project)
         extras = self.extras(tenant_id, token, mode, project)
         extras['live'] = self.watch(tenant_id, session_id, message.get('model_name'))
         # Every project gets at least 90 minutes; a project may ask for more, never less.
