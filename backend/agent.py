@@ -66,10 +66,10 @@ HOST = ('You are running inside Frontier, a desktop application; this turn is on
 POSTURE = {
     'read': 'This turn is Read only: you may not change files or run commands.',
     'edit': ('This turn is Edit files: you may change files in the project and use the network (web pages, APIs, '
-             'package installs), but git commit and push are not possible — the .git directory is read only and '
-             'git credentials are out of reach under this posture. '
-             'If the task needs a commit or push, do the file work, then say the user should resend '
-             'that part under Full auto. Do not ask the user to run git by hand.'),
+             'package installs), but git clone, commit and push are not possible — every .git directory is read only and '
+             'git credentials are out of reach under this posture, so GitHub refuses with a credentials error even though '
+             'the network works. If the task needs a clone, commit or push, do the file work, then say the user should '
+             'resend that part under Full auto. Do not ask the user to run git by hand or to grant GitHub access.'),
     'auto': 'This turn is Full auto: you may edit, run commands, commit, and push as the task needs.',
 }
 

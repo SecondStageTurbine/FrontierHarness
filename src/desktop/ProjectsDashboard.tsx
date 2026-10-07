@@ -1,10 +1,10 @@
 import {useState} from 'react';
 import {useQuery} from '@tanstack/react-query';
-import {FolderOpen,GitBranch,Play,Square,RotateCw,ExternalLink,LoaderCircle,Settings2,AlertTriangle,MessageSquare,Clock} from 'lucide-react';
+import {FolderOpen,GitBranch,Play,Square,RotateCw,ExternalLink,LoaderCircle,Settings2,AlertTriangle,MessageSquare,Clock,Pin} from 'lucide-react';
 import {useWorkspace} from '../app/context';
 import {api} from '../lib/api';
 
-type Row={id:string;name:string;root:string;missing:boolean;state:'working'|'waiting'|'done'|null;working:number;sessions:number;last_activity:string|null;
+type Row={id:string;name:string;root:string;pinned:boolean;missing:boolean;state:'working'|'waiting'|'done'|null;working:number;sessions:number;last_activity:string|null;
  last_session:{id:string;name:string;snippet:string}|null;dev:{running:boolean;port?:number|null;command?:string|null;exit_code?:number|null};
  git:{branch:string;changes:number;ahead:number;behind:number}|null;board:{todo:number;doing:number;blocked:number;done:number}};
 
@@ -38,10 +38,10 @@ export function ProjectsDashboard({onOpen,onOpenSession,onSettings}:{onOpen:(id:
   try{await api.post(path(`/projects/${row.id}/devserver`),{action});await rows.refetch()}catch(e){notify((e as Error).message)}finally{setBusy('')}
  }
  return <div className="projects-dashboard">
-  <header><h1>Projects</h1><p>{rows.data?`${rows.data.length} project${rows.data.length===1?'':'s'}, most recently active first.`:'Reading your projects…'}</p></header>
+  <header><h1>Projects</h1><p>{rows.data?`${rows.data.length} project${rows.data.length===1?'':'s'}, pinned first, then most recently active.`:'Reading your projects…'}</p></header>
   {rows.error&&<p className="error-text">{rows.error.message}</p>}
   <div className="dashboard-grid">{rows.data?.map(r=><article key={r.id} className={`dashboard-card ${r.state||'quiet'}`}>
-   <div className="dashboard-card-head"><button className="dashboard-name" onClick={()=>onOpen(r.id)}><FolderOpen size={15}/><strong>{r.name}</strong></button>
+   <div className="dashboard-card-head"><button className="dashboard-name" onClick={()=>onOpen(r.id)}><FolderOpen size={15}/><strong>{r.name}</strong>{r.pinned&&<Pin size={11} className="project-pin" aria-label="Pinned"/>}</button>
     <span className={`dashboard-state ${r.state||'quiet'}`}>{r.state?(r.state==='working'&&r.working>1?`${r.working} working`:STATE_LABEL[r.state]):'Quiet'}</span>
     <button className="icon-button" title="Project settings" aria-label={`Settings for ${r.name}`} onClick={()=>onSettings(r.id)}><Settings2 size={13}/></button></div>
    <code className="dashboard-root" title={r.root}>{r.root}</code>

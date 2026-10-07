@@ -32,4 +32,14 @@ test('a project row folds its sessions open underneath and starts a new session 
  await row('Alpha').getByRole('button',{name:'New session in Alpha'}).click();
  await expect(row('Alpha')).toHaveClass(/active/);
  await expect(page.getByRole('heading',{name:'What are we working on?'})).toBeVisible();
+
+ // Right-click → Pin to top keeps a project first in the list; Unpin puts it back.
+ const last=(await page.locator('.project-list .project-main > span:not(.sidebar-status)').allTextContents()).at(-1)!;
+ await row(last).locator('.project-main').click({button:'right'});
+ await page.getByRole('menuitem',{name:'Pin to top'}).click();
+ await expect(page.locator('.project-list .project-row').first()).toContainText(last);
+ await expect(row(last).getByLabel('Pinned')).toBeVisible();
+ await row(last).locator('.project-main').click({button:'right'});
+ await page.getByRole('menuitem',{name:'Unpin'}).click();
+ await expect(row(last).getByLabel('Pinned')).toHaveCount(0);
 });

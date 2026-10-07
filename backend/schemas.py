@@ -140,6 +140,7 @@ class ProjectSettings(StrictModel):
     sandbox: SandboxSettings | None = None
     team_adversary: bool = False
     verified_delivery: bool = False  # Team work is reviewed by agent-stack and committed only on its GO.
+    pinned: bool = False  # Kept at the top of the sidebar and the Projects dashboard.
 
 class PrCreateInput(StrictModel):
     title: str = Field(min_length=1, max_length=200)

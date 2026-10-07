@@ -199,12 +199,13 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
             server=devserver.get(project['root'])
             dev={k:v for k,v in server.status().items() if k!='output'} if server else {'running':False}
             counts=task_counts.get(project['id'])or dict.fromkeys(board.STATUSES,0)
-            rows.append({'id':project['id'],'name':project['name'],'root':project['root'],'missing':not Path(project['root']).is_dir(),
+            rows.append({'id':project['id'],'name':project['name'],'root':project['root'],'pinned':bool(project.get('pinned')),'missing':not Path(project['root']).is_dir(),
                          'state':max(states,key=STATE_RANK.get) if states else None,'working':sum(1 for s in states if s=='working'),
                          'sessions':len(mine),'last_activity':(latest or {}).get('updated_at') or project.get('updated_at'),
                          'last_session':{'id':latest['id'],'name':latest['name'],'snippet':' '.join((reply or {}).get('content','').split())[:160]} if latest else None,
                          'dev':{**dev,'command':project.get('dev_command')},'git':repo,'board':counts})
-        return sorted(rows,key=lambda r:r['last_activity'] or '',reverse=True)
+        rows.sort(key=lambda r:r['last_activity'] or '',reverse=True)
+        return sorted(rows,key=lambda r:not r['pinned'])  # Pinned first; each group stays most recent first.
 
     @app.get('/api/t/{tenant_id}/activity')
     def activity(tenant_id:str,request:Request):

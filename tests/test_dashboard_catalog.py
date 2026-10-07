@@ -88,3 +88,17 @@ def test_time_worked_counts_overlapping_turns_once_and_a_running_turn_until_now(
     worked = time_worked(turns, now)
     assert worked['p']['week'] == 50*60 and worked['p']['total'] == 110*60
     assert worked['q']['total'] == 5*60 and set(worked) == {'p', 'q'}
+
+
+def test_a_pinned_project_comes_first_on_the_dashboard_and_survives_other_settings(tmp_path):
+    with TestClient(create_app(str(tmp_path/'state'), ScriptedAgent())) as c:
+        t = setup(c)
+        roots = [tmp_path/'old', tmp_path/'new']
+        for r in roots: r.mkdir()
+        old = c.post(f'/api/t/{t}/projects', json={'name': 'Old', 'root': str(roots[0])}).json()
+        c.post(f'/api/t/{t}/projects', json={'name': 'New', 'root': str(roots[1])})
+        assert [r['name'] for r in c.get(f'/api/t/{t}/dashboard').json()][0] == 'New'
+        c.put(f'/api/t/{t}/projects/{old["id"]}/settings', json={'pinned': True})
+        c.put(f'/api/t/{t}/projects/{old["id"]}/settings', json={'memory': '- tabs'})  # Saving other settings keeps the pin.
+        rows = c.get(f'/api/t/{t}/dashboard').json()
+        assert rows[0]['name'] == 'Old' and rows[0]['pinned'] and not rows[1]['pinned']
