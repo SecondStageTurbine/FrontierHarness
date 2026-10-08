@@ -193,6 +193,8 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await page.getByRole('button',{name:'Send',exact:true}).click();
  const question=page.locator('.question-card');
  await expect(question).toContainText('Which colour should the button be?',{timeout:15000});
+ // The view follows the turn as it grows, so the question card is in sight without scrolling (it used to stop short).
+ await expect.poll(()=>page.evaluate(()=>{const sc=document.querySelector('.conversation-scroll') as HTMLElement;return sc.scrollHeight-sc.scrollTop-sc.clientHeight})).toBeLessThan(4);
  await question.getByRole('button',{name:'Green',exact:true}).click();
  await expect(page.locator('.agent-turn').last()).toContainText('You chose Green.',{timeout:15000});
  await expect(question).toHaveCount(0);

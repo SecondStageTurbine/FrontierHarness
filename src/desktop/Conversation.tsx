@@ -1,4 +1,4 @@
-import {useState} from 'react';
+import {useEffect,useState} from 'react';
 import {Check,ChevronRight,LoaderCircle,FileCode2,AlertTriangle,Square,ArrowRightLeft,Eye,Pencil,Zap,Clock,X,Undo2,FoldVertical,ShieldQuestion,MessageCircleQuestion,Users,FileText,Terminal,GitCompareArrows,ExternalLink,MessageSquare} from 'lucide-react';
 import {MarkdownOutput} from '../components/Markdown';
 import {duration,money} from '../lib/api';
@@ -12,14 +12,18 @@ export function Conversation({session,onInspect,onUnqueue,onRevert,onDecide,onRe
  const [cite,setCite]=useState<{text:string;from:string;x:number;y:number}|null>(null);
  // Selecting text inside a reply offers to cite it in the composer as a typed reference.
  function onSelect(e:React.MouseEvent){if(!onCite)return;const sel=window.getSelection();const text=sel?.toString().trim()||'';if(!text||!sel||sel.rangeCount===0){setCite(null);return}const node=sel.anchorNode instanceof Element?sel.anchorNode:sel.anchorNode?.parentElement;const turn=node?.closest('.agent-turn');if(!turn){setCite(null);return}const rect=sel.getRangeAt(0).getBoundingClientRect();const host=(e.currentTarget as HTMLElement).getBoundingClientRect();setCite({text:text.slice(0,20000),from:turn.querySelector('.frontier-author strong')?.textContent||'the agent',x:rect.left-host.left,y:rect.top-host.top})}
- const [visible,setVisible]=useState(20);
- const shown=session.messages.slice(-visible);
+ // The first message shown stays put as new ones arrive: a window that slid would drop messages off the top
+ // mid-turn and jerk the view. It resets per conversation; "Load earlier" moves it back.
+ const [from,setFrom]=useState(()=>Math.max(0,session.messages.length-20));
+ useEffect(()=>setFrom(Math.max(0,session.messages.length-20)),[session.id]);
+ const start=Math.min(from,Math.max(0,session.messages.length-20));
+ const shown=session.messages.slice(start);
  const queue=session.queue||[];
  const [showSummary,setShowSummary]=useState(false);
  const boundary=session.summary?.through;
  return <div className="conversation-thread" onMouseUp={onSelect} style={{position:'relative'}}>
   {cite&&<button type="button" className="cite-button" style={{left:Math.max(0,cite.x),top:Math.max(0,cite.y-30)}} onMouseDown={e=>e.preventDefault()} onClick={()=>{onCite?.(cite.text,cite.from);setCite(null);window.getSelection()?.removeAllRanges()}}><MessageSquare size={11}/>Cite in composer</button>}
-  {session.messages.length>visible&&<button className="history-more" onClick={()=>setVisible(v=>v+20)}>Load earlier messages</button>}
+  {start>0&&<button className="history-more" onClick={()=>setFrom(Math.max(0,start-20))}>Load earlier messages</button>}
   {shown.map(message=><div key={message.id} className={message.id===boundary?'':undefined}>{message.role==='user'
    ?<section className="conversation-turn"><div className="user-message"><span className="message-author">You</span>{onRewind&&!busy&&<button className="rewind-button" title="Edit this message and resend it; later messages are removed and the folder is put back to how it was before it" onClick={()=>onRewind(message.id)}><Pencil size={11}/>Edit from here</button>}<p>{message.content.split('\n\nREFERENCED CONTEXT')[0].split('\n\nAttached for context')[0]}</p>{!!message.context?.length&&<div className="context-chips read">{message.context.map((c,i)=><span key={i}>{c.kind==='file'?<FileText size={10}/>:c.kind==='terminal'?<Terminal size={10}/>:<GitCompareArrows size={10}/>}{c.label||c.path||c.kind}{c.start?`:${c.start}${c.end&&c.end!==c.start?`-${c.end}`:''}`:''}</span>)}</div>}</div></section>
    :<AgentMessage message={message} onInspect={onInspect} onRevert={onRevert} approvals={(session.approvals||[]).filter(a=>a.message_id===message.id)} onDecide={onDecide} onOpenSession={onOpenSession} onContinueTeam={message.id===session.messages.at(-1)?.id?onContinueTeam:undefined}/>}
