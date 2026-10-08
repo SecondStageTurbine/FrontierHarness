@@ -177,10 +177,11 @@ def browser_note(project, root):
         return ("The user's own browser, with their open tabs and the sites they are signed in to, is available through the "
                 'frontier-browser tools (list and select tabs, navigate, click, type, read the page, console messages, screenshots).'
                 + where + ' Use these tools for any web page, not another browser or computer-use tool. It is their real browser: '
-                'open at most one tab of your own for this task and do all your browsing in it, navigating it from page to page; '
-                'list the tabs first and reuse one already on the site you need rather than opening a duplicate. Never navigate '
-                'away from a tab the user had open, do not close their tabs or change their settings, close the tab you opened '
-                'when you are done, and do only what the task asks on sites where they are signed in.')
+                'your connection starts on a tab of its own (a Playwright "Welcome" page). Navigate that tab to the page you need '
+                'and do all your browsing in it, moving it from page to page; do not open new tabs (a tab opened here outlives '
+                'your turn, and a goal or a team runs many turns). As your last browser step, close that tab with the tabs close '
+                'action, and make no browser call after it, so nothing is left behind. Do not touch the user\'s own tabs or '
+                'change their settings, and do only what the task asks on sites where they are signed in.')
     return ('A real browser is available through the frontier-browser tools (navigate, click, type, read the page, console '
             'messages, screenshots).' + where + ' Use these tools for any web page, not another browser or computer-use tool. '
             'After changing anything a user sees, open it, check the console for errors, '

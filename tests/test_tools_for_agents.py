@@ -188,10 +188,12 @@ def test_codex_runs_workspace_mcp_tools_once_the_turn_may_act_and_one_browser_is
 
 
 def test_agents_in_the_users_browser_keep_to_one_tab():
-    # Agents opened a new tab per page (ten in one HUD Energy turn) because they were told to prefer new tabs.
+    # Agents opened a new tab per page (ten in one HUD Energy turn) because they were told to prefer new tabs. Each turn's
+    # extension connection also leaves its own Welcome tab, so they now browse in that tab and close it at the end.
     from backend.agent import browser_note
     note = browser_note({'agent_browser': True, 'agent_browser_mode': 'mine'}, '.')
-    assert 'at most one tab of your own' in note and 'open new tabs rather than' not in note
+    assert 'Navigate that tab' in note and 'do not open new tabs' in note and 'close that tab' in note
+    assert 'open new tabs rather than' not in note
 
 
 def test_a_fresh_browser_can_be_firefox_but_the_users_own_browser_never_is(tmp_path, monkeypatch):
