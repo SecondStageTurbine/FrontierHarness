@@ -21,7 +21,7 @@ import secrets
 import sys
 from pathlib import Path
 
-from . import adaptive, benchmark, board, gitops, localhealth, push, sandbox, team as teamwork
+from . import adaptive, benchmark, board, gitops, localhealth, push, sandbox, slash, team as teamwork
 from .adaptive import ADAPTIVE, MAX_ESCALATIONS
 from .broker import CLI_TOOLS, ProviderError, cooling
 from .projects import ProjectFiles
@@ -528,6 +528,8 @@ class AgentRunner:
         """
         if mode not in MODES:
             raise ValueError('Choose read only, edit files, or full auto.')
+        if not team and re.match(r'/goal\b', content.strip(), re.I):
+            return self.goal_command(tenant_id, project_id, session_id, content.strip()[5:].strip(), model_id, mode, queue)
         session = self.store.get(tenant_id, 'sessions', session_id)
         if self.busy(tenant_id, session_id):
             if not queue:
@@ -590,6 +592,8 @@ class AgentRunner:
         except Exception:
             return  # The conversation went away with its project; nothing left to run.
         queued = session.get('queue') or []
+        if not queued and not self.busy(tenant_id, session_id):
+            return self.advance_goal(tenant_id, project_id, session)
         if not queued or self.busy(tenant_id, session_id):
             return
         item, session['queue'] = queued[0], queued[1:]
@@ -598,6 +602,66 @@ class AgentRunner:
             self.send(tenant_id, project_id, session_id, item['content'], item['model_id'], item['mode'], team=item.get('team', False), context=item.get('context'))
         except (ValueError, FileNotFoundError, TenantIsolationViolationException) as exc:
             self.store.event(tenant_id, session_id, 'queue.dropped', f'A queued message could not start: {exc}')
+
+    def goal_command(self, tenant_id, project_id, session_id, rest, model_id, mode, queue=False):
+        """/goal <objective> sets the session's goal and starts on it; /goal clear drops it; /goal resume (or a bare /goal)
+        picks a paused or blocked one back up with a fresh turn budget, on the agent and posture now selected."""
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        goal, word = session.get('goal'), rest.lower()
+        if word in ('clear', 'stop', 'cancel', 'off'):
+            if goal:
+                goal.update(status='cleared', finished_at=now())
+                self.store.put(tenant_id, 'sessions', session)
+                self.store.event(tenant_id, session_id, 'goal.cleared', 'The goal was cleared.')
+            return session
+        if word in ('', 'resume', 'continue'):
+            if not goal or goal.get('status') not in ('paused', 'blocked'):
+                raise ValueError('Type /goal followed by what you want done.' if not goal or goal.get('status') in ('cleared', 'complete')
+                                 else 'The goal is already being worked on.')
+            goal.update(status='active', turns=0, misses=0, model_id=model_id, mode=mode, note=None)
+            content = 'Continue toward the goal.'
+        else:
+            goal = {'objective': rest[:4000], 'status': 'active', 'turns': 0, 'misses': 0, 'max_turns': slash.MAX_GOAL_TURNS,
+                    'model_id': model_id, 'mode': mode, 'started_at': now(), 'note': None}
+            content = f'Goal: {goal["objective"]}'
+        session['goal'] = goal
+        self.store.put(tenant_id, 'sessions', session)
+        self.store.event(tenant_id, session_id, 'goal.set', f'Goal: {goal["objective"][:200]}')
+        return self.send(tenant_id, project_id, session_id, content, model_id, mode, queue=queue)
+
+    def advance_goal(self, tenant_id, project_id, session):
+        """After a turn: a goal the agent reports complete or blocked ends; one still in progress gets its next turn,
+        until a turn fails or is stopped, the agent twice gives no progress line, or the turn budget is spent."""
+        goal = session.get('goal')
+        last = next((m for m in reversed(session['messages']) if m['role'] == 'assistant'), None)
+        if not goal or goal.get('status') != 'active' or not last or last.get('goal_counted'):
+            return
+        last['goal_counted'] = True
+        goal['turns'] = goal.get('turns', 0) + 1
+        verdict, detail = slash.goal_verdict(last.get('content'))
+        go_on = False
+        if last.get('status') != 'complete':
+            goal.update(status='paused', note=f'The last turn {"was stopped" if last.get("status") == "cancelled" else "failed"}. Type /goal resume to go on.')
+        elif verdict in ('complete', 'blocked'):
+            goal.update(status=verdict, note=detail or None, finished_at=now())
+        elif goal['turns'] >= goal.get('max_turns', slash.MAX_GOAL_TURNS):
+            goal.update(status='paused', note=f'Paused after {goal["turns"]} turns. Type /goal resume for {slash.MAX_GOAL_TURNS} more.')
+        else:
+            goal['misses'] = 0 if verdict else goal.get('misses', 0) + 1
+            if goal['misses'] >= 2:
+                goal.update(status='paused', note='The agent twice ended a turn without reporting on the goal. Type /goal resume to go on.')
+            else:
+                go_on = True
+        self.store.put(tenant_id, 'sessions', session)
+        if not go_on:
+            self.store.event(tenant_id, session['id'], 'goal.' + goal['status'], f'Goal {goal["status"]}: {goal.get("note") or goal["objective"][:200]}')
+            return
+        try:
+            self.send(tenant_id, project_id, session['id'], f'Keep working toward the goal (turn {goal["turns"] + 1} of {goal.get("max_turns", slash.MAX_GOAL_TURNS)}).',
+                      goal['model_id'], goal['mode'])
+        except (ValueError, FileNotFoundError, TenantIsolationViolationException) as exc:
+            goal.update(status='paused', note=f'The next turn could not start: {exc}')
+            self.store.put(tenant_id, 'sessions', session)
 
     def unqueue(self, tenant_id, session_id, item_id):
         session = self.store.get(tenant_id, 'sessions', session_id)
@@ -701,6 +765,12 @@ class AgentRunner:
             # A chat is about anything; its folder is only somewhere to stand, not a codebase to look through.
             environment = ('This is a general conversation, not about a project. The working folder is an empty scratch '
                            'space for any files the conversation calls for; do not look through it for context.')
+        goal = session.get('goal')
+        if goal and goal.get('status') == 'active' and not message.get('team'):
+            environment = ' '.join(filter(None, [environment, slash.goal_note(goal)]))
+        # A message that is one agent command runs as that tool's own command where the tool can do that without its screen.
+        asked = next((m['content'] for m in reversed(session['messages']) if m['role'] == 'user'), '')
+        command = None if message.get('team') else slash.parse(asked)
         # Read only cannot change the folder, so it is not read twice to prove that.
         # In a repository, the whole working tree is also checkpointed as hidden git objects, so a
         # turn can be put back exactly, binaries included, without touching the user's branch.
@@ -748,6 +818,10 @@ class AgentRunner:
                 prompt = build_prompt(visible, bool(message.get('switched_from')), handoff_text, mode, summary,
                                       first=sum(1 for m in session['messages'] if m['role'] == 'user') == 1, rules=rules, memory=memory, environment=environment, board=board_text)
                 native = resumable(session, config, root, project, message)
+                cmd = command if command and config['provider'] in ('claude_cli', 'opencode_cli') else None
+                if cmd:
+                    prompt = cmd['raw'] if config['provider'] == 'claude_cli' else ''
+                turn_extras = {**extras, 'slash': cmd} if cmd and config['provider'] == 'opencode_cli' else extras
                 result, error = None, None
                 try:
                     if native:
@@ -755,8 +829,8 @@ class AgentRunner:
                         # only what was said since it last spoke is sent. A session it cannot find falls back to the replay.
                         fresh = [m for m in session['messages'][native['upto']:] if m['id'] != message_id]
                         try:
-                            result = await self.broker.invoke_agent(tenant_id, config, build_prompt(fresh, False, handoff_text, mode, rules=rules, memory=memory, environment=environment, board=board_text),
-                                                                    mode, root, {**extras, 'resume': native['id']})
+                            result = await self.broker.invoke_agent(tenant_id, config, prompt if cmd else build_prompt(fresh, False, handoff_text, mode, rules=rules, memory=memory, environment=environment, board=board_text),
+                                                                    mode, root, {**turn_extras, 'resume': native['id']})
                             result.resumed = True
                         except ProviderError as exc:
                             if exc.exhausted:
@@ -765,7 +839,7 @@ class AgentRunner:
                             self.save_turn(tenant_id, session_id, message_id, session_fields={'native': None})
                             self.store.event(tenant_id, session_id, 'turn.agent', f'{config["name"]} could not resume its own session ({exc}); the conversation is replayed instead.', message_id=message_id)
                     if result is None:
-                        result = await self.broker.invoke_agent(tenant_id, config, prompt, mode, root, extras)
+                        result = await self.broker.invoke_agent(tenant_id, config, prompt, mode, root, turn_extras)
                 except ProviderError as exc:
                     # An agent that is out of usage, or that could not take the turn at all (not signed in, not
                     # installed, a model it does not know, its service down), hands the same turn to another agent

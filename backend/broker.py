@@ -292,6 +292,19 @@ def codex_write_mode(extras):
 FRONTIER_TOOLS = ('ask_user', 'board_list', 'board_add', 'board_update')  # Served by permission_tool beside `approve`.
 CODEX_BROWSER_PLUGINS = ('browser@openai-bundled', 'chrome@openai-bundled', 'computer-use@openai-bundled', 'unified-computer-use@openai-bundled')
 
+def remember_commands(store, tenant_id, out):
+    """The slash commands Claude Code reports when a turn starts (its built-ins, plugins and skills), kept for the composer's menu."""
+    for line in out.splitlines()[:40]:
+        if '"subtype":"init"' in line.replace(' ', ''):
+            try:
+                names = json.loads(line).get('slash_commands') or []
+            except ValueError:
+                return
+            if names:
+                store.put(tenant_id, 'agent_commands', {'id': 'claude_cli', 'commands': sorted(set(names))})
+            return
+
+
 def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None):
     """One posture, four spellings. This is the only place the tools differ on power.
 
@@ -386,6 +399,9 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
     # cause behind "Unexpected server error" is only ever on stderr (opencode_reason reads it from there).
     argv = [*launch, 'run', '--format', 'json', '--print-logs', '--log-level', 'ERROR', '--model', model_name,
             '--agent', 'plan' if mode == 'read' else 'build']
+    if extras.get('slash'):
+        # One of OpenCode's own commands (a project or user command, or a plugin's), its arguments on the command line.
+        argv += ['--command', extras['slash']['name']] + ([extras['slash']['args']] if extras['slash']['args'] else [])
     return argv + (['--auto'] if mode == 'auto' else [])
 
 async def run_cli(argv, stdin_text, work, env=None, on_line=None):
@@ -738,6 +754,8 @@ class ModelBroker:
             except TimeoutError:
                 limit = (extras.get('timeout') or TURN_TIMEOUT) // 60
                 raise ProviderError(f'{CLI_TOOLS[provider][2]} was still working after {limit} minutes and was stopped. Anything it had already written to the folder is still there. A project whose checks run longer can raise the limit in Project settings.', worked=True) from None
+            if provider == 'claude_cli':
+                remember_commands(self.store, tenant_id, out)
             try:
                 return read_output(provider, code, out, err, prompt, final)
             except ProviderError:

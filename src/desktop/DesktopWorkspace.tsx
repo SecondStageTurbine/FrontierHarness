@@ -1,7 +1,7 @@
 import {Fragment,useState,useEffect,useRef,lazy,Suspense,useDeferredValue} from 'react';
 import {open as openDialog} from '@tauri-apps/plugin-dialog';
 import {isTauri,invoke} from '@tauri-apps/api/core';
-import {Activity,Server,LayoutGrid,Plus,Folder,FolderOpen,Search,MessageSquare,Settings2,PanelLeftClose,PanelRightOpen,Paperclip,ArrowUp,Square,LoaderCircle,X,ChevronDown,GitCompareArrows,Terminal,Eye,Pencil,Zap,ArrowRightLeft,Image as ImageIcon,Trash2,Pin,PinOff,Archive,ArchiveRestore,Clock,GitBranch,FoldVertical,ExternalLink,Layers,Globe,Split,Slash,Users,FileText,Terminal as TerminalIcon,Brain,AlarmClock,Settings as SettingsIcon,History} from 'lucide-react';
+import {Activity,Target,Server,LayoutGrid,Plus,Folder,FolderOpen,Search,MessageSquare,Settings2,PanelLeftClose,PanelRightOpen,Paperclip,ArrowUp,Square,LoaderCircle,X,ChevronDown,GitCompareArrows,Terminal,Eye,Pencil,Zap,ArrowRightLeft,Image as ImageIcon,Trash2,Pin,PinOff,Archive,ArchiveRestore,Clock,GitBranch,FoldVertical,ExternalLink,Layers,Globe,Split,Slash,Users,FileText,Terminal as TerminalIcon,Brain,AlarmClock,Settings as SettingsIcon,History} from 'lucide-react';
 import {useQuery} from '@tanstack/react-query';
 import {useWorkspace,useResource,useRefresh} from '../app/context';
 import {useLiveSession} from '../app/useLiveSession';
@@ -12,7 +12,7 @@ import {Field,Modal,Confirm} from '../components/ui';
 import {api,date} from '../lib/api';
 import {notifyTurnDone} from '../lib/notify';
 import {useUpdate,UpdateBanner} from '../app/Updater';
-import {ADAPTIVE,ADAPTIVE_HINT,agentProviders,modes,modeLabels,modeHints,providerNames,working,type Mode,type Model,type Project,type Session,type GitStatus,type Approval,type Skill,type ContextChip} from '../types';
+import {ADAPTIVE,ADAPTIVE_HINT,agentProviders,modes,modeLabels,modeHints,providerNames,working,type Mode,type Model,type Project,type Session,type GitStatus,type Approval,type Skill,type ContextChip,type SlashCommand} from '../types';
 import {ProjectSettings} from './ProjectSettings';
 import {SetupWizard} from './SetupWizard';
 import {ResumePicker} from './ResumePicker';
@@ -94,8 +94,14 @@ export default function DesktopWorkspace(){
  const [fanOpen,setFanOpen]=useState(false),[fanPicks,setFanPicks]=useState<string[]>([]),[fanning,setFanning]=useState(false);
  const skills=useResource<Skill[]>(`/projects/${project?.id}/skills`,!!project);
  const slashing=input.startsWith('/')&&!input.includes(' ')&&!input.includes('\n');
- const resumeMatch=slashing&&'resume'.startsWith(input.slice(1).toLowerCase());
- const slashMatches=slashing?(skills.data||[]).filter(s=>s.kind==='command'&&s.name.toLowerCase().startsWith(input.slice(1).toLowerCase())).slice(0,8):[];
+ const slashCatalog=useResource<SlashCommand[]>(`/projects/${project?.id}/slash-commands`,!!project);
+ const slashMatches=slashing?(slashCatalog.data||[]).filter(s=>s.name.toLowerCase().startsWith(input.slice(1).toLowerCase())).slice(0,12):[];
+ void skills;
+ // A screen-only command opens its tool in the Terminal panel and types the command there; the rest go to the composer.
+ function pickSlash(s:SlashCommand){if(s.kind==='frontier'&&s.name==='resume'){setInput('');setResumeOpen(true);return}
+  if(s.kind==='terminal'){setInput('');inspect('Terminal');const tool=s.source==='Codex'?'codex':'claude';setTimeout(()=>window.dispatchEvent(new CustomEvent('frontier:terminal-run',{detail:{command:tool,then:`/${s.name}`}})),600);notify(`Opening ${s.source} in the Terminal panel for /${s.name}`);return}
+  setInput(`/${s.name} `);composer.current?.focus()}
+ async function goalAction(word:'clear'|'resume'){if(!project||!session)return;try{await api.post(path(`/projects/${project.id}/sessions/${session.id}/instructions`),{content:`/goal ${word}`,model_id:activeModelId||session.goal?.model_id,mode,attachment_ids:[],queue:false,steer:false,team:false,context:[]});await refresh()}catch(e){setError((e as Error).message)}}
  const [inBranch,setInBranch]=useState(false),[revertTarget,setRevertTarget]=useState<string|null>(null),[dropWorktree,setDropWorktree]=useState<Session|null>(null),[deleteTarget,setDeleteTarget]=useState<Session|null>(null),[deleting,setDeleting]=useState(false);
  // Whether the project folder is a repository decides if a new session may start on its own branch.
  const repo=useQuery({queryKey:['tenant',tenant?.id,`/projects/${project?.id}/git`],enabled:!!tenant&&!!project,staleTime:30000,queryFn:({signal})=>api.get<GitStatus>(path(`/projects/${project?.id}/git`),signal)});
@@ -209,7 +215,7 @@ export default function DesktopWorkspace(){
    <UsageDock/>
    {error&&!projectOpen&&<div className="composer-error" role="alert"><span>{error}</span><button className="icon-button" aria-label="Dismiss error" onClick={()=>setError('')}><X size={13}/></button></div>}
    {switching&&!busy&&<div className="continue-strip"><ArrowRightLeft size={14}/><span>Next turn goes to {activeAgent?.name}. It gets this conversation and the project folder.</span></div>}
-   {(slashMatches.length>0||resumeMatch)&&<div className="slash-menu" role="listbox">{resumeMatch&&<button role="option" onClick={()=>{setInput('');setResumeOpen(true)}}><History size={11}/><strong>/resume</strong><span>Continue a Claude Code or Codex conversation from this folder</span><small>Frontier</small></button>}{slashMatches.map(s=><button key={s.path} role="option" onClick={()=>{setInput(`/${s.name} `);composer.current?.focus()}}><Slash size={11}/><strong>/{s.name}</strong><span>{s.description}</span><small>{s.provider} · {s.scope}</small></button>)}</div>}
+   {slashMatches.length>0&&<div className="slash-menu" role="listbox">{slashMatches.map(s=><button key={`${s.source}:${s.kind}:${s.name}`} role="option" onClick={()=>pickSlash(s)}>{s.kind==='frontier'?(s.name==='resume'?<History size={11}/>:<Target size={11}/>):s.kind==='terminal'?<Terminal size={11}/>:<Slash size={11}/>}<strong>/{s.name}</strong><span>{s.description}</span><small>{s.source}{s.kind==='terminal'?' · Terminal':''}</small></button>)}</div>}{session?.goal&&session.goal.status!=='cleared'&&<div className={`goal-strip ${session.goal.status}`}><Target size={13}/><span><strong>Goal · {{active:'working on it',paused:'paused',blocked:'blocked',complete:'done',cleared:'cleared'}[session.goal.status]}</strong>{session.goal.status==='active'?` · turn ${Math.min(session.goal.turns+1,session.goal.max_turns)} of ${session.goal.max_turns}`:''} · {session.goal.objective}{session.goal.note?<em> — {session.goal.note}</em>:null}</span>{(session.goal.status==='paused'||session.goal.status==='blocked')&&<button onClick={()=>void goalAction('resume')}>Resume</button>}<button className="icon-button" title={session.goal.status==='active'?'Stop working toward the goal after this turn':'Dismiss the goal'} aria-label="Clear goal" onClick={()=>void goalAction('clear')}><X size={12}/></button></div>}
    {teamMode&&activeModelId!==ADAPTIVE&&!busy&&<div className="team-strip"><Users size={14}/><span><strong>Team mode.</strong> {activeAgent?.name} leads: it plans, the other agents do the tasks, it reviews.</span><button onClick={()=>setTeamMode(false)}>Turn off</button></div>}
    <div className={`composer ${teamMode&&activeModelId!==ADAPTIVE?'team':''}`} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();void attach(e.dataTransfer.files)}}>
     {chips.length>0&&<div className="composer-attachments context-chips">{chips.map((c,i)=><span key={i} title={c.text?.slice(0,200)||c.path||''}>{c.kind==='file'?<FileText size={11}/>:c.kind==='terminal'?<TerminalIcon size={11}/>:<GitCompareArrows size={11}/>}{c.label||c.path||c.kind}{c.start?`:${c.start}${c.end&&c.end!==c.start?`-${c.end}`:''}`:''}<button aria-label={`Remove ${c.label||c.kind}`} onClick={()=>setChips(v=>v.filter((_,j)=>j!==i))}><X size={11}/></button></span>)}</div>}

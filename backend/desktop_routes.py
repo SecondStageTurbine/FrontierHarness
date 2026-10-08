@@ -13,7 +13,7 @@ from .schemas import (ProjectInput, SessionInput, SessionPatch, InstructionInput
                       DevServerInput, RewindInput, ImportInput, CloneInput, CatchupInput, ResumeCliInput, BoardTaskInput, BoardTaskPatch, HistoryImportInput, PrReviewInput, PrEditInput, PrMergeInput)
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
-from . import gitops, automations, pullrequests, devserver, maintenance, board, skill_catalog
+from . import gitops, automations, pullrequests, devserver, maintenance, board, skill_catalog, slash
 from . import vscode_themes as vscode_themes_module
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -505,6 +505,17 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
             return skill_catalog.remove(files.root(tenant_id,project_id,None),name)
         except KeyError:
             raise HTTPException(404,'No such skill in the catalog.') from None
+
+    @app.get('/api/t/{tenant_id}/projects/{project_id}/slash-commands')
+    def slash_commands(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):
+        """What the composer's / menu offers: Frontier's commands, the agents' own, and the screen-only ones."""
+        scoped(request,tenant_id)
+        root=files.root(tenant_id,project_id,session_id)
+        try:
+            claude=store.get(tenant_id,'agent_commands','claude_cli').get('commands') or []
+        except Exception:
+            claude=[]  # Claude has not taken a turn yet; its skills and commands on disk are still listed.
+        return slash.catalog(root,claude,read_skills(root))
 
     @app.get('/api/t/{tenant_id}/projects/{project_id}/skills')
     def skills(tenant_id:str,project_id:str,request:Request,session_id:str|None=None):

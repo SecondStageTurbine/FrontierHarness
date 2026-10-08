@@ -52,6 +52,11 @@ function LocalTerm({cwd,onChip,projectId,sessionId,agents=[]}:{cwd:string;onChip
  async function add(){try{wire();const s=await open(cwd);const next=[...(shells.get(cwd)||[]),s];shells.set(cwd,next);setList(next);setActive(s.id);if(env.data?.activate){setTimeout(()=>{void invoke('pty_write',{id:s.id,data:env.data!.activate+'\r'}).catch(()=>{})},600)}}catch(e){setError(String((e as Error).message||e))}}
  function close(id:string){void invoke('pty_close',{id}).catch(()=>{});const s=(shells.get(cwd)||[]).find(x=>x.id===id);s?.term.dispose();const next=(shells.get(cwd)||[]).filter(x=>x.id!==id);shells.set(cwd,next);setList(next);if(active===id)setActive(next.at(-1)?.id||'')}
  useEffect(()=>{if(!list.length)void add()},[cwd]);
+ // A screen-only slash command picked in the composer: start the tool here, then type the command once its screen is up.
+ const pending=useRef<{command:string;then:string}|null>(null);
+ useEffect(()=>{const run=(e:Event)=>{pending.current=(e as CustomEvent<{command:string;then:string}>).detail;flush()};window.addEventListener('frontier:terminal-run',run);return()=>window.removeEventListener('frontier:terminal-run',run)});
+ function flush(){const job=pending.current,s=list.find(x=>x.id===active);if(!job||!s)return;pending.current=null;typeInto(job.command);setTimeout(()=>{void invoke('pty_write',{id:s.id,data:job.then+'\r'}).catch(()=>{})},4000)}
+ useEffect(flush,[active,list]);
  useEffect(()=>{
   const el=host.current,s=list.find(x=>x.id===active);if(!el||!s)return;
   el.replaceChildren(s.element);

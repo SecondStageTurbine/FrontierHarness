@@ -113,6 +113,18 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await page.keyboard.press('Escape');
  await page.getByPlaceholder(/Ask|Message|Tell/).first().fill('/res');
  await expect(page.locator('.slash-menu')).toContainText('/resume');
+ await page.getByPlaceholder(/Ask|Message|Tell/).first().fill('/go');
+ await expect(page.locator('.slash-menu')).toContainText('/goal');
+ await expect(page.locator('.slash-menu')).toContainText('Frontier');
+ await page.screenshot({path:'test-results/slash-menu.png'});
+ // /goal works with any agent: the scripted one never reports on the goal, so it pauses after two turns.
+ await page.getByPlaceholder(/Ask|Message|Tell/).first().fill('/goal Tidy the README');
+ await page.getByPlaceholder(/Ask|Message|Tell/).first().press('Enter');
+ await expect(page.locator('.goal-strip')).toContainText('Tidy the README');
+ await expect(page.locator('.goal-strip')).toContainText('paused',{timeout:20000});
+ await page.locator('.goal-strip').screenshot({path:'test-results/goal-strip.png'});
+ await page.getByRole('button',{name:'Clear goal'}).click();
+ await expect(page.locator('.goal-strip')).toHaveCount(0);
  await page.getByPlaceholder(/Ask|Message|Tell/).first().fill('');
  // Project settings from the project's own menu: memory saved and read back.
  await page.locator('.project-list .project-main').first().click({button:'right'});
