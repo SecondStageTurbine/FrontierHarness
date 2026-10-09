@@ -443,7 +443,10 @@ class AgentRunner:
             pass  # A notification is a courtesy; it never disturbs the turn.
 
     def request_approval(self, token, tool_name, tool_input, tool_use_id=None, kind='permission'):
-        """A running turn's tool asks; the conversation shows a card until someone answers."""
+        """A running turn's tool asks; the conversation shows a card until someone answers.
+
+        A team worker's permission request is allowed at once: its conversation runs unattended, so a
+        waiting card would only end in the timeout's deny."""
         turn = self.turn_tokens.get(token)
         if not turn:
             raise ValueError('This turn is not running.')
@@ -452,9 +455,18 @@ class AgentRunner:
                     'input': tool_input, 'tool_use_id': tool_use_id, 'created_at': now(), 'decision': None, 'message': None,
                     'event': asyncio.Event(), 'kind': kind}
         self.approvals[approval['id']] = approval
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        if kind == 'permission' and session.get('team_parent'):
+            # A team worker runs unattended in its own conversation: a card there would sit unseen until the
+            # timeout denied it. The posture was chosen when the team started, so the request goes through;
+            # the event keeps the trace where the worker's turn is shown.
+            approval.update(decision='allow', message='Allowed without asking: a team worker runs unattended.', decided_at=now())
+            approval['event'].set()
+            self.store.event(tenant_id, session_id, 'approval.decided', f'{tool_name} was allowed without asking (team workers run unattended).',
+                             message_id=message_id, approval_id=approval['id'])
+            return approval['id']
         text = f'The agent asks: {str(tool_input.get("question") or "")[:200]}' if kind == 'question' else f'{tool_name} needs your permission.'
         self.store.event(tenant_id, session_id, 'approval.requested', text, message_id=message_id, approval_id=approval['id'])
-        session = self.store.get(tenant_id, 'sessions', session_id)
         message = next((m for m in session['messages'] if m['id'] == message_id), {})
         self.notify(tenant_id, project_id, session, message, 'waiting', str(tool_input.get('question') or '') if kind == 'question' else f'{tool_name} needs your permission.')
         return approval['id']

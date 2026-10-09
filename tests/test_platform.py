@@ -122,6 +122,38 @@ def test_an_approval_card_is_raised_by_the_turn_and_answered_by_the_user(tmp_pat
     assert 'approval.requested' in events and 'approval.decided' in events
 
 
+def test_a_team_workers_permission_request_is_allowed_without_asking(tmp_path, monkeypatch):
+    # A worker runs unattended in its own conversation: a card there would sit unseen until the timeout denied it.
+    monkeypatch.setenv('HARNESS_DESKTOP_PORT', '8765')
+    seen = {}
+    async def reply(config, prompt, mode, root):
+        return AgentResult('Worker done.', 1, 1)
+    agent = ScriptedAgent(respond=reply)
+    original = agent.invoke_agent
+    async def invoke(tenant_id, config, prompt, mode, root, extras=None):
+        approval_id = runner.request_approval(extras['approval']['token'], 'Bash', {'command': 'npm test'}, 'u1')
+        seen['pending'] = runner.pending('tenant-a', worker['id'])
+        seen['state'] = await runner.approval_state(approval_id, wait=5)
+        return await original(tenant_id, config, prompt, mode, root, extras)
+    agent.invoke_agent = invoke
+    store = setup_store(tmp_path/'state')
+    folder = tmp_path/'work'; folder.mkdir()
+    runner = AgentRunner(store, agent)
+    project, lead = open_project(store, runner, 'tenant-a', folder)
+    worker = store.put('tenant-a', 'sessions', {'id': 'worker-1', 'project_id': project['id'], 'name': 'Task · Claude',
+                                                'messages': [], 'commands': [], 'team_parent': lead['id'],
+                                                'created_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z'})
+    async def scenario():
+        runner.send('tenant-a', project['id'], worker['id'], 'Do the task.', 'claude_cli', 'edit')
+        await asyncio.gather(runner.turns[('tenant-a', worker['id'])], return_exceptions=True)
+    asyncio.run(scenario())
+    assert seen['pending'] == []  # No card was ever open: the request went through at once.
+    assert seen['state']['decision'] == 'allow' and 'unattended' in (seen['state'].get('message') or '')
+    events = store.events('tenant-a', worker['id'])
+    assert any(e['type'] == 'approval.decided' and 'without asking' in e['message'] for e in events)
+    assert not any(e['type'] == 'approval.requested' for e in events)
+
+
 def test_a_read_only_turn_carries_frontiers_tools_but_never_the_permission_prompt(tmp_path, monkeypatch):
     # Questions and the task board work in every posture; only Edit files routes permission prompts to a card.
     from backend.broker import agent_argv
