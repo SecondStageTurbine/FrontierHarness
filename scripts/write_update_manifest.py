@@ -21,7 +21,7 @@ else:
 if len(bundles) != 1: raise SystemExit(f'Expected exactly one built installer, found {[b.name for b in bundles]}.')
 installer = bundles[0]
 signature = installer.with_name(installer.name+'.sig')
-if not signature.exists(): raise SystemExit('No .sig beside the installer: build with TAURI_SIGNING_PRIVATE_KEY set, or run `npx tauri signer sign -f <key> <installer>`.')
+if not signature.exists(): raise SystemExit('No .sig beside the installer: build with TAURI_SIGNING_PRIVATE_KEY set, or run `npx tauri signer sign -p "" -f <key> <installer>`.')
 merge = Path(sys.argv[sys.argv.index('--merge')+1]) if '--merge' in sys.argv else None
 previous = json.loads(merge.read_text(encoding='utf-8')) if merge and merge.exists() else {}
 # Another version's feed would point this version's users at an older build: start fresh.
