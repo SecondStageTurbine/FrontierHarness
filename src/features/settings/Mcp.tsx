@@ -14,7 +14,7 @@ const CATALOG:{name:string;title:string;blurb:string;command:string;args:string;
  {name:'filesystem',title:'Filesystem',blurb:'Read and write a folder outside the project. Put the folder path in the arguments.',command:'npx',args:'-y @modelcontextprotocol/server-filesystem C:\\path\\to\\folder',env:''},
  {name:'postgres',title:'Postgres',blurb:'Read-only SQL against a database. Put the connection string in the arguments.',command:'npx',args:'-y @modelcontextprotocol/server-postgres postgresql://user:pass@localhost/db',env:''},
  {name:'playwright',title:'Playwright browser',blurb:'Let the agent open pages, click and read them in a real browser.',command:'npx',args:'-y @playwright/mcp@latest',env:''},
- {name:'slack',title:'Slack',blurb:'Read channels and post messages with a bot token.',command:'npx',args:'-y @modelcontextprotocol/server-slack',env:'SLACK_BOT_TOKEN=\nSLACK_TEAM_ID='},
+ {name:'slack',title:'Slack',blurb:'Read channels and threads, and post where you allow it. Takes a user (xoxp-) or bot (xoxb-) token; list channel IDs to allow posting.',command:'npx',args:'-y slack-mcp-server@1.3.0 --transport stdio',env:'SLACK_MCP_XOXP_TOKEN=\nSLACK_MCP_ADD_MESSAGE_TOOL='},
  {name:'fetch',title:'Fetch',blurb:'Fetch a URL and hand the page to the agent as text. Needs uv.',command:'uvx',args:'mcp-server-fetch',env:''},
  {name:'memory',title:'Memory',blurb:'A knowledge graph the agent can write to and read back across turns.',command:'npx',args:'-y @modelcontextprotocol/server-memory',env:''},
  {name:'sequential-thinking',title:'Sequential thinking',blurb:'A scratchpad tool for step-by-step reasoning.',command:'npx',args:'-y @modelcontextprotocol/server-sequential-thinking',env:''},
