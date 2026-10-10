@@ -40,6 +40,10 @@ def test_project_file_boundaries_and_secret_exclusion(tmp_path):
         with pytest.raises((ValueError,TenantIsolationViolationException)):files.resolve('tenant-a',project['id'],path)
     with pytest.raises(TenantIsolationViolationException):files.read('tenant-b',project['id'],'readme.md')
     with pytest.raises(TenantIsolationViolationException):files.create('tenant-b','Same root',str(root))
+    with pytest.raises(ValueError):files.create('tenant-a','Same root',str(root))
+    (root/'nested').mkdir()
+    assert files.create('tenant-a','Nested',str(root/'nested'))['root']==str((root/'nested').resolve())
+    with pytest.raises(TenantIsolationViolationException):files.create('tenant-b','Nested elsewhere',str(root/'nested'))
 
 
 def test_commands_reject_shells_and_path_escape(tmp_path):

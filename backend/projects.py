@@ -56,6 +56,7 @@ class ProjectFiles:
         if location==secret_dir or location in secret_dir.parents or secret_dir in location.parents:
             raise ValueError('Choose a project outside Frontier’s private application data.')
         # Root registration is a security index; contents always remain tenant scoped.
+        # Within one workspace a project may nest inside another; only the same folder twice is refused.
         with self.store.db() as db:
             registered=db.execute("SELECT tenant_id,data FROM entities WHERE kind='projects'").fetchall()
         for row in registered:
@@ -63,7 +64,8 @@ class ProjectFiles:
             if location==other or location in other.parents or other in location.parents:
                 if row['tenant_id']!=tenant_id:
                     raise TenantIsolationViolationException('This folder overlaps a project owned by another workspace.')
-                raise ValueError('This folder is already open as a project, or overlaps an existing project.')
+                if location==other:
+                    raise ValueError('This folder is already open as a project.')
         return self.store.put(tenant_id,'projects',dict(id=project_id,name=name,root=str(location),created_at=now()))
 
     def root(self,tenant_id,project_id,session_id=None):
