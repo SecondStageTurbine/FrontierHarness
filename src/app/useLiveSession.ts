@@ -9,12 +9,14 @@ import {apiUrl} from '../lib/environment';
  * The turn happens in a subprocess, so the only way to see it move is the event stream; the
  * conversation itself is re-read whenever something arrives. Polling stays underneath as the
  * recovery path, because a dropped stream must not leave a finished turn looking unfinished.
+ * `runningElsewhere` is the sidebar's word that a turn started without this view, from a Slack
+ * message or an automation, so a conversation opened while idle still starts following it.
  */
-export function useLiveSession(projectId?:string,sessionId?:string){
+export function useLiveSession(projectId?:string,sessionId?:string,runningElsewhere=false){
  const {tenant,path}=useWorkspace();const client=useQueryClient();
  const route=`/projects/${projectId}/sessions/${sessionId}`;
  const query=useResource<Session>(route,!!projectId&&!!sessionId);
- const live=working(query.data?.messages.at(-1));
+ const live=working(query.data?.messages.at(-1))||runningElsewhere;
  useEffect(()=>{
   if(!tenant||!projectId||!sessionId||!live)return;
   let alive=true,timer:ReturnType<typeof setTimeout>|undefined;

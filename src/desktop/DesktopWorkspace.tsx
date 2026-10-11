@@ -57,7 +57,7 @@ export default function DesktopWorkspace(){
  const [sessionId,setSessionId]=useState('');
  const [newSession,setNewSession]=useState(false);
  const selectedSessionId=newSession?'':sessionId||localStorage.getItem(`frontier.session.${project?.id}`)||project?.last_session_id||sessions.data?.[0]?.id||'';
- const sessionQ=useLiveSession(project?.id,selectedSessionId||undefined);
+ const sessionQ=useLiveSession(project?.id,selectedSessionId||undefined,sessionStates.get(selectedSessionId)==='working');
  const session=sessionQ.data;
  // Only an agent command line tool can take a turn. An API key reaches a model, not an agent,
  // so those stay configured for dictation and are never offered here.
