@@ -90,12 +90,16 @@ def first_pass(track):
 
 
 def track_shift(track):
-    """How far the record moves every skill: +1 for a clean record, down to -2 for a poor one."""
+    """How far the record lowers every skill: 0 for a clean record, down to -2 for a poor one.
+
+    Never up: one shift moves every skill, so a record earned on routine coding would raise planning
+    and review too, the agent would then be sufficient for everything, win every turn on cost, and
+    grow its record further."""
     clean, tried = first_pass(track)
     if tried < TRACK_MINIMUM:
         return 0
     # ponytail: one shift for every skill; per-skill records (debugging vs review) if routing needs finer grain.
-    return max(-2, min(1, round((clean / tried - 0.7) * 5)))
+    return max(-2, min(0, round((clean / tried - 0.7) * 5)))
 
 
 def describe_track(track):

@@ -348,7 +348,7 @@ def test_a_track_record_moves_a_profile_and_resets_with_a_new_model(tmp_path):
     assert profile({**model, 'track': track, 'capabilities': {'coding': 9}})['coding'] == 9  # The user's word still wins.
     assert track_for({**model, 'model_name': 'opencode/other'}, records) is None  # A new model starts clean.
     clean = {'done': 4, 'failed': 0, 'fixes': 0, 'model_name': model['model_name']}
-    assert profile({**model, 'track': clean})['coding'] == plain['coding'] + 1
+    assert profile({**model, 'track': clean})['coding'] == plain['coding']  # A clean record never lifts it: that loop crowded out every stronger agent.
 
 
 @pytest.mark.asyncio
