@@ -110,6 +110,12 @@ class SessionPatch(StrictModel):
     archived: bool | None = None
     snoozed_until: str | None = Field(default=None, max_length=40)  # ISO time; '' wakes it now.
 
+class SlackListenInput(StrictModel):
+    channel: str = Field(default='', max_length=100)  # A channel ID or #name; empty stops listening.
+    anyone: bool = False  # Act on anyone's messages, not only the user's own.
+    model_id: str = Field(default='adaptive', min_length=1)
+    mode: Mode = 'edit'
+
 class ContextChip(StrictModel):
     kind: Literal['file', 'terminal', 'diff', 'selection']
     path: str | None = Field(default=None, max_length=500)

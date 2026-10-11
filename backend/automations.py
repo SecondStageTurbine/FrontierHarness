@@ -125,6 +125,11 @@ async def scheduler(store, runner, stop):
                     await housekeeping(store, runner, tenant_id)
                 except Exception:
                     pass  # One workspace's housekeeping must not stop another's.
+                try:
+                    from . import slack_listen
+                    await slack_listen.tick(store, runner, tenant_id)
+                except Exception:
+                    pass  # Its own failures are recorded on the listening session.
                 for automation in store.list(tenant_id, 'automations'):
                     try:
                         if due(automation) and not runner.busy_anywhere(tenant_id, automation['project_id']):

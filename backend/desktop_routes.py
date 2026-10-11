@@ -10,10 +10,10 @@ from fastapi import Request, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse, FileResponse
 from .schemas import (ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput, GitPaths, CommitInput, FileWrite,
                       McpServerInput, ApprovalDecision, ApprovalRequest, FanoutInput, AutomationInput, ProjectSettings, PrCreateInput,
-                      DevServerInput, RewindInput, ImportInput, CloneInput, CatchupInput, ResumeCliInput, BoardTaskInput, BoardTaskPatch, HistoryImportInput, PrReviewInput, PrEditInput, PrMergeInput)
+                      DevServerInput, RewindInput, ImportInput, CloneInput, CatchupInput, ResumeCliInput, BoardTaskInput, BoardTaskPatch, HistoryImportInput, PrReviewInput, PrEditInput, PrMergeInput, SlackListenInput)
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
-from . import gitops, automations, pullrequests, devserver, maintenance, board, skill_catalog, slash
+from . import gitops, automations, slack_listen, pullrequests, devserver, maintenance, board, skill_catalog, slash
 from . import vscode_themes as vscode_themes_module
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -1095,6 +1095,21 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
                 session['snoozed_until']=payload.snoozed_until
         if payload.name is not None:
             session['auto_named']=False  # A name the user chose is never replaced by the agent's.
+        return store.put(tenant_id,'sessions',session)
+
+    @app.put('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/slack')
+    async def session_slack(tenant_id:str,project_id:str,session_id:str,payload:SlackListenInput,request:Request):
+        """Listen to a Slack channel from this session, or stop with an empty channel. Only messages after now count."""
+        scoped(request,tenant_id)
+        get_session(tenant_id,project_id,session_id)
+        if payload.model_id!=ADAPTIVE:
+            runner.select(tenant_id,payload.model_id)
+        listen=None
+        if payload.channel:
+            channel,name,user=await slack_listen.resolve(store,tenant_id,payload.channel)
+            listen={'channel':channel,'name':name,'user':user,'anyone':payload.anyone,'model_id':payload.model_id,'mode':payload.mode,'since':slack_listen.since_now(),'error':None}
+        session=get_session(tenant_id,project_id,session_id)  # Fresh: the lookup above awaited.
+        session['slack']=listen
         return store.put(tenant_id,'sessions',session)
 
     @app.delete('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}')
