@@ -6,6 +6,7 @@ half minute; a session handles one message at a time, oldest first. It takes top
 any thread of the channel from other people when it takes anyone's. The user's own thread replies never count:
 they cannot be told apart from what the agent itself posts as the user, and taking them would loop.
 """
+import re
 import time
 
 import httpx
@@ -57,10 +58,17 @@ def wanted(message, listen):
             and (listen.get('anyone') or message.get('user') == listen['user']))
 
 
+def slack_markup(text):
+    """The agent writes Markdown; Slack's own markup bolds with one asterisk and links as <url|label>."""
+    text = re.sub(r'\*\*(.+?)\*\*', r'*\1*', text)
+    return re.sub(r'\[([^\]]+)\]\((https?://[^)\s]+)\)', r'<\2|\1>', text)
+
+
 def prompt(listen, message):
     where = f'a reply in the thread {message["thread_ts"]} of' if message.get('thread_ts', message['ts']) != message['ts'] else 'a message in'
     return (f'A Slack message, {where} #{listen["name"]} ({listen["channel"]}), from <@{message.get("user")}>:\n\n{message["text"]}\n\n'
-            'Act on it. Your final reply in this turn is posted back to the message\'s Slack thread for you, '
+            'Act on it. Your final reply in this turn is posted back to the message\'s Slack thread for you, already '
+            'mentioning the sender. To mention anyone else write <@USERID>; a plain @name notifies no one. '
             f'so do not post it yourself, and never post a new top-level message in #{listen["name"]}.')
 
 
@@ -74,7 +82,9 @@ async def step(store, runner, tenant_id, session, client, headers):
         text = (reply or {}).get('content') or ''
         if not reply or reply.get('status') != 'complete':
             text = f'the turn {(reply or {}).get("status", "was lost")}' + (f': {reply["error"]}' if reply and reply.get('error') else '') + (f'\n\n{text}' if text else '')
-        await call(client, headers, 'chat.postMessage', channel=listen['channel'], thread_ts=pending['ts'], text=(PREFIX + text)[:39000])
+        sender = pending.get('user')
+        mention = f'<@{sender}> ' if sender and sender != listen['user'] else ''
+        await call(client, headers, 'chat.postMessage', channel=listen['channel'], thread_ts=pending['ts'], text=(PREFIX + mention + slack_markup(text))[:39000])
         session = store.get(tenant_id, 'sessions', session['id'])
         session['slack'].pop('pending', None)
         session['slack']['error'] = None
@@ -108,7 +118,7 @@ async def step(store, runner, tenant_id, session, client, headers):
     except Exception as exc:
         await call(client, headers, 'chat.postMessage', channel=listen['channel'], thread_ts=message.get('thread_ts', message['ts']), text=f'{PREFIX}could not start: {exc}')
         return
-    session['slack']['pending'] = {'ts': message.get('thread_ts', message['ts']), 'message_id': session['messages'][-1]['id']}
+    session['slack']['pending'] = {'ts': message.get('thread_ts', message['ts']), 'user': message.get('user'), 'message_id': session['messages'][-1]['id']}
     session['slack']['error'] = None
     store.put(tenant_id, 'sessions', session)
 

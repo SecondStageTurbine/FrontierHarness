@@ -84,9 +84,9 @@ def test_other_peoples_thread_replies_count_but_the_users_own_never_do(tmp_path)
     asyncio.run(tick())
     assert len(runner.sent) == 1 and 're-run the import' in runner.sent[0][0]
     s = store.get('tenant-a', 'sessions', session['id'])
-    s['messages'][-1].update(status='complete', content='Done.')
+    s['messages'][-1].update(status='complete', content='**Done**, see [the run](https://x.test/1).')
     store.put('tenant-a', 'sessions', s)
     asyncio.run(tick())
-    assert posted[0]['thread_ts'] == '50.0'
+    assert posted[0]['thread_ts'] == '50.0' and posted[0]['text'] == '🤖 Frontier: <@UNELSON> *Done*, see <https://x.test/1|the run>.'
     asyncio.run(tick())
     assert len(runner.sent) == 1
