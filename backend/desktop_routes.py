@@ -1107,6 +1107,9 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         listen=None
         if payload.channel:
             channel,name,user=await slack_listen.resolve(store,tenant_id,payload.channel)
+            other=next((s for s in store.list(tenant_id,'sessions') if s['id']!=session_id and not s.get('archived') and (s.get('slack') or {}).get('channel')==channel),None)
+            if other:
+                raise ValueError(f'"{other["name"]}" already listens to #{name}. Stop it there first, or both would answer every message.')
             listen={'channel':channel,'name':name,'user':user,'anyone':payload.anyone,'model_id':payload.model_id,'mode':payload.mode,'since':slack_listen.since_now(),'error':None}
         session=get_session(tenant_id,project_id,session_id)  # Fresh: the lookup above awaited.
         session['slack']=listen

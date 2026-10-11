@@ -2,8 +2,9 @@
 
 The credentials are the workspace's `slack` MCP server's: a browser session (SLACK_MCP_XOXC_TOKEN with the
 `d` cookie in SLACK_MCP_XOXD_TOKEN) or a user token (SLACK_MCP_XOXP_TOKEN). The scheduler calls `tick` every
-half minute; a session handles one message at a time, oldest first, and only top-level messages, so its
-own replies, which are thread replies, never come back to it.
+half minute; a session handles one message at a time, oldest first. It takes top-level messages, and replies in
+any thread of the channel from other people when it takes anyone's. The user's own thread replies never count:
+they cannot be told apart from what the agent itself posts as the user, and taking them would loop.
 """
 import time
 
@@ -47,14 +48,18 @@ async def resolve(store, tenant_id, channel):
 
 
 def wanted(message, listen):
-    """A new top-level message a person wrote, from the user unless the session takes anyone's."""
+    """A new message a person wrote: top level from the user, or from anyone else when the session takes anyone's."""
+    reply = message.get('thread_ts', message['ts']) != message['ts']
     return (not message.get('bot_id') and not message.get('subtype') and message.get('text', '').strip()
-            and not message['text'].startswith(PREFIX.strip())
-            and float(message['ts']) > float(listen['since']) and (listen.get('anyone') or message.get('user') == listen['user']))
+            and not message['text'].startswith((PREFIX.strip(), ':robot_face: Frontier:'))  # Slack stores the emoji by name.
+            and float(message['ts']) > float(listen['since'])
+            and (message.get('user') != listen['user'] if reply else True)
+            and (listen.get('anyone') or message.get('user') == listen['user']))
 
 
 def prompt(listen, message):
-    return (f'A Slack message in #{listen["name"]} from <@{message.get("user")}>:\n\n{message["text"]}\n\n'
+    where = f'a reply in the thread {message["thread_ts"]} of' if message.get('thread_ts', message['ts']) != message['ts'] else 'a message in'
+    return (f'A Slack message, {where} #{listen["name"]} ({listen["channel"]}), from <@{message.get("user")}>:\n\n{message["text"]}\n\n'
             'Act on it. Your final reply in this turn is posted back to the message\'s Slack thread for you, '
             f'so do not post it yourself, and never post a new top-level message in #{listen["name"]}.')
 
@@ -77,8 +82,15 @@ async def step(store, runner, tenant_id, session, client, headers):
         return
     if runner.busy(tenant_id, session['id']):
         return
-    history = await call(client, headers, 'conversations.history', channel=listen['channel'], oldest=listen['since'], limit='50')
-    fresh = sorted((m for m in history.get('messages', []) if wanted(m, listen)), key=lambda m: float(m['ts']))
+    # ponytail: only threads under the latest 50 top-level messages are followed; page further if older threads matter.
+    history = (await call(client, headers, 'conversations.history', channel=listen['channel'], limit='50')).get('messages', [])
+    candidates = list(history)
+    if listen.get('anyone'):
+        for parent in history:
+            if float(parent.get('latest_reply') or 0) > float(listen['since']):
+                thread = await call(client, headers, 'conversations.replies', channel=listen['channel'], ts=parent['ts'], oldest=listen['since'], limit='200')
+                candidates += [m for m in thread.get('messages', []) if m['ts'] != parent['ts']]
+    fresh = sorted((m for m in candidates if wanted(m, listen)), key=lambda m: float(m['ts']))
     if not fresh:
         if listen.get('error'):
             listen['error'] = None
@@ -94,9 +106,9 @@ async def step(store, runner, tenant_id, session, client, headers):
     try:
         session = runner.send(tenant_id, session['project_id'], session['id'], prompt(listen, message), listen['model_id'], listen['mode'])
     except Exception as exc:
-        await call(client, headers, 'chat.postMessage', channel=listen['channel'], thread_ts=message['ts'], text=f'{PREFIX}could not start: {exc}')
+        await call(client, headers, 'chat.postMessage', channel=listen['channel'], thread_ts=message.get('thread_ts', message['ts']), text=f'{PREFIX}could not start: {exc}')
         return
-    session['slack']['pending'] = {'ts': message['ts'], 'message_id': session['messages'][-1]['id']}
+    session['slack']['pending'] = {'ts': message.get('thread_ts', message['ts']), 'message_id': session['messages'][-1]['id']}
     session['slack']['error'] = None
     store.put(tenant_id, 'sessions', session)
 

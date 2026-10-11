@@ -58,3 +58,35 @@ def test_a_message_becomes_a_turn_and_the_reply_goes_to_its_thread(tmp_path):
     assert posted == [{'channel': 'C1', 'thread_ts': '101.0', 'text': '🤖 Frontier: All 12 passed.'}]
     asyncio.run(tick())  # Nothing newer than the handled message.
     assert len(runner.sent) == 1 and not store.get('tenant-a', 'sessions', session['id'])['slack'].get('pending')
+
+
+def test_other_peoples_thread_replies_count_but_the_users_own_never_do(tmp_path):
+    store = setup_store(tmp_path / 'state');runner = Runner(store)
+    project, session = open_project(store, runner, 'tenant-a', tmp_path)
+    store.put('tenant-a', 'mcp_servers', {'id': 's', 'name': 'slack', 'env': {'SLACK_MCP_XOXP_TOKEN': 'xoxp-1'}})
+    session['slack'] = {'channel': 'C1', 'name': 'ao', 'user': 'UME', 'anyone': True, 'model_id': 'adaptive', 'mode': 'edit', 'since': '100.0'}
+    store.put('tenant-a', 'sessions', session)
+    posted = []
+    thread = [{'ts': '50.0', 'thread_ts': '50.0', 'user': 'UME', 'text': 'old parent', 'latest_reply': '102.0'},
+              {'ts': '101.0', 'thread_ts': '50.0', 'user': 'UME', 'text': 'what the agent posted as me'},
+              {'ts': '102.0', 'thread_ts': '50.0', 'user': 'UNELSON', 'text': 'Nelson: please re-run the import'}]
+
+    def slack(request):
+        method, params = request.url.path.rsplit('/', 1)[1], {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
+        if method == 'chat.postMessage':
+            posted.append(params)
+        return httpx.Response(200, json={'ok': True, 'messages': thread[:1] if method == 'conversations.history' else thread if method == 'conversations.replies' else []})
+
+    async def tick():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(slack)) as client:
+            await slack_listen.step(store, runner, 'tenant-a', store.get('tenant-a', 'sessions', session['id']), client, slack_listen.credentials(store, 'tenant-a'))
+
+    asyncio.run(tick())
+    assert len(runner.sent) == 1 and 're-run the import' in runner.sent[0][0]
+    s = store.get('tenant-a', 'sessions', session['id'])
+    s['messages'][-1].update(status='complete', content='Done.')
+    store.put('tenant-a', 'sessions', s)
+    asyncio.run(tick())
+    assert posted[0]['thread_ts'] == '50.0'
+    asyncio.run(tick())
+    assert len(runner.sent) == 1
