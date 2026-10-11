@@ -371,3 +371,16 @@ async def test_jev_sets_how_hard_codex_thinks_on_the_agent_the_user_picked(tmp_p
     assert agent.calls[-1]['extras']['effort'] is None  # Claude keeps its own effort: its prompt cache is keyed on it.
     argv = agent_argv('codex_cli', ['codex'], 'gpt-6-sol', 'edit', tmp_path, tmp_path/'f', {'effort': 'low'})
     assert argv[argv.index('model_reasoning_effort="low"') - 1] == '-c' and argv.index('model_reasoning_effort="low"') < argv.index('exec')
+
+
+def test_a_benchmark_price_never_makes_an_agent_cheaper_and_low_effort_eases_the_need():
+    from backend.adaptive import profile, choose, TaskRequirements, TASK_BASE
+    row = lambda name: {'id': name, 'name': name, 'provider': 'codex_cli', 'model_name': name}
+    cheap_run = {'deepswe': {'pass': 0.74, 'cost': 4.4}}  # Astra's API price at xhigh reads as "medium".
+    assert profile({**row('gpt-6-astra'), 'benchmark': cheap_run})['cost_class'] == 'high'
+    assert profile({**row('gpt-6-sol'), 'benchmark': {'deepswe': {'pass': 0.6, 'cost': 9.0}}})['cost_class'] == 'high'
+    review = dict(TASK_BASE['review'], reasoning=10, architecture=10)
+    agents = [row('gpt-6-astra'), row('gpt-6-sol')]
+    hard = TaskRequirements(task_type='review', complexity='medium', risk='high', requirements=review, effort='high')
+    assert choose(hard, agents)[0]['id'] == 'gpt-6-astra'  # Sol falls short, so the dearer agent is the only one sufficient.
+    assert choose(hard.model_copy(update={'effort': 'low'}), agents)[0]['id'] == 'gpt-6-sol'

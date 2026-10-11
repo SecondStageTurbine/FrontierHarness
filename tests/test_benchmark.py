@@ -57,7 +57,7 @@ def test_each_board_sets_its_own_skills_and_the_user_still_wins(tmp_path):
     judged = adaptive.profile({**model, 'benchmark': benchmark.match(model, boards)})
     # DeepSWE 60% speaks to coding; Terminal-Bench 21.5% in Codex to tool use and debugging.
     assert judged['coding'] == judged['repository'] == 8 and judged['tool_use'] == judged['debugging'] == 6
-    assert judged['cost_class'] == 'low'
+    assert judged['cost_class'] == 'medium'  # A $1.10 run never makes it cheaper than its family; only dearer.
     only = adaptive.profile({**model, 'benchmark': {'deepswe': {'pass': 0.75, 'cost': 1.1}}})
     assert only['coding'] == only['tool_use'] == 10  # One board alone speaks to all four.
     assert adaptive.profile({**model, 'benchmark': {'deepswe': {'pass': 0.75}}, 'capabilities': {'coding': 6}})['coding'] == 6

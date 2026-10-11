@@ -131,7 +131,9 @@ def profile(model):
     if bench:
         base.update(benchmark.skills(bench))
         cost = benchmark.cost_class((bench.get('deepswe') or {}).get('cost'))  # Only DeepSWE prices a task.
-        if base.get('cost_class') != 'free' and cost:
+        # Only ever dearer: the benchmark prices API calls at its own effort, which put Astra beside Sol at
+        # "medium" although its family is the dearest tier, so every turn Sol fell short of went to Astra.
+        if base.get('cost_class') != 'free' and cost and COST_RANK[cost] > COST_RANK[base['cost_class']]:
             base['cost_class'] = cost
     shift = track_shift(model.get('track'))
     for key in CAPABILITIES:
@@ -161,7 +163,11 @@ class TaskRequirements(BaseModel):
     effort: str | None = Field(default=None, pattern=r'^(low|medium|high|xhigh)$')
 
     def need(self, capability):
-        return self.requirements.get(capability, 0)
+        # Jev's effort is a calibrated read of how hard the turn is; easy work does not need the strongest agent.
+        return max(0, self.requirements.get(capability, 0) - EFFORT_EASE.get(self.effort, 0))
+
+
+EFFORT_EASE = {'low': 2}  # ponytail: only low eases; medium easing sent risky implementation to a quantized local model.
 
 
 # Base requirement vectors by task type; complexity and risk then push them around. Speed is a
