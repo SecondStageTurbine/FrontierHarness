@@ -46,6 +46,17 @@ def test_opencode_off_switches_reach_the_tool(monkeypatch):
     assert 'OPENCODE_API_KEY' not in env
 
 
+def test_named_variables_reach_the_tool(monkeypatch):
+    from backend.localprocess import child_env
+    monkeypatch.setenv('FRONTIER_PASS_ENV', 'OPYN_BOARD_URL; agent_token')
+    monkeypatch.setenv('OPYN_BOARD_URL', 'https://board')
+    monkeypatch.setenv('AGENT_TOKEN', 't')
+    monkeypatch.setenv('OTHER_SECRET', 's')
+    env = child_env()
+    assert env.get('OPYN_BOARD_URL') == 'https://board' and env.get('AGENT_TOKEN') == 't'
+    assert 'OTHER_SECRET' not in env
+
+
 def test_opencode_prints_its_errors():
     argv = agent_argv('opencode_cli', ['opencode'], 'strata/m', 'edit', '.', 'final.txt')
     assert argv[argv.index('--log-level') + 1] == 'ERROR' and '--print-logs' in argv

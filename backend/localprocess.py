@@ -18,7 +18,9 @@ CHILD_ENV_KEYS = {'PATH','SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','TEMP','TMP',
 CHILD_ENV_PREFIXES = ('OPENCODE_DISABLE_',)
 
 def child_env(**extra):
-    env={k:v for k,v in os.environ.items() if k.upper() in CHILD_ENV_KEYS or k.upper().startswith(CHILD_ENV_PREFIXES)}
+    # The user may name more variables to hand on (FRONTIER_PASS_ENV=OPYN_BOARD_URL;AGENT_TOKEN): an explicit choice, never ambient.
+    passed={n.strip().upper() for n in os.environ.get('FRONTIER_PASS_ENV','').replace(',',';').split(';') if n.strip()}
+    env={k:v for k,v in os.environ.items() if k.upper() in CHILD_ENV_KEYS or k.upper() in passed or k.upper().startswith(CHILD_ENV_PREFIXES)}
     env.update(extra)
     return env
 
