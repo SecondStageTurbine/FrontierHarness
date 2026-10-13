@@ -1,6 +1,6 @@
 {
   "executable": "frontier-backend-x86_64-pc-windows-msvc.exe",
-  "executable_sha256": "9b078ce0166592c93f8dba0cfa4ec5b5660190c73b40a1b008dd61a30bf22c2d",
+  "executable_sha256": "95d2ffa4d10a8cd3df9b62326a56933027bf5c93ab928af885ba99dbcf8ab59e",
   "no_system_python_or_node_on_path": true,
   "checks": [
     {
@@ -11,7 +11,7 @@
     {
       "module": "pytest",
       "exit_code": 0,
-      "output": "..                                                                       [100%]\n2 passed in 0.02s"
+      "output": "..                                                                       [100%]\n2 passed in 0.01s"
     },
     {
       "module": "compileall",
