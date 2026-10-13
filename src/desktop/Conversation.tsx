@@ -25,7 +25,7 @@ export function Conversation({session,onInspect,onUnqueue,onRevert,onDecide,onRe
   {cite&&<button type="button" className="cite-button" style={{left:Math.max(0,cite.x),top:Math.max(0,cite.y-30)}} onMouseDown={e=>e.preventDefault()} onClick={()=>{onCite?.(cite.text,cite.from);setCite(null);window.getSelection()?.removeAllRanges()}}><MessageSquare size={11}/>Cite in composer</button>}
   {start>0&&<button className="history-more" onClick={()=>setFrom(Math.max(0,start-20))}>Load earlier messages</button>}
   {shown.map(message=><div key={message.id} className={message.id===boundary?'':undefined}>{message.role==='user'
-   ?<section className="conversation-turn"><div className="user-message"><span className="message-author">You</span>{onRewind&&!busy&&<button className="rewind-button" title="Edit this message and resend it; later messages are removed and the folder is put back to how it was before it" onClick={()=>onRewind(message.id)}><Pencil size={11}/>Edit from here</button>}<p>{message.content.split('\n\nREFERENCED CONTEXT')[0].split('\n\nAttached for context')[0]}</p>{!!message.context?.length&&<div className="context-chips read">{message.context.map((c,i)=><span key={i}>{c.kind==='file'?<FileText size={10}/>:c.kind==='terminal'?<Terminal size={10}/>:<GitCompareArrows size={10}/>}{c.label||c.path||c.kind}{c.start?`:${c.start}${c.end&&c.end!==c.start?`-${c.end}`:''}`:''}</span>)}</div>}</div></section>
+   ?<section className="conversation-turn"><div className="user-message"><span className="message-author">You</span>{onRewind&&!busy&&<button className="rewind-button" title="Edit this message and resend it; later messages are removed and the folder is put back to how it was before it" onClick={()=>onRewind(message.id)}><Pencil size={11}/>Edit from here</button>}<p>{message.content.split('\n\nREFERENCED CONTEXT')[0].split('\n\nAttached for context')[0]}</p>{!!message.context?.length&&<div className="context-chips read">{message.context.map((c,i)=><span key={i}>{c.kind==='file'?<FileText size={10}/>:c.kind==='terminal'?<Terminal size={10}/>:<GitCompareArrows size={10}/>}{c.label||c.path||c.kind}{c.start?`:${c.start}${c.end&&c.end!==c.start?`-${c.end}`:''}`:''}</span>)}</div>}<time dateTime={message.created_at}>{sentAt(message.created_at)}</time></div></section>
    :<AgentMessage message={message} onInspect={onInspect} onRevert={onRevert} approvals={(session.approvals||[]).filter(a=>a.message_id===message.id)} onDecide={onDecide} onOpenSession={onOpenSession} onContinueTeam={message.id===session.messages.at(-1)?.id?onContinueTeam:undefined}/>}
    {message.id===boundary&&session.summary&&<div className="compact-note"><button onClick={()=>setShowSummary(v=>!v)}><FoldVertical size={13}/>{session.summary.count} earlier messages compacted by {session.summary.model_name}. The agent now sees this summary instead.<ChevronRight size={12} className={showSummary?'expanded-chevron':''}/></button>{showSummary&&<div className="compact-summary"><MarkdownOutput text={session.summary.text}/></div>}</div>}</div>)}
   {queue.map((q,i)=><section className="conversation-turn queued" key={q.id}><div className="user-message"><span className="message-author"><Clock size={11}/> Queued {i+1} of {queue.length} · {modeLabels[q.mode]}</span><p>{q.content}</p>{onUnqueue&&<button className="icon-button" aria-label="Remove from queue" title="Remove from queue" onClick={()=>onUnqueue(q.id)}><X size={12}/></button>}</div></section>)}
@@ -44,6 +44,7 @@ function turnStats(m:Message){
  return parts.join(' · ');
 }
 const compact=(n:number)=>n>=1000?`${(n/1000).toFixed(n>=10000?0:1)}k`:String(n);
+const sentAt=(at:string)=>new Date(at).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});
 
 /** What a tool asked to do, in one line the user can judge: the command, the file, or the arguments. */
 function describeInput(tool:string,input:Record<string,unknown>){const s=(k:string)=>typeof input[k]==='string'?input[k] as string:'';return s('command')||s('file_path')||s('path')||s('url')||s('pattern')||s('query')||(Object.keys(input).length?JSON.stringify(input).slice(0,400):tool)}
@@ -74,6 +75,8 @@ function TeamCard({team,running,onOpenSession,onContinue}:{team:TeamState;runnin
 }
 function AgentMessage({message,onInspect,onRevert,approvals=[],onDecide,onOpenSession,onContinueTeam}:{message:Message;onContinueTeam?:()=>void;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onRevert?:(id:string)=>void;approvals?:Approval[];onDecide?:(approval:Approval,allow:boolean,message?:string)=>void;onOpenSession?:(id:string)=>void}){
  const running=message.status==='running';
+ const replyAt=running?message.created_at:message.finished_at||message.created_at;
+ const status=running?`Working · ${duration(message.created_at,null)}`:[message.status!=='complete'?message.status:'',turnStats(message)].filter(Boolean).join(' · ');
  const ModeIcon=modeIcon[(message.mode||'edit') as Mode];
  const changes=message.changes||[];
  return <div className={`agent-turn ${running?'working':''}`}>
@@ -81,7 +84,7 @@ function AgentMessage({message,onInspect,onRevert,approvals=[],onDecide,onOpenSe
    <span className="frontier-spark">{running?<LoaderCircle size={14} className="spin"/>:'✳'}</span>
    <strong>{message.model_name||'Agent'}</strong>
    <span className="agent-mode-badge" title={modeLabels[(message.mode||'edit') as Mode]}><ModeIcon size={12}/>{modeLabels[(message.mode||'edit') as Mode]}</span>{message.routing?.effort&&<span className="agent-mode-badge" title="Reasoning effort Jev chose for this turn">{message.routing.effort} effort</span>}
-   <small>{running?`Working · ${duration(message.created_at,null)}`:[message.status!=='complete'?message.status:'',turnStats(message)].filter(Boolean).join(' · ')}</small>
+   <small>{status&&<>{status} · </>}<time dateTime={replyAt}>{sentAt(replyAt)}</time></small>
   </div>
   {message.switched_from&&<div className="handover-note"><ArrowRightLeft size={13}/>Took over from {message.switched_from}. It was given this conversation and the project folder.</div>}
   {message.routing?.mode==='adaptive'&&message.routing.chosen&&<div className="routing-note" title={message.routing.requirements?.reason}>
