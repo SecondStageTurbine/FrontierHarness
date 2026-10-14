@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request, Response, HTTPException, UploadFile, File,
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
-from .schemas import LoginInput, TenantInput, ModelConfig, SUBSCRIPTION_PROVIDERS, PasswordInput, RemoteInput, PushInput, EnvironmentInput
+from .schemas import LoginInput, TenantInput, ModelConfig, AGENT_PROVIDERS, SUBSCRIPTION_PROVIDERS, PasswordInput, RemoteInput, PushInput, EnvironmentInput
 from . import adaptive, benchmark, automations, remote, devserver, push, environments
 from starlette.background import BackgroundTask
 from .store import Store, TenantIsolationViolationException, uid, now, public_model
@@ -413,14 +413,14 @@ def create_app(directory=None, broker=None):
         scoped(request,tenant_id)
         old = store.get(tenant_id,'models',model_id) if model_id else {}
         data = payload.model_dump(exclude={'api_key'})
-        if old and (data['provider'] != old['provider'] or data['base_url'] != old['base_url']) and not payload.api_key:
+        if old and (data['provider'] != old['provider'] or data['base_url'] != old['base_url']) and not payload.api_key and payload.provider not in AGENT_PROVIDERS:
             raise ValueError('Re-enter credentials when changing provider or endpoint.')
         encrypted = store.encrypt(payload.api_key) if payload.api_key else old.get('encrypted_key')
         if payload.provider in ('openai','anthropic','typesafe') and not encrypted:
             raise ValueError('An API key is required for this provider.')
-        if payload.provider in SUBSCRIPTION_PROVIDERS:
+        if payload.provider in AGENT_PROVIDERS:
             encrypted = None  # Switching to a subscription login discards any stored key.
-        hint = 'Subscription login' if payload.provider in SUBSCRIPTION_PROVIDERS else ('••••'+payload.api_key[-4:] if payload.api_key else old.get('key_hint','No key'))
+        hint = ('Harness profile' if payload.provider == 'deepseek_harness' else 'Subscription login') if payload.provider in AGENT_PROVIDERS else ('••••'+payload.api_key[-4:] if payload.api_key else old.get('key_hint','No key'))
         model = dict(**data,id=model_id or uid(),encrypted_key=encrypted,key_hint=hint,status='untested',created_at=old.get('created_at',now()))
         return public_model(store.put(tenant_id,'models',model))
 
@@ -428,14 +428,15 @@ def create_app(directory=None, broker=None):
     async def test_model(tenant_id:str,model_id:str,request:Request):
         scoped(request,tenant_id)
         model = store.get(tenant_id,'models',model_id)
-        # Discovery authenticates without generating billable text or bypassing budgets.
+        # CLI probes confirm the executable runs, not that its configured model can authenticate.
+        # Keyed endpoints use model discovery without generating billable text.
         from openai import AsyncOpenAI
         from anthropic import AsyncAnthropic
         key = store.decrypt(model['encrypted_key']) if model.get('encrypted_key') else 'local-no-key'
         start = time.monotonic()
         try:
             async with asyncio.timeout(20):
-                if model['provider'] in SUBSCRIPTION_PROVIDERS:
+                if model['provider'] in AGENT_PROVIDERS:
                     await probe_cli(model['provider'], account_env(store, tenant_id, model))
                 elif model['provider'] == 'typesafe':
                     # TypeSafe has no chat-completion surface to discover a model against; its

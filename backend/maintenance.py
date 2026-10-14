@@ -45,7 +45,7 @@ async def versions():
             return row
         try:
             launch = resolve_cli(provider)
-            row['updatable'] = any('node_modules' in part or 'npm' in part.lower() for part in launch)
+            row['updatable'] = provider in PACKAGES and any('node_modules' in part or 'npm' in part.lower() for part in launch)
             code, out, _ = await npm('view', PACKAGES[provider], 'version', timeout=30) if provider in PACKAGES else (1, '', '')
             if code == 0 and out.strip():
                 row['latest'] = out.strip().splitlines()[-1]
@@ -228,6 +228,7 @@ INSTALL = {
     'codex_cli': {'install': 'npm install -g @openai/codex', 'signin': 'codex login', 'models': ['gpt-6-sol', 'gpt-6-astra', 'gpt-6-luna'], 'default': 'gpt-6-sol'},
     'opencode_cli': {'install': 'npm install -g opencode-ai', 'signin': 'opencode auth login', 'models': [], 'default': ''},
     'gemini_cli': {'install': 'Install the Antigravity CLI from https://antigravity.google', 'signin': 'agy', 'models': [], 'default': ''},
+    'deepseek_harness': {'install': 'Install DeepSeek Harness from https://github.com/deepseek-ai/deepseek-harness', 'signin': 'Configure the headless profile in DeepSeek Harness', 'models': ['headless'], 'default': 'headless'},
 }
 
 

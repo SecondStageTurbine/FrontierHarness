@@ -376,11 +376,12 @@ class AgentRunner:
         task = self.turns.get((tenant_id, session_id))
         return bool(task and not task.done())
 
-    async def fallback(self, tenant_id, tried, avoid=None, requirements=None):
+    async def fallback(self, tenant_id, tried, avoid=None, requirements=None, mode='auto'):
         """The agent to continue a turn its agent could not: the cheapest capable one that is connected, enabled, not
         yet tried, not cooling down and, if it is local, running. When `avoid` names a tool that just failed, another
         tool comes first: a tool that is not signed in fails the same way for every model on it."""
-        candidates = [a for a in self.agents(tenant_id) if a['id'] not in tried and a.get('enabled') is not False]
+        candidates = [a for a in self.agents(tenant_id) if a['id'] not in tried and a.get('enabled') is not False
+                      and (mode == 'auto' or a['provider'] != 'deepseek_harness')]
         online = await localhealth.availability(candidates)
         candidates = [a for a in candidates if online.get(a['id']) is not False]
         needs = adaptive.TaskRequirements(**requirements) if requirements else adaptive.TaskRequirements(
@@ -561,6 +562,8 @@ class AgentRunner:
             config = None
         else:
             config = self.select(tenant_id, model_id)
+            if config['provider'] == 'deepseek_harness' and (mode != 'auto' or team):
+                raise ValueError('DeepSeek Harness headless can take Full auto single-agent turns only.')
         if team and mode == 'read':
             raise ValueError('A team needs Edit files or Full auto to do its work.')
         # The switch is decided against the last agent that actually answered, not against the
@@ -718,7 +721,7 @@ class AgentRunner:
         # several can be configured while only one holds the GPU, and a turn sent to a server
         # that is down would fail and escalate to a cloud agent for no reason.
         await benchmark.refresh(self.store.directory)
-        agents = self.agents(tenant_id)
+        agents = [a for a in self.agents(tenant_id) if message['mode'] == 'auto' or a['provider'] != 'deepseek_harness']
         online = await localhealth.availability(agents)
         offline = [m for m in agents if online.get(m['id']) is False]
         chosen, ranked = adaptive.choose(requirements, [m for m in agents if online.get(m['id']) is not False], lambda model_id: cooling(self.broker, tenant_id, model_id))
@@ -801,7 +804,7 @@ class AgentRunner:
                 # Known in a second rather than a minute: hand the turn to another agent, or fail with the address.
                 down, where = config['name'], localhealth.where(config)
                 tried.add(config['id'])
-                following = await self.fallback(tenant_id, tried)
+                following = await self.fallback(tenant_id, tried, mode=mode)
                 if following is None:
                     raise ProviderError(f'{down} is not running: nothing at {where} is serving it. Start that server, or pick another agent.')
                 config = following
@@ -861,7 +864,7 @@ class AgentRunner:
                     # An Adaptive turn's other failures escalate below instead.
                     failover = exc.exhausted or (not exc.worked and not adaptive_turn)
                     following = await self.fallback(tenant_id, tried, None if exc.exhausted else config['provider'],
-                                                    (message.get('routing') or {}).get('requirements')) if failover and spare else None
+                                                    (message.get('routing') or {}).get('requirements'), mode=mode) if failover and spare else None
                     if following is None:
                         if exc.exhausted:
                             raise

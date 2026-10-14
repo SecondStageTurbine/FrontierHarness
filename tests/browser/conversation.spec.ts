@@ -167,7 +167,8 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  // The setup wizard reopens from Agents & Providers and lists every tool it looked for.
  await page.locator('.desktop-settings nav button',{hasText:'Agents & Providers'}).click();
  await page.getByRole('button',{name:'Run the setup wizard again',exact:true}).click();
- await expect(page.locator('.wizard-tool')).toHaveCount(4,{timeout:60000});
+ await expect(page.locator('.wizard-tool')).toHaveCount(5,{timeout:60000});
+ await expect(page.locator('.wizard-tool',{hasText:'DeepSeek Harness'})).toBeVisible();
  await page.getByRole('button',{name:'Skip for now',exact:true}).click();
  await page.getByRole('button',{name:'Settings',exact:true}).click();
  // The MCP catalog fills the add-server form.

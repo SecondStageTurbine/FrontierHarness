@@ -8,14 +8,14 @@ Mode = Literal['read', 'edit', 'auto']
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
 
-# A subscription login runs a local agent command line tool. It is the only kind of model that
-# can take a turn, because an API key reaches a model and not an agent: no tools, no file
-# access, no shell. Keyed providers stay configurable and are used for dictation.
+# Agent command line tools take turns with their own files, shell and credentials.
+# DeepSeek Harness may use an API-billed model inside its profile, unlike the subscription logins.
 SUBSCRIPTION_PROVIDERS = ('claude_cli', 'codex_cli', 'opencode_cli', 'gemini_cli')
+AGENT_PROVIDERS = (*SUBSCRIPTION_PROVIDERS, 'deepseek_harness')
 
 class ModelConfig(StrictModel):
     name: str = Field(min_length=1, max_length=100)
-    provider: Literal['anthropic', 'openai', 'custom_openai', 'ollama', 'claude_cli', 'codex_cli', 'opencode_cli', 'gemini_cli', 'typesafe']
+    provider: Literal['anthropic', 'openai', 'custom_openai', 'ollama', 'claude_cli', 'codex_cli', 'opencode_cli', 'gemini_cli', 'deepseek_harness', 'typesafe']
     model_name: str = Field(min_length=1, max_length=150)
     api_key: str | None = Field(default=None, max_length=1000)
     base_url: str | None = None
@@ -36,14 +36,19 @@ class ModelConfig(StrictModel):
     def endpoint(self):
         if self.provider in ('custom_openai', 'ollama') and not self.base_url:
             raise ValueError('A base URL is required for this provider.')
-        if self.provider in SUBSCRIPTION_PROVIDERS:
+        if self.provider in AGENT_PROVIDERS:
             if self.api_key:
-                raise ValueError('A subscription login signs in through its own command line tool, not an API key.')
+                raise ValueError('This agent uses credentials configured in its own command line tool, not a Frontier API key.')
             if self.base_url:
-                raise ValueError('A subscription login has no endpoint to configure.')
-            # The subscription already covers usage, so the per-token rate is zero rather than
-            # unknown.
-            self.input_price = self.output_price = 0.0
+                raise ValueError('This agent has no endpoint to configure in Frontier.')
+            if self.provider == 'deepseek_harness':
+                if self.account:
+                    raise ValueError('DeepSeek Harness uses its own configured profile, not a named Frontier login.')
+                if self.model_name != 'headless':
+                    raise ValueError('Use "headless"; DeepSeek Harness selects its model in that profile.')
+            else:
+                # These existing CLI rows represent subscription logins.
+                self.input_price = self.output_price = 0.0
         elif self.account:
             raise ValueError('Only a subscription login has a named account.')
         if self.capabilities:

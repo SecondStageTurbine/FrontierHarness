@@ -315,7 +315,8 @@ class Team:
     async def run(self, conversation_prompt, objective):
         session, message = self.state()
         await benchmark.refresh(self.runner.store.directory)
-        connected = [a for a in self.runner.agents(self.tenant_id) if a.get('enabled', True)]
+        # Headless cannot take the team's read-only planning or edit-posture worker turns.
+        connected = [a for a in self.runner.agents(self.tenant_id) if a.get('enabled', True) and a['provider'] != 'deepseek_harness']
         # A local agent whose server is not running cannot take a task; the lead is told who is out.
         up = await localhealth.availability(connected)
         agents = [a for a in connected if up.get(a['id']) is not False]

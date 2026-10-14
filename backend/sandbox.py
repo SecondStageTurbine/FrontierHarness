@@ -28,6 +28,7 @@ PROVIDER_HOSTS = {
     'codex_cli': ['openai.com', '*.openai.com', 'chatgpt.com', '*.chatgpt.com', 'oaistatic.com', '*.oaistatic.com'],
     'opencode_cli': ['opencode.ai', '*.opencode.ai', 'models.dev', '*.models.dev'],
     'gemini_cli': ['*.googleapis.com', 'accounts.google.com', 'oauth2.googleapis.com', 'play.googleapis.com'],
+    'deepseek_harness': ['deepseek.com', '*.deepseek.com', 'api.deepseek.com'],
 }
 # Telemetry the tools send on their own: refused like anything else, but not listed as something the turn needed.
 QUIET = ['*.datadoghq.com', 'sentry.io', '*.sentry.io']
@@ -138,7 +139,7 @@ def tool_state(provider, login=None):
     home = Path.home()
     return {'claude_cli': [home/'.claude', home/'.claude.json'], 'codex_cli': [home/'.codex'],
             'opencode_cli': [home/'.local'/'share'/'opencode', home/'.config'/'opencode', home/'.cache'/'opencode'],
-            'gemini_cli': [home/'.gemini']}.get(provider, [])
+            'gemini_cli': [home/'.gemini'], 'deepseek_harness': [home/'.dsh']}.get(provider, [])
 
 
 def label(path):

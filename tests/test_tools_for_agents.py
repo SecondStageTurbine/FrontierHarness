@@ -130,7 +130,7 @@ def test_first_run_detection_lists_every_tool_with_its_install_command(monkeypat
     rows = {r['provider']: r for r in asyncio.run(maintenance.detect())}
     assert rows['claude_cli']['installed'] and rows['claude_cli']['version'] == '2.1.280' and 'sonnet' in rows['claude_cli']['models']
     assert not rows['codex_cli']['installed'] and rows['codex_cli']['install'] == 'npm install -g @openai/codex' and rows['codex_cli']['signin'] == 'codex login'
-    assert set(rows) == {'claude_cli', 'codex_cli', 'opencode_cli', 'gemini_cli'}
+    assert set(rows) == {'claude_cli', 'codex_cli', 'opencode_cli', 'gemini_cli', 'deepseek_harness'}
 
 
 def test_the_browser_tools_never_wait_on_an_approval_card(tmp_path):

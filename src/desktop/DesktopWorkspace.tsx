@@ -240,9 +240,9 @@ export default function DesktopWorkspace(){
       {!agents.length&&<option value="">No agent connected</option>}
       {agents.length>0&&<option value={ADAPTIVE} title={ADAPTIVE_HINT}>Adaptive</option>}
       {agentProviders.filter(provider=>agents.some(a=>a.provider===provider)).map(provider=>
-       <optgroup key={provider} label={providerNames[provider]}>{agents.filter(a=>a.provider===provider).map(a=><option key={a.id} value={a.id} disabled={a.online===false}>{a.name}{a.online===false?' · offline':''}</option>)}</optgroup>)}
+       <optgroup key={provider} label={providerNames[provider]}>{agents.filter(a=>a.provider===provider).map(a=><option key={a.id} value={a.id} disabled={a.online===false||(a.provider==='deepseek_harness'&&(mode!=='auto'||teamMode))}>{a.name}{a.online===false?' · offline':a.provider==='deepseek_harness'?' · Full auto only':''}</option>)}</optgroup>)}
      </select>
-     <select aria-label="What the agent may do" value={mode} onChange={e=>setMode(e.target.value as Mode)} title={modeHints[mode]}>
+     <select aria-label="What the agent may do" value={mode} onChange={e=>{const next=e.target.value as Mode;setMode(next);if(next!=='auto'&&agents.some(a=>a.id===activeModelId&&a.provider==='deepseek_harness'))setModelId(ADAPTIVE)}} title={modeHints[mode]}>
       {modes.map(m=><option key={m} value={m}>{modeLabels[m]}</option>)}
      </select>
      {(newSession||!session||!session.messages.length)&&repo.data?.repo&&!session?.worktree&&<select aria-label="Where this session works" value={inBranch?'branch':'folder'} onChange={e=>setInBranch(e.target.value==='branch')} title={inBranch?'A new branch in its own worktree beside the project, so other sessions are not disturbed.':'The project folder itself.'}><option value="folder">In this folder</option><option value="branch">On a new branch</option></select>}

@@ -31,6 +31,7 @@ CLI_TOOLS = {
     'opencode_cli': ('opencode', 'node_modules/opencode-ai/bin/opencode', 'OpenCode'),
     # Google's Gemini agent is now the Antigravity CLI, a native `agy` binary; the old npm `gemini` no longer signs in.
     'gemini_cli': ('agy', 'agy', 'Antigravity CLI'),
+    'deepseek_harness': ('dsh', 'node_modules/@deepseek-ai/dsh/cli.js', 'DeepSeek Harness'),
 }
 # Each agent tool reads the subscription it is signed in as out of one directory. Pointing that
 # variable at a directory per named account is the whole mechanism behind connecting more than
@@ -117,9 +118,13 @@ def cli_exit_error(provider, code, out, err, reported=''):
         hint = (" The conversation outgrew the model's context window: give this model smaller tasks, or raise the context size"
                 " of the model server and the limit in the tool's settings.") if 'context' in reported.lower() else ''
         return ProviderError(f'{CLI_TOOLS[provider][2]} stopped with an error: {reported[:400]}.{hint}')
+    if provider == 'deepseek_harness':
+        return ProviderError(f'DeepSeek Harness headless exited with code {code}. Check its headless profile and credentials in DeepSeek Harness.')
     return ProviderError(f'The {CLI_TOOLS[provider][2]} command line tool exited with code {code}. Run it once in a terminal to confirm the subscription is signed in.')
 
 def exhausted_error(provider):
+    if provider == 'deepseek_harness':
+        return ProviderError('The model configured in DeepSeek Harness has no usage left. Check its provider billing or choose another agent.', retryable=True, exhausted=True)
     return ProviderError(f'The {CLI_TOOLS[provider][2]} subscription has no usage left in its current window.', retryable=True, exhausted=True)
 
 def account_home(store, tenant_id, provider, account):
@@ -151,6 +156,7 @@ KNOWN_DIRS = {
     'codex_cli': ['~/.local/bin', '%LOCALAPPDATA%/Programs/codex', '%LOCALAPPDATA%/Microsoft/WinGet/Links'],
     'opencode_cli': ['~/.local/bin', '~/.opencode/bin', '%LOCALAPPDATA%/Microsoft/WinGet/Links'],
     'gemini_cli': ['%LOCALAPPDATA%/agy/bin', '~/.local/bin', '%LOCALAPPDATA%/Microsoft/WinGet/Links'],
+    'deepseek_harness': ['~/.local/bin', '%LOCALAPPDATA%/Microsoft/WinGet/Links'],
 }
 
 
@@ -226,6 +232,12 @@ def _need_node(label):
 
 
 def resolve_cli(provider):
+    if provider == 'deepseek_harness' and os.name == 'nt' and os.environ.get('LOCALAPPDATA'):
+        base = Path(os.environ['LOCALAPPDATA'])/'Programs'/'DeepSeek Harness'
+        exe = base/'DeepSeek Harness.exe'
+        script = base/'resources'/'app.asar'/'dsh'/'node_modules'/'@deepseek-ai'/'dsh-desktop-host'/'lib'/'cli.js'
+        if exe.is_file() and (base/'resources'/'app.asar').is_file():
+            return [str(exe), '--expose-internals', str(script)]
     name, entry, label = CLI_TOOLS[provider]
     found = locate(provider)
     if found:
@@ -313,6 +325,12 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
     """
     extras = extras or {}
     servers = extras.get('mcp_servers') or []
+    if provider == 'deepseek_harness':
+        if mode != 'auto':
+            raise ProviderError('DeepSeek Harness headless supports Full auto only; choose Full auto or another agent.')
+        if model_name != 'headless':
+            raise ProviderError('DeepSeek Harness uses the model configured in its headless profile; use "headless" as the model identifier.')
+        return [*launch, 'headless', '--json', '-']
     if provider == 'claude_cli':
         # Not `plan` mode for Read only: that makes Claude act as a planner — it writes a plan
         # file into its own home and answers about that file — which is a side effect outside
@@ -494,6 +512,11 @@ def live_line(provider, raw, prompt):
             lines.append(f'▸ {step.get("tool_name")}: {brief((step.get("tool_info") or {}).get("parameters"))}')
         elif step.get('step_type') == 'error_message':
             lines.append('⚠ agy hit an error and is retrying; its log in ~/.gemini/antigravity-cli/log says why.')
+    elif provider == 'deepseek_harness':
+        if event.get('type') == 'tool_call':
+            lines.append(f'▸ {event.get("tool")}: {brief(event.get("input"))}')
+        elif event.get('type') == 'text' and (event.get('text') or '').strip():
+            lines.append(event['text'].strip()[:600])
     elif provider == 'codex_cli':
         return text[:300]
     return '\n'.join(lines) or None
@@ -501,7 +524,9 @@ def live_line(provider, raw, prompt):
 async def probe_cli(provider, env=None):
     """Confirm the tool runs, without a model call. Sign-in is only proven by a real turn."""
     with TemporaryDirectory(prefix='frontier-cli-') as directory:
-        code, out, _ = await run_cli([*resolve_cli(provider), '--version'], None, directory, env)
+        launch = resolve_cli(provider)
+        environment = {**(env or {}), **({'ELECTRON_RUN_AS_NODE': '1'} if provider == 'deepseek_harness' and launch[0].lower().endswith('deepseek harness.exe') else {})}
+        code, out, _ = await run_cli([*launch, '--version'], None, directory, environment)
     if code != 0:
         raise ProviderError(f'The {CLI_TOOLS[provider][2]} command line tool did not run. Reinstall it, then test again.')
     return out.strip()[:80]
@@ -634,6 +659,22 @@ def read_output(provider, code, out, err, prompt, final):
         return read_claude(out, err, code, provider)
     if provider == 'gemini_cli':
         return read_gemini(out, err, code, provider)
+    if provider == 'deepseek_harness':
+        events = list(opencode_events(out))
+        if code != 0:
+            reasons = [e.get('reason') for e in events if e.get('type') == 'status' and e.get('phase') == 'turn_end']
+            reason = reasons[-1] if reasons else None
+            error = reason.get('error') if isinstance(reason, dict) else None
+            if isinstance(error, dict) and error.get('code') == 'MISSING_CREDENTIAL':
+                raise ProviderError('DeepSeek Harness headless has no credential for its configured model. Open DeepSeek Harness Models and configure that profile; the deepseek-official route requires a DeepSeek API key.')
+            if is_exhausted(strip_echo(out, prompt), err):
+                raise exhausted_error(provider)
+            raise cli_exit_error(provider, code, strip_echo(out, prompt), err)
+        answer = next((e.get('text') for e in reversed(events) if e.get('type') == 'final'), None)
+        if not isinstance(answer, str) or not answer.strip():
+            raise ProviderError('DeepSeek Harness returned no final answer. Check its headless profile and credentials.')
+        session = next((e.get('sessionId') for e in events if e.get('type') == 'session'), None)
+        return AgentResult(answer, None, None, session_id=session)
     if code != 0:
         raise cli_exit_error(provider, code, strip_echo(out, prompt), err, opencode_reason(out, err) if provider == 'opencode_cli' else '')
     if provider == 'opencode_cli':
@@ -661,6 +702,8 @@ class ModelBroker:
         switching between them needs no separate concept. One inside its cooldown goes last
         rather than missing, so a turn never fails for want of a login that only might be spent.
         """
+        if config['provider'] == 'deepseek_harness':
+            return [config]  # Every row uses the same configured headless profile.
         siblings = [m for m in self.store.list(tenant_id, 'models')
                     if m['id'] != config['id'] and m['provider'] == config['provider'] and m['model_name'] == config['model_name']]
         ordered = [config] + sorted(siblings, key=lambda m: m.get('created_at') or '')
@@ -726,6 +769,8 @@ class ModelBroker:
         provider = config['provider']
         launch = resolve_cli(provider)
         env = account_env(self.store, tenant_id, config)
+        if provider == 'deepseek_harness' and launch[0].lower().endswith('deepseek harness.exe'):
+            env['ELECTRON_RUN_AS_NODE'] = '1'
         extras = dict(extras or {})
         env.update(extras.get('sandbox_env') or {})
         with TemporaryDirectory(prefix='frontier-turn-', dir=extras.get('scratch_dir')) as scratch:
