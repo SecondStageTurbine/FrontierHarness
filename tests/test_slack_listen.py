@@ -16,6 +16,10 @@ class Runner:
     def busy(self, tenant_id, session_id):
         return False
 
+    def agents(self, tenant_id):
+        return [model for model in self.store.list(tenant_id, 'models')
+                if model['provider'] in ('claude_cli', 'codex_cli', 'opencode_cli', 'gemini_cli') and model.get('enabled', True)]
+
     def send(self, tenant_id, project_id, session_id, content, model_id, mode):
         self.sent.append((content, model_id, mode))
         session = self.store.get(tenant_id, 'sessions', session_id)
@@ -90,3 +94,47 @@ def test_other_peoples_thread_replies_count_but_the_users_own_never_do(tmp_path)
     assert posted[0]['thread_ts'] == '50.0' and posted[0]['text'] == '🤖 Frontier: <@UNELSON> *Done*, see <https://x.test/1|the run>.'
     asyncio.run(tick())
     assert len(runner.sent) == 1
+
+
+def test_named_slack_model_uses_nearest_connected_sol_and_reports_substitution(tmp_path):
+    store = setup_store(tmp_path / 'state'); runner = Runner(store)
+    project, session = open_project(store, runner, 'tenant-a', tmp_path)
+    store.delete('tenant-a', 'models', 'codex_cli')
+    store.put('tenant-a', 'models', {'id': 'sol6', 'name': 'Codex Sol 6', 'provider': 'codex_cli',
+                                     'model_name': 'gpt-6-sol', 'enabled': True})
+    store.put('tenant-a', 'models', {'id': 'sol55', 'name': 'Codex Sol 5.5', 'provider': 'codex_cli',
+                                     'model_name': 'gpt-5.5-sol', 'enabled': True})
+    store.put('tenant-a', 'mcp_servers', {'id': 's', 'name': 'slack', 'env': {'SLACK_MCP_XOXP_TOKEN': 'xoxp-1'}})
+    session['slack'] = {'channel': 'C1', 'name': 'ao', 'user': 'UME', 'anyone': True,
+                        'model_id': 'adaptive', 'mode': 'edit', 'since': '100.0'}
+    store.put('tenant-a', 'sessions', session)
+    posted = []
+    history = [{'ts': '101.0', 'user': 'UOTHER', 'text':
+                'Run a fresh S13 review on gpt-5.6-sol from a plain Codex CLI session, then P9 the same way, or both on Claude after 12:10.'}]
+
+    def slack(request):
+        method, params = request.url.path.rsplit('/', 1)[1], {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
+        if method == 'chat.postMessage':
+            posted.append(params)
+        return httpx.Response(200, json={'ok': True, 'messages': history if method == 'conversations.history' else []})
+
+    async def tick():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(slack)) as client:
+            await slack_listen.step(store, runner, 'tenant-a', store.get('tenant-a', 'sessions', session['id']),
+                                    client, slack_listen.credentials(store, 'tenant-a'))
+
+    asyncio.run(tick())
+    assert len(runner.sent) == 1 and runner.sent[0][1] == 'sol6'
+    s = store.get('tenant-a', 'sessions', session['id'])
+    s['messages'][-1].update(status='complete', content='Review complete.')
+    store.put('tenant-a', 'sessions', s)
+    asyncio.run(tick())
+    assert 'gpt-5.6-sol' in posted[0]['text'] and 'gpt-6-sol' in posted[0]['text']
+
+
+def test_named_slack_model_uses_exact_connected_model_and_plain_text_keeps_adaptive(tmp_path):
+    store = setup_store(tmp_path / 'state'); runner = Runner(store)
+    models = runner.agents('tenant-a')
+    assert slack_listen.requested_agent('Please use gpt-5.6-sol for this review.', models)['id'] == 'codex_cli'
+    assert slack_listen.requested_agent('Do not use Claude; use gpt-5.6-sol.', models)['id'] == 'codex_cli'
+    assert slack_listen.requested_agent('Run the tests.', models) is None
