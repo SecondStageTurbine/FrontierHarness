@@ -401,10 +401,10 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
             # sandbox is set through its config key.
             if mode != 'auto':
                 argv += ['-c', 'sandbox_mode=' + toml_value('read-only' if mode == 'read' else codex_write_mode(extras))]
-            argv += ['exec', 'resume', '--skip-git-repo-check', '--model', model_name, '--output-last-message', str(final_path)]
+            argv += ['exec', '--color', 'always', 'resume', '--skip-git-repo-check', '--model', model_name, '--output-last-message', str(final_path)]
             argv += ['--dangerously-bypass-approvals-and-sandbox'] if mode == 'auto' else []
             return argv + [extras['resume'], '-']
-        argv += ['exec', '--skip-git-repo-check', '--model', model_name, '-C', str(root), '--output-last-message', str(final_path)]
+        argv += ['exec', '--color', 'always', '--skip-git-repo-check', '--model', model_name, '-C', str(root), '--output-last-message', str(final_path)]
         argv += (['--dangerously-bypass-approvals-and-sandbox'] if mode == 'auto'
                  else ['--sandbox', 'read-only' if mode == 'read' else codex_write_mode(extras)])
         return argv + ['-']
@@ -463,6 +463,43 @@ async def run_cli(argv, stdin_text, work, env=None, on_line=None):
 ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
 
 
+class CodexLive:
+    """Classify Codex's human output without losing tool calls absent from its JSON stream."""
+    def __init__(self, prompt):
+        self.prompt = prompt
+        self.section = 'meta'
+
+    def __call__(self, raw):
+        text = ANSI.sub('', raw).strip()
+        if not text or (self.section == 'meta' and text in self.prompt):
+            return None
+        if text == 'user':
+            self.section = 'meta'
+            return None
+        if text == 'codex':
+            self.section = 'thought'
+            return None
+        if text == 'exec':
+            self.section = 'tool'
+            return '▸ exec'
+        if text.startswith(('mcp:', 'web search:', 'collab:', 'hook:', 'apply patch')):
+            self.section = 'tool'
+            return f'▸ {text[:600]}'
+        if text.startswith(('succeeded', 'exited ', 'declined', 'in progress', 'patch:')):
+            self.section = 'result'
+            return f'  ↳ {text[:600]}'
+        # Reasoning summaries are dimmed by Codex; --color always keeps that marker in a pipe.
+        if '\x1b[2m' in raw[:32]:
+            self.section = 'thought'
+        if self.section == 'tool':
+            return f'▸ {text[:600]}'
+        if self.section == 'result':
+            return f'  ↳ {text[:600]}'
+        if self.section == 'thought':
+            return text[:600]
+        return None
+
+
 def brief(value):
     """A tool call's input in one line: the command, file, pattern or address it names."""
     if isinstance(value, dict):
@@ -481,8 +518,7 @@ def live_line(provider, raw, prompt):
     try:
         event = json.loads(text)
     except ValueError:
-        # Codex narrates in plain text. Lines of the conversation it echoes back are not news.
-        return None if provider != 'codex_cli' or text in prompt else text[:300]
+        return None
     if not isinstance(event, dict):
         return None
     lines = []
@@ -517,8 +553,6 @@ def live_line(provider, raw, prompt):
             lines.append(f'▸ {event.get("tool")}: {brief(event.get("input"))}')
         elif event.get('type') == 'text' and (event.get('text') or '').strip():
             lines.append(event['text'].strip()[:600])
-    elif provider == 'codex_cli':
-        return text[:300]
     return '\n'.join(lines) or None
 
 async def probe_cli(provider, env=None):
@@ -792,8 +826,9 @@ class ModelBroker:
             try:
                 async with asyncio.timeout(extras.get('timeout') or TURN_TIMEOUT):
                     live = extras.get('live')
+                    format_live = CodexLive(prompt) if provider == 'codex_cli' else lambda raw: live_line(provider, raw, prompt)
                     code, out, err = await run_cli(argv, agy_input(prompt) if provider == 'gemini_cli' else prompt, root, env,
-                                                   (lambda raw: (line := live_line(provider, raw, prompt)) and live(line)) if live else None)
+                                                   (lambda raw: (line := format_live(raw)) and live(line)) if live else None)
                 # A tool may echo the conversation; words like 'quota' in it must not read as the tool running out.
                 err = strip_echo(err, prompt)
             except TimeoutError:

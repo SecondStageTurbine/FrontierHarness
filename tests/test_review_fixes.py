@@ -318,9 +318,26 @@ def test_the_live_view_turns_each_tools_output_into_steps():
     assert live_line('claude_cli', result, '') == '  ↳ 3 passed'
     assert live_line('opencode_cli', '{"type":"tool_use","part":{"type":"tool","tool":"edit","state":{"input":{"filePath":"src/a.ts"}}}}', '') == '▸ edit: src/a.ts'
     assert live_line('gemini_cli', '{"event":"step_update","step_update":{"step_type":"tool","state":"ACTIVE","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"dir"}}}}', '') == '▸ run_command: dir'
-    assert live_line('codex_cli', '\x1b[1mexec\x1b[0m npm test', 'USER: fix it') == 'exec npm test'
-    assert live_line('codex_cli', 'USER: fix it', 'USER: fix it') is None  # Its echo of the conversation is not news.
     assert live_line('claude_cli', '{"type":"system","subtype":"init"}', '') is None
+
+
+def test_codex_live_view_separates_reasoning_from_commands_and_mcp_calls():
+    from backend.broker import CodexLive
+
+    line = CodexLive('USER: use exec to fix it')
+    assert line('OpenAI Codex v0.162.1') is None
+    assert line('user') is None
+    assert line('USER: use exec to fix it') is None
+    assert line('\x1b[2mChecking the plan.\x1b[0m') == 'Checking the plan.'
+    assert line('\x1b[3m\x1b[35mexec\x1b[0m') == '▸ exec'
+    assert line('\x1b[1mpython -c "print(1)"\x1b[0m') == '▸ python -c "print(1)"'
+    assert line('\x1b[32msucceeded in 150ms:\x1b[0m') == '  ↳ succeeded in 150ms:'
+    assert line('Latest record timestamp: 2026-10-14') == '  ↳ Latest record timestamp: 2026-10-14'
+    assert line('\x1b[2mReview tools so far: 2\x1b[0m') == 'Review tools so far: 2'
+    assert line('\x1b[1mmcp:\x1b[0m frontier/board_update started') == '▸ mcp: frontier/board_update started'
+    assert line('\x1b[1mmcp:\x1b[0m frontier/board_update (completed)') == '▸ mcp: frontier/board_update (completed)'
+    assert line('\x1b[3m\x1b[35mcodex\x1b[0m') is None
+    assert line('The plan is updated.') == 'The plan is updated.'
 
 
 def test_the_live_view_route_returns_new_lines_and_a_workers_lines_reach_its_team(tmp_path):

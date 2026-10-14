@@ -94,10 +94,13 @@ def test_resume_spells_itself_for_each_tool(tmp_path):
     claude = agent_argv('claude_cli', ['claude'], 'sonnet', 'edit', tmp_path, tmp_path/'f', {'resume': 'abc'})
     assert claude[claude.index('--resume')+1] == 'abc'
     codex = agent_argv('codex_cli', ['codex'], 'gpt-6-sol', 'read', tmp_path, tmp_path/'f', {'resume': 'abc'})
-    assert codex[codex.index('exec'):codex.index('exec')+2] == ['exec', 'resume'] and codex[-2:] == ['abc', '-']
+    assert codex[codex.index('exec'):codex.index('exec')+4] == ['exec', '--color', 'always', 'resume'] and codex[-2:] == ['abc', '-']
+    assert codex[codex.index('exec')+1:codex.index('exec')+3] == ['--color', 'always']
     assert 'sandbox_mode="read-only"' in codex and '-C' not in codex
     auto = agent_argv('codex_cli', ['codex'], 'gpt-6-sol', 'auto', tmp_path, tmp_path/'f', {'resume': 'abc'})
     assert '--dangerously-bypass-approvals-and-sandbox' in auto and not any(a.startswith('sandbox_mode') for a in auto)
+    fresh = agent_argv('codex_cli', ['codex'], 'gpt-6-sol', 'read', tmp_path, tmp_path/'f')
+    assert fresh[fresh.index('exec')+1:fresh.index('exec')+3] == ['--color', 'always']
 
 
 def test_subscription_limits_read_both_plans_and_back_off_when_refused(tmp_path, monkeypatch):
