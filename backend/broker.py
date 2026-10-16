@@ -330,7 +330,7 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
             raise ProviderError('DeepSeek Harness headless supports Full auto only; choose Full auto or another agent.')
         if model_name != 'headless':
             raise ProviderError('DeepSeek Harness uses the model configured in its headless profile; use "headless" as the model identifier.')
-        return [*launch, 'headless', '--json', '-']
+        return [*launch, 'headless', '--json', *(['--session-id', extras['resume']] if extras.get('resume') else []), '-']
     if provider == 'claude_cli':
         # Not `plan` mode for Read only: that makes Claude act as a planner — it writes a plan
         # file into its own home and answers about that file — which is a side effect outside
@@ -417,6 +417,8 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
     # cause behind "Unexpected server error" is only ever on stderr (opencode_reason reads it from there).
     argv = [*launch, 'run', '--format', 'json', '--print-logs', '--log-level', 'ERROR', '--model', model_name,
             '--agent', 'plan' if mode == 'read' else 'build']
+    if extras.get('resume'):
+        argv += ['--session', extras['resume']]
     if extras.get('slash'):
         # One of OpenCode's own commands (a project or user command, or a plugin's), its arguments on the command line.
         argv += ['--command', extras['slash']['name']] + ([extras['slash']['args']] if extras['slash']['args'] else [])
@@ -685,7 +687,8 @@ def read_opencode(out, err, provider):
         if failure:
             raise cli_exit_error(provider, 0, '', err, failure)
         raise ProviderError(f'{CLI_TOOLS[provider][2]} returned no message. Confirm the subscription is signed in.')
-    return AgentResult(text, input_tokens or None, output_tokens or None)
+    session = next((e.get('sessionID') for e in opencode_events(out) if e.get('sessionID')), None)
+    return AgentResult(text, input_tokens or None, output_tokens or None, session_id=session)
 
 def read_output(provider, code, out, err, prompt, final):
     """The reply from a finished tool run, or the ProviderError saying why there is none."""
@@ -718,8 +721,9 @@ def read_output(provider, code, out, err, prompt, final):
         if is_exhausted(strip_echo(out, prompt), err):
             raise exhausted_error(provider)
         raise ProviderError(f'{CLI_TOOLS[provider][2]} returned no final message. Confirm the subscription is signed in.')
-    # Codex reports only a combined token total, so usage stays unreported.
-    return AgentResult(text, None, None)
+    # Codex reports only a combined token total, so usage stays unreported. Its session id heads its log.
+    session = re.search(r'session id:\s*(?:\x1b\[[0-9;]*m)*([0-9a-f-]{36})', f'{err}\n{out}')
+    return AgentResult(text, None, None, session_id=session.group(1) if session else None)
 
 class ModelBroker:
     def __init__(self, store: Store):

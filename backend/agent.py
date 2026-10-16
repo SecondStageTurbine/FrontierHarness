@@ -192,7 +192,7 @@ def resumable(session, config, root, project, message):
     """The tool session to resume natively this turn, if the same tool that owns it is answering
     in the project folder itself (a worktree is another folder, which the tool's session does not know)."""
     native = session.get('native')
-    if not native or message.get('team') or native['provider'] != config.get('provider'):
+    if not native or message.get('team') or native['provider'] != config.get('provider') or native.get('model_id', config.get('id')) != config.get('id'):
         return None
     try:
         same = Path(root).resolve() == Path(project['root']).resolve()
@@ -973,6 +973,12 @@ class AgentRunner:
                 session['native'].update(id=result.session_id or session['native']['id'], upto=len(session['messages']))
             else:
                 session['native'] = None
+        if not session.get('native') and status == 'complete' and result and result.session_id and not message.get('team') \
+                and not (result.served_by and result.served_by != message['model_id']):
+            # The tool's own session now holds the whole conversation, so the same agent's next turn continues it
+            # instead of opening a new session and replaying the transcript.
+            config = self.store.get(tenant_id, 'models', message['model_id'])
+            session['native'] = {'provider': config['provider'], 'model_id': config['id'], 'id': result.session_id, 'upto': len(session['messages'])}
         if result and result.served_by and result.served_by != message['model_id']:
             # Another connected subscription answered because the selected one was spent. The
             # message names the agent that replied, or the conversation credits the wrong one.

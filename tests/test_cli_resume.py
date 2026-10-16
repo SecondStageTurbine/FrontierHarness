@@ -66,7 +66,7 @@ def test_the_same_tool_resumes_its_own_session_and_another_agent_falls_back_to_t
     # Another agent answers from the replay, and from then on Claude's own session is incomplete, so it replays too.
     later = asyncio.run(turn(runner, store, 'tenant-a', project, after, 'Review it.', 'codex_cli', 'edit'))
     assert 'resume' not in (agent.calls[-1]['extras'] or {}) and 'Fix the widget please.' in agent.calls[-1]['prompt']
-    assert later['native'] is None
+    assert later['native']['provider'] == 'codex_cli'  # Codex's own session now holds the whole conversation.
     asyncio.run(turn(runner, store, 'tenant-a', project, later, 'Thanks.', 'claude_cli', 'edit'))
     assert 'resume' not in (agent.calls[-1]['extras'] or {})
 
@@ -88,6 +88,36 @@ def test_a_session_the_tool_cannot_find_falls_back_to_the_replay(tmp_path, monke
     after = asyncio.run(turn(AgentRunner(store, agent), store, 'tenant-a', project, session, 'Continue.', 'codex_cli', 'edit'))
     assert after['messages'][-1]['status'] == 'complete' and after['messages'][-1]['content'] == 'Replayed.'
     assert 'Add a test.' in agent.calls[-1]['prompt'] and after['native'] is None
+
+
+def test_the_same_agent_keeps_one_tool_session_across_a_chat(tmp_path):
+    root = tmp_path/'proj'; root.mkdir()
+    store = setup_store(tmp_path/'state')
+    project = store.put('tenant-a', 'projects', {'id': 'p1', 'name': 'P', 'root': str(root), 'created_at': '2026-01-01T00:00:00Z'})
+    session = store.put('tenant-a', 'sessions', {'id': 's1', 'project_id': 'p1', 'name': 'Chat', 'messages': [], 'commands': [], 'created_at': '2026-01-01T00:00:00Z'})
+    agent = ScriptedAgent()
+    async def respond(config, prompt, mode, where):
+        return AgentResult('Done.', 1, 1, session_id='tool-session')
+    agent.respond = respond
+    runner = AgentRunner(store, agent)
+    after = asyncio.run(turn(runner, store, 'tenant-a', project, session, 'Fix the widget.', 'claude_cli', 'edit'))
+    assert 'resume' not in (agent.calls[-1]['extras'] or {})
+    assert after['native'] == {'provider': 'claude_cli', 'model_id': 'claude_cli', 'id': 'tool-session', 'upto': 2}
+    asyncio.run(turn(runner, store, 'tenant-a', project, after, 'Now add docs.', 'claude_cli', 'edit'))
+    assert agent.calls[-1]['extras']['resume'] == 'tool-session' and 'Fix the widget.' not in agent.calls[-1]['prompt']
+
+
+def test_tools_name_their_session_for_the_next_turn(tmp_path):
+    from backend.broker import read_output
+    final = tmp_path/'final'; final.write_text('hi', encoding='utf-8')
+    codex = read_output('codex_cli', 0, '', 'OpenAI Codex\nsession id: \x1b[1m01a14626-a760-74f0-9ff7-c2ffe100a17f\x1b[0m\n', '', final)
+    assert codex.session_id == '01a14626-a760-74f0-9ff7-c2ffe100a17f'
+    opencode = read_output('opencode_cli', 0, json.dumps({'type': 'text', 'sessionID': 'ses_1', 'part': {'type': 'text', 'text': 'hi'}}), '', '', final)
+    assert opencode.session_id == 'ses_1'
+    run = agent_argv('opencode_cli', ['opencode'], 'm', 'auto', tmp_path, final, {'resume': 'ses_1'})
+    assert run[run.index('--session')+1] == 'ses_1'
+    dsh = agent_argv('deepseek_harness', ['dsh'], 'headless', 'auto', tmp_path, final, {'resume': 'session-1'})
+    assert dsh[-3:] == ['--session-id', 'session-1', '-']
 
 
 def test_resume_spells_itself_for_each_tool(tmp_path):
