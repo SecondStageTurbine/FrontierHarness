@@ -1,12 +1,12 @@
 {
   "executable": "frontier-backend-x86_64-pc-windows-msvc.exe",
-  "executable_sha256": "639a3b1be43ac0f608670dd0cd8b6f3e8f420d89cedf21071573a131c3257075",
+  "executable_sha256": "c1edb3755eb0c2ac6b1ef759a19cdc73b95da39848fa4276d5219eab589fe219",
   "no_system_python_or_node_on_path": true,
   "checks": [
     {
       "module": "unittest",
       "exit_code": 0,
-      "output": "..\n----------------------------------------------------------------------\nRan 2 tests in 0.001s\n\nOK"
+      "output": "..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK"
     },
     {
       "module": "pytest",

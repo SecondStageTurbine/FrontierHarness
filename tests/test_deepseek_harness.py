@@ -62,3 +62,13 @@ async def test_headless_is_only_a_full_auto_single_agent_candidate(tmp_path):
     other_ids = {m['id'] for m in runner.agents('tenant-a') if m['id'] != 'dsh'}
     assert await runner.fallback('tenant-a', other_ids, mode='edit') is None
     assert (await runner.fallback('tenant-a', other_ids, mode='auto'))['id'] == 'dsh'
+
+
+def test_routing_judges_headless_by_the_model_its_profile_names(tmp_path, monkeypatch):
+    monkeypatch.setattr(adaptive.Path, 'home', lambda: tmp_path)
+    row = {'id': 'dsh', 'name': 'DeepSeek Harness', 'provider': 'deepseek_harness', 'model_name': 'headless'}
+    assert adaptive.profile(row)['cost_class'] == 'high'  # No profile patch: the conservative default.
+    patch = tmp_path/'.dsh'/'profiles'/'headless'/'cordis.patch.yml'
+    patch.parent.mkdir(parents=True)
+    patch.write_text('- id: agent-default-model\n  config:\n    provider: deepseek-account\n    model: deepseek-flash\n', encoding='utf-8')
+    assert adaptive.profile(row)['cost_class'] == 'low'

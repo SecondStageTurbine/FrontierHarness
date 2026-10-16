@@ -117,6 +117,16 @@ def describe_track(track):
     return 'track record: ' + ', '.join(parts)
 
 
+def headless_model():
+    """The model DeepSeek Harness's headless profile is patched to use, such as deepseek-flash, or None."""
+    try:
+        text = (Path.home()/'.dsh'/'profiles'/'headless'/'cordis.patch.yml').read_text(encoding='utf-8')
+    except OSError:
+        return None
+    found = re.search(r'''^\s*model:\s*["']?([\w./:-]+)''', text, re.M)
+    return found.group(1).lower() if found else None
+
+
 def profile(model):
     """What one agent is good at: provider default, family refinement, the public benchmark, its track
     record on this computer, then the row's own word."""
@@ -124,6 +134,8 @@ def profile(model):
     if not base:
         return None  # An API-key model has no agent loop; it cannot take a turn at all.
     name = (model.get('model_name') or '').lower()
+    if model['provider'] == 'deepseek_harness':
+        name = headless_model() or name  # Its row says "headless"; the profile names the real model.
     for needle, refinement in FAMILY_PROFILES:
         if needle in name:
             base.update(refinement)

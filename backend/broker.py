@@ -700,7 +700,7 @@ def read_output(provider, code, out, err, prompt, final):
             reason = reasons[-1] if reasons else None
             error = reason.get('error') if isinstance(reason, dict) else None
             if isinstance(error, dict) and error.get('code') == 'MISSING_CREDENTIAL':
-                raise ProviderError('DeepSeek Harness headless has no credential for its configured model. Open DeepSeek Harness Models and configure that profile; the deepseek-official route requires a DeepSeek API key.')
+                raise ProviderError('DeepSeek Harness headless has no credential. Its headless profile is separate from the app: in ~/.dsh/profiles/headless/cordis.patch.yml set agent-default-model to provider deepseek-account (your sign-in), or give the deepseek-official route a DeepSeek API key.')
             if is_exhausted(strip_echo(out, prompt), err):
                 raise exhausted_error(provider)
             raise cli_exit_error(provider, code, strip_echo(out, prompt), err)
