@@ -325,6 +325,8 @@ class AgentRunner:
         self.approvals: dict[str, dict] = {}
         # The open input of each running Claude turn, for messages handed in while it works.
         self.steers: dict[tuple[str, str], Steer] = {}
+        # The agent each running turn is on right now, so Adaptive can see a local server whose slots are all taken.
+        self.serving: dict[tuple[str, str], dict] = {}
         # What each conversation's agent is doing right now, line by line, for the live view. Kept after the turn
         # ends, until the next one starts, so a finished turn can still be read back. Memory only.
         self.live: dict[tuple[str, str], dict] = {}
@@ -389,6 +391,8 @@ class AgentRunner:
                       and (mode == 'auto' or a['provider'] != 'deepseek_harness')]
         online = await localhealth.availability(candidates)
         candidates = [a for a in candidates if online.get(a['id']) is not False]
+        full = await localhealth.saturated(candidates, list(self.serving.values()))
+        candidates = [a for a in candidates if a['id'] not in full] or candidates
         needs = adaptive.TaskRequirements(**requirements) if requirements else adaptive.TaskRequirements(
             task_type='implementation', complexity='medium', risk='low', requirements=adaptive.TASK_BASE['implementation'], reason='continuing a turn')
         ranked = [r for r in adaptive.score(needs, candidates, lambda model_id: cooling(self.broker, tenant_id, model_id)) if not r['cooling']]
@@ -747,14 +751,19 @@ class AgentRunner:
         agents = [a for a in self.agents(tenant_id) if message['mode'] == 'auto' or a['provider'] != 'deepseek_harness']
         online = await localhealth.availability(agents)
         offline = [m for m in agents if online.get(m['id']) is False]
-        chosen, ranked = adaptive.choose(requirements, [m for m in agents if online.get(m['id']) is not False], lambda model_id: cooling(self.broker, tenant_id, model_id))
+        up = [m for m in agents if online.get(m['id']) is not False]
+        # A local server with a turn in every slot would make this one queue behind it: the next agent takes it instead,
+        # unless nothing else can.
+        full = await localhealth.saturated(up, [c for key, c in self.serving.items() if key != (tenant_id, session['id'])])
+        free = [m for m in up if m['id'] not in full]
+        chosen, ranked = adaptive.choose(requirements, free or up, lambda model_id: cooling(self.broker, tenant_id, model_id))
         if chosen is None:
             raise ProviderError('Adaptive found no agent that can take a turn.' + (' Every local agent is configured but none of their servers is running.' if offline else ' Connect a Claude, Codex or OpenCode agent.'))
         message['routing'] = {'mode': 'adaptive', 'status': 'chosen', 'classified_by': classified_by,
                               'requirements': requirements.model_dump(), 'repository': repo,
                               'chosen': {'id': chosen['id'], 'name': chosen['name'], 'because': chosen['because']},
                               'candidates': [{k: r[k] for k in ('id', 'name', 'cost_class', 'sufficient', 'deficit')} for r in ranked[:6]],
-                              'offline': [m['name'] for m in offline],
+                              'offline': [m['name'] for m in offline], 'busy': [m['name'] for m in up if m['id'] in full],
                               'attempts': [], 'escalations': 0}
         return self.store.get(tenant_id, 'models', chosen['id']), ranked
 
@@ -853,6 +862,7 @@ class AgentRunner:
             while rounds > 0:
                 rounds -= 1
                 tried.add(config['id'])
+                self.serving[(tenant_id, session_id)] = config
                 extras['effort'] = effort if config['provider'] == 'codex_cli' else None
                 visible, summary = conversation(session)
                 prompt = build_prompt(visible, bool(message.get('switched_from')), handoff_text, mode, summary,
@@ -949,6 +959,7 @@ class AgentRunner:
             status, error = 'failed', 'The turn stopped unexpectedly. Anything the agent had already written to the folder is still there.'
         finally:
             self.turn_tokens.pop(token, None)
+            self.serving.pop((tenant_id, session_id), None)
             if steer is not None and self.steers.get((tenant_id, session_id)) is steer:
                 self.steers.pop((tenant_id, session_id), None)
             self.abandon_approvals(session_id)

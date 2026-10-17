@@ -8,6 +8,7 @@ a server that answers with an empty list is taken at its word that it is running
 """
 import asyncio
 import json
+from collections import Counter
 import os
 import time
 from pathlib import Path
@@ -18,6 +19,7 @@ import httpx
 PROBE_TIMEOUT = 1.5
 CACHE_TTL = 10.0
 _cache: dict[str, tuple[float, list | None]] = {}
+_slots: dict[str, tuple[float, int | None]] = {}
 
 
 def config_path():
@@ -86,6 +88,36 @@ async def served_models(base):
 def serves(ids, ident):
     # Ollama lists what it has pulled with a tag ("gemma4:latest"); llama-server lists its alias as is.
     return any(i == ident or (i or '').startswith(ident + ':') for i in ids)
+
+
+async def slots(base):
+    """How many requests the server at `base` works on at once: llama.cpp's total_slots, None when it does not say."""
+    now = time.monotonic()
+    hit = _slots.get(base)
+    if hit and now - hit[0] < CACHE_TTL:
+        return hit[1]
+    root = base[:-3] if base.endswith('/v1') else base
+    try:
+        async with httpx.AsyncClient(timeout=PROBE_TIMEOUT, trust_env=False) as client:
+            response = await client.get(root + '/props')
+            total = response.json().get('total_slots') if response.status_code == 200 else None
+    except Exception:
+        total = None
+    total = total if isinstance(total, int) and total > 0 else None
+    _slots[base] = (now, total)
+    return total
+
+
+async def saturated(models, running):
+    """Ids of the local models whose server already has a running Frontier turn in every slot. `running` is the
+    agent row of each turn running elsewhere. Another turn sent there would only wait in the server's queue, and
+    each switch between conversations makes the server read the whole context again."""
+    providers = local_providers()
+    load = Counter(t[1] for t in (server_for(c, providers) for c in running) if t)
+    targets = {m['id']: server_for(m, providers) for m in models}
+    bases = sorted({t[1] for t in targets.values() if t and load[t[1]]})
+    capacity = dict(zip(bases, await asyncio.gather(*(slots(b) for b in bases)))) if bases else {}
+    return {model_id for model_id, t in targets.items() if t and capacity.get(t[1]) and load[t[1]] >= capacity[t[1]]}
 
 
 async def availability(models):

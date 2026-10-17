@@ -1,4 +1,5 @@
 """Only one local model can hold the GPU at a time; a turn must never be sent to the others."""
+import asyncio
 import json
 import pytest
 from backend import localhealth
@@ -117,3 +118,36 @@ def test_a_model_on_a_local_server_is_free_whatever_its_provider_is_called(openc
     cloud = adaptive.profile({'id': 'x', 'name': 'X', 'provider': 'opencode_cli', 'model_name': 'cloud/x'})
     assert (local['location'], local['cost_class']) == ('local', 'free')
     assert (cloud['location'], cloud['cost_class']) == ('cloud', 'low')
+
+
+def test_a_local_server_with_every_slot_taken_is_saturated(monkeypatch):
+    monkeypatch.setattr(localhealth, 'local_providers', lambda: {'prometheus': 'http://127.0.0.1:9093/v1', 'strata': 'http://127.0.0.1:8080/v1'})
+    async def slots(base):
+        return {'http://127.0.0.1:9093/v1': 1, 'http://127.0.0.1:8080/v1': 2}[base]
+    monkeypatch.setattr(localhealth, 'slots', slots)
+    qwen = {'id': 'q', 'provider': 'opencode_cli', 'model_name': 'prometheus/Prometheus'}
+    strata = {'id': 's', 'provider': 'opencode_cli', 'model_name': 'strata/qwen3.8-flash-next-iq3_s'}
+    claude = {'id': 'c', 'provider': 'claude_cli', 'model_name': 'sonnet'}
+    assert asyncio.run(localhealth.saturated([qwen, strata, claude], [])) == set()
+    assert asyncio.run(localhealth.saturated([qwen, strata, claude], [qwen, strata, claude])) == {'q'}  # Strata has a second slot.
+    assert asyncio.run(localhealth.saturated([qwen, strata], [strata, strata])) == {'s'}
+
+
+@pytest.mark.asyncio
+async def test_adaptive_passes_over_a_local_agent_whose_only_slot_another_turn_holds(opencode_config, monkeypatch):
+    async def fake(base):
+        return ['Prometheus'] if base.endswith('9093/v1') else None
+    async def one_slot(base):
+        return 1
+    monkeypatch.setattr(localhealth, 'served_models', fake)
+    monkeypatch.setattr(localhealth, 'slots', one_slot)
+    async def respond(config, prompt, mode, root):
+        return AgentResult(f'answered by {config["name"]}', 1, 1)
+    store, runner, agent, project, session = make(opencode_config.parent, respond)
+    runner.serving[('tenant-a', 'another-session')] = store.get('tenant-a', 'models', 'big')
+    session = await turn(runner, store, 'tenant-a', project, session, 'Explain app.py.', ADAPTIVE, 'read')
+    reply = session['messages'][-1]
+    assert reply['model_id'] == 'codex' and reply['routing']['busy'] == ['Big local']
+    del runner.serving[('tenant-a', 'another-session')]
+    session = await turn(runner, store, 'tenant-a', project, session, 'Explain app.py again.', ADAPTIVE, 'read')
+    assert session['messages'][-1]['model_id'] == 'big' and not runner.serving  # Freed when the turn ends.
