@@ -7,7 +7,7 @@ import {environment} from '../../lib/environment';
 import {ADAPTIVE,agentProviders,modes,modeLabels,type Automation,type Model,type Project,type Mode} from '../../types';
 
 type Form={name:string;project_id:string;prompt:string;model_id:string;mode:Mode;kind:'every'|'daily'|'hook';every:string;daily_at:string;enabled:boolean};
-const blank=(projectId:string):Form=>({name:'',project_id:projectId,prompt:'',model_id:ADAPTIVE,mode:'edit',kind:'daily',every:'60',daily_at:'09:00',enabled:true});
+const blank=(projectId:string):Form=>({name:'',project_id:projectId,prompt:'',model_id:ADAPTIVE,mode:'auto',kind:'daily',every:'60',daily_at:'09:00',enabled:true});
 
 /** Turns that run on their own: on a schedule while Frontier is open, or when a webhook is called. */
 export default function Automations({projects,models,currentProject}:{projects:Project[];models:Model[];currentProject?:Project}){

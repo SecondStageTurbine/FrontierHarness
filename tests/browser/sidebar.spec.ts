@@ -23,9 +23,16 @@ test('a project row folds its sessions open underneath and starts a new session 
  await row('Alpha').getByRole('button',{name:'Hide sessions'}).click();
  await expect(sessions).toHaveCount(0);
 
- // Another project's caret switches to it and opens its sessions.
+ // Several projects stay folded open at once: another project's caret opens it beside the first.
+ await row('Alpha').getByRole('button',{name:'Show sessions'}).click();
  await row('Beta').getByRole('button',{name:'Show sessions'}).click();
+ await expect(page.locator('.project-row:has-text("Alpha") + .project-sessions')).toContainText('Alpha work');
  await expect(page.locator('.project-row:has-text("Beta") + .project-sessions')).toContainText('Beta work');
+ await expect(row('Alpha')).toHaveClass(/active/);
+ // A session under another open project opens that project at it.
+ await page.locator('.project-row:has-text("Beta") + .project-sessions').getByRole('button',{name:'Beta work'}).click();
+ await expect(row('Beta')).toHaveClass(/active/);
+ await expect(page.locator('.project-row:has-text("Alpha") + .project-sessions')).toContainText('Alpha work');
  await page.locator('.project-sidebar').screenshot({path:'test-results/sidebar.png'});
 
  // The row's plus starts a new session in that project.

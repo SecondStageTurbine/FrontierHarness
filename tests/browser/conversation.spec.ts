@@ -25,9 +25,9 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await expect(agent).toHaveValue('adaptive');
  await expect(page.locator('.composer-footnote')).toContainText('least expensive agent');
 
- // What the agent may do is chosen per turn and defaults to editing files, not running commands.
+ // What the agent may do is chosen per turn and defaults to Full auto.
  const mode=page.getByLabel('What the agent may do',{exact:true});
- await expect(mode).toHaveValue('edit');
+ await expect(mode).toHaveValue('auto');
  await agent.selectOption({label:'Claude'});
  await mode.selectOption('read');
  await expect(page.locator('.composer-footnote')).toContainText('cannot change anything');
