@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import httpx
 
 PREFIX = '🤖 Frontier: '
+NOTE_AFTER = 90  # Seconds a handed-in message may go unanswered before the sender is told it waits on a long step.
 MODEL_CUE = re.compile(r'\b(?:use|using|with|via|on|ask)\s+|\bmodel\s*[:=]\s*', re.I)
 MODEL_IDENTIFIER = re.compile(r'^(?:gpt-\d+(?:\.\d+)?-[a-z0-9]+(?:[.-][a-z0-9]+)*|claude-[a-z0-9]+(?:[.-][a-z0-9]+)*|gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*)', re.I)
 GPT_VERSION = re.compile(r'^gpt-(\d+)(?:\.(\d+))?-([a-z0-9]+(?:[.-][a-z0-9]+)*)$', re.I)
@@ -151,9 +152,30 @@ def minutes_since(stamp):
         return None
 
 
+async def still_unanswered(store, tenant_id, session, client, headers):
+    """A handed-in message the agent has not answered after a while: it is inside one long step (a build), and reads
+    the message only when that step ends. The sender hears so once, rather than nothing."""
+    listen = session['slack']
+    late = [e for e in listen.get('midturn') or [] if not e.get('answered') and not e.get('noted') and time.time() - e.get('at', 0) > NOTE_AFTER]
+    if not late:
+        return
+    running = next((m for m in reversed(session['messages']) if m['role'] == 'assistant' and m['status'] == 'running'), {})
+    for entry in late:
+        await call(client, headers, 'chat.postMessage', channel=listen['channel'], thread_ts=entry['ts'],
+                   text=PREFIX + f'{mention_of(listen, entry.get("user"))}{running.get("model_name") or "The agent"} is mid-step '
+                   f'(working {minutes_since(running.get("created_at"))} min) and has your message; it answers when this step finishes.')
+    session = store.get(tenant_id, 'sessions', session['id'])
+    for entry in session['slack'].get('midturn') or []:
+        if entry['ts'] in {e['ts'] for e in late}:
+            entry['noted'] = True
+    store.put(tenant_id, 'sessions', session)
+
+
 async def during(store, runner, tenant_id, session, client, headers):
     """A turn is running. A Claude turn is handed each new message, to answer in its thread at once and carry on;
     otherwise each gets 👀 and one line saying it waits, and is taken, in order, when the turn ends."""
+    await still_unanswered(store, tenant_id, session, client, headers)
+    session = store.get(tenant_id, 'sessions', session['id'])
     handing = True
     for message in await fresh_messages(client, headers, session['slack']):
         if message['ts'] in (session['slack'].get('acked') or []):
@@ -165,7 +187,7 @@ async def during(store, runner, tenant_id, session, client, headers):
         if handing and runner.inject(tenant_id, session['id'], prompt(listen, message, midturn=True)):
             session = store.get(tenant_id, 'sessions', session['id'])
             session['slack']['since'] = message['ts']
-            session['slack'].setdefault('midturn', []).append({'ts': thread, 'user': message.get('user')})
+            session['slack'].setdefault('midturn', []).append({'ts': thread, 'user': message.get('user'), 'at': time.time()})
         else:
             handing = False
             running = next((m for m in reversed(session['messages']) if m['role'] == 'assistant' and m['status'] == 'running'), {})

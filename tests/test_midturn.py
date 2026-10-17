@@ -106,7 +106,7 @@ def test_slack_mid_turn_is_handed_to_a_claude_turn_and_answered_in_its_thread(tm
     posted, reacted = tick_with(store, runner, session, [{'ts': '105.0', 'user': 'UNELSON', 'text': 'what are you on?'}])
     s = store.get('tenant-a', 'sessions', session['id'])
     assert reacted == ['105.0'] and not posted and s['slack']['since'] == '105.0'
-    assert 'slack_reply' in s['messages'][-2]['content'] and s['slack']['midturn'] == [{'ts': '105.0', 'user': 'UNELSON'}]
+    assert 'slack_reply' in s['messages'][-2]['content'] and [{k: e[k] for k in ('ts', 'user')} for e in s['slack']['midturn']] == [{'ts': '105.0', 'user': 'UNELSON'}]
     sent = []
 
     async def call(client, headers, method, **params):
@@ -133,3 +133,15 @@ def test_slack_mid_turn_waits_with_one_note_when_the_turn_cannot_take_it(tmp_pat
     assert s['slack']['since'] == '100.0' and s['slack']['acked'] == ['105.0']  # Still to be taken when the turn ends.
     posted, _ = tick_with(store, runner, session, history)
     assert not posted  # One note per message, not one per tick.
+
+
+def test_a_handed_in_message_left_unanswered_through_a_long_step_gets_one_note(tmp_path):
+    store, runner, session = slack_session(tmp_path, steerable=True)
+    tick_with(store, runner, session, [{'ts': '105.0', 'user': 'UNELSON', 'text': 'what are you on?'}])
+    s = store.get('tenant-a', 'sessions', session['id'])
+    s['slack']['midturn'][0]['at'] -= slack_listen.NOTE_AFTER + 1
+    store.put('tenant-a', 'sessions', s)
+    posted, _ = tick_with(store, runner, session, [])
+    assert len(posted) == 1 and posted[0]['thread_ts'] == '105.0' and 'mid-step' in posted[0]['text']
+    posted, _ = tick_with(store, runner, session, [])
+    assert not posted
