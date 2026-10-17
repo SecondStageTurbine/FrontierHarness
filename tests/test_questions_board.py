@@ -38,7 +38,7 @@ def test_the_question_tool_speaks_mcp_and_turns_the_answer_into_text(monkeypatch
     monkeypatch.setattr(permission_tool, 'call', lambda method, path, body=None: sent.append((method, path, body)) or next(answers))
     monkeypatch.delenv('FRONTIER_TOOLS', raising=False)
     names = [t['name'] for t in permission_tool.handle({'id': 1, 'method': 'tools/list'})['tools']]
-    assert names == ['approve', 'ask_user', 'board_list', 'board_add', 'board_update']
+    assert names == ['approve', 'ask_user', 'board_list', 'board_add', 'board_update', 'slack_reply']
     reply = permission_tool.handle({'id': 2, 'method': 'tools/call', 'params': {'name': 'ask_user', 'arguments': {'question': 'Which database?', 'options': ['Postgres', 'SQLite']}}})
     assert reply['content'][0]['text'] == 'The user answered: Use Postgres.'
     assert sent[0][2] == {'tool_name': 'ask_user', 'kind': 'question', 'input': {'question': 'Which database?', 'options': ['Postgres', 'SQLite']}}

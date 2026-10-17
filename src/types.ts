@@ -18,7 +18,7 @@ export interface ContextChip {kind:'file'|'terminal'|'diff'|'selection'; path?:s
 export interface TeamTask {id:string; title:string; instructions:string; needs:string[]; agent?:string|null; parallel:boolean; depends_on:string[]; status:'pending'|'working'|'fixing'|'done'|'failed'; session_id?:string|null; model_id?:string|null; model_name?:string|null; report:string; merge?:string|null; changed?:string[]; cross_review?:boolean; adversary?:boolean}
 export interface TeamVerified {status:'sealing'|'reviewing'|'GO'|'NO-GO'|'committed'|'failed'|'nothing'; reviewer?:string; files?:number; commit?:string; error?:string; change?:string; findings?:{id:string;severity:string;impact:string}[]}
 export interface Team {status:'planning'|'working'|'reviewing'|'fixing'|'done'; lead:string; summary:string; tasks:TeamTask[]; agents?:string[]; verified?:TeamVerified}
-export interface Message {sandbox_blocked?:string[]; id:string; role:'user'|'assistant'; content:string; created_at:string; context?:ContextChip[]; team?:Team;
+export interface Message {sandbox_blocked?:string[]; midturn?:boolean; id:string; role:'user'|'assistant'; content:string; created_at:string; context?:ContextChip[]; team?:Team;
  status?:'running'|'complete'|'failed'|'cancelled'; error?:string|null; finished_at?:string|null;
  model_id?:string; model_name?:string; provider?:string; mode?:Mode; switched_from?:string|null;
  changes?:FileChange[]; input_tokens?:number|null; output_tokens?:number|null; cost?:number|null; routing?:Routing; checkpoint?:{before:string;after:string}|null; reverted_at?:string|null}

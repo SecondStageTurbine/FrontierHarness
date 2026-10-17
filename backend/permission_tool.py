@@ -106,6 +106,20 @@ def board_text(tasks):
     return '\n'.join(f'- {t["id"]} [{t["status"]}] {t["title"]}' + (f': {t["notes"][:300]}' if t.get('notes') else '') for t in tasks)
 
 
+def slack_call(arguments):
+    try:
+        call('POST', '/internal/slack/reply', {'thread_ts': str(arguments.get('thread_ts') or ''), 'text': str(arguments.get('text') or '')})
+        return 'Posted in the thread.'
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode()).get('detail')
+        except ValueError:
+            detail = None
+        return f'Slack refused this: {detail or exc}'
+    except (urllib.error.URLError, OSError) as exc:
+        return f'Frontier could not be reached: {exc}'
+
+
 def board_call(name, arguments):
     try:
         if name == 'board_list':
@@ -142,6 +156,11 @@ TOOLS = {
                   'inputSchema': {'type': 'object', 'required': ['title'], 'properties': {'title': {'type': 'string'}, 'notes': {'type': 'string'}, 'status': STATUS}}},
     'board_update': {'description': "Change a task on this project's task board: its status when you start, finish or are blocked on it, and notes on what was done.",
                      'inputSchema': {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}, 'status': STATUS, 'notes': {'type': 'string'}, 'title': {'type': 'string'}}}},
+    'slack_reply': {'description': 'Reply now in a Slack thread this conversation was handed, without ending your turn. Use it when a Slack '
+                                   'message arrives while you work and names the thread_ts to answer. The sender is mentioned for you.',
+                    'inputSchema': {'type': 'object', 'required': ['thread_ts', 'text'], 'properties': {
+                        'thread_ts': {'type': 'string', 'description': 'The thread_ts given with the Slack message.'},
+                        'text': {'type': 'string', 'description': 'The reply, in Slack markdown.'}}}},
 }
 
 
@@ -163,7 +182,8 @@ def handle(message):
             return {'content': [{'type': 'text', 'text': json.dumps({'behavior': 'deny', 'message': 'Unknown tool.'})}], 'isError': True}
         if name == 'approve':
             return {'content': [{'type': 'text', 'text': json.dumps(decide(arguments))}]}
-        return {'content': [{'type': 'text', 'text': ask(arguments) if name == 'ask_user' else board_call(name, arguments)}]}
+        text = ask(arguments) if name == 'ask_user' else slack_call(arguments) if name == 'slack_reply' else board_call(name, arguments)
+        return {'content': [{'type': 'text', 'text': text}]}
     if method == 'ping':
         return {}
     if ident is None:

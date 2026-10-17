@@ -10,7 +10,7 @@ from fastapi import Request, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse, FileResponse
 from .schemas import (ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput, GitPaths, CommitInput, FileWrite,
                       McpServerInput, ApprovalDecision, ApprovalRequest, FanoutInput, AutomationInput, ProjectSettings, PrCreateInput,
-                      DevServerInput, RewindInput, ImportInput, CloneInput, CatchupInput, ResumeCliInput, BoardTaskInput, BoardTaskPatch, HistoryImportInput, PrReviewInput, PrEditInput, PrMergeInput, SlackListenInput)
+                      DevServerInput, RewindInput, ImportInput, CloneInput, CatchupInput, ResumeCliInput, BoardTaskInput, BoardTaskPatch, HistoryImportInput, PrReviewInput, PrEditInput, PrMergeInput, SlackListenInput, SlackReplyInput)
 from .store import now, uid, TenantIsolationViolationException
 from .projects import ProjectFiles
 from . import gitops, automations, slack_listen, pullrequests, devserver, maintenance, board, skill_catalog, slash
@@ -650,7 +650,11 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         get_session(tenant_id,project_id,session_id)
         content=payload.content+context_note(files,tenant_id,project_id,session_id,payload.context)+attachment_note(store,tenant_id,files.root(tenant_id,project_id,session_id),payload.attachment_ids or [])
         if payload.steer and runner.busy(tenant_id,session_id):
-            # A turn is one opaque subprocess, so steering means stopping it and sending this instead.
+            # A Claude turn takes the message at its next step; any other turn is stopped and this sent instead.
+            if not payload.context and not payload.attachment_ids and not payload.team:
+                handed=runner.inject(tenant_id,session_id,content,payload.model_id,payload.mode)
+                if handed:
+                    return handed
             await runner.cancel(tenant_id,session_id)
         chips=[{'kind':c.kind,'path':c.path,'start':c.start,'end':c.end,'label':c.label or c.path or c.kind} for c in payload.context]
         return runner.send(tenant_id,project_id,session_id,content,payload.model_id,payload.mode,queue=payload.queue,team=payload.team,context=chips)
@@ -860,6 +864,14 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
             return board.update(store,tenant_id,project_id,task_id,by=name,**payload.model_dump(exclude_unset=True))
         except (KeyError,TenantIsolationViolationException):
             raise HTTPException(404,'No task with that id on this project’s board.') from None
+
+    @app.post('/internal/slack/reply')
+    async def slack_reply_for_turn(payload:SlackReplyInput,request:Request):
+        tenant_id,_,session_id,_=turn_of(request)
+        try:
+            return await slack_listen.reply(store,tenant_id,store.get(tenant_id,'sessions',session_id),payload.thread_ts,payload.text)
+        except ValueError as exc:
+            raise HTTPException(400,str(exc)) from None
 
     @app.get('/api/t/{tenant_id}/projects/{project_id}/board')
     def board_list(tenant_id:str,project_id:str,request:Request):

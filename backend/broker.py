@@ -301,7 +301,7 @@ def codex_write_mode(extras):
     writes to the project just as workspace-write does, Codex runs without its own."""
     return 'danger-full-access' if (extras or {}).get('outer_sandbox') else 'workspace-write'
 
-FRONTIER_TOOLS = ('ask_user', 'board_list', 'board_add', 'board_update')  # Served by permission_tool beside `approve`.
+FRONTIER_TOOLS = ('ask_user', 'board_list', 'board_add', 'board_update', 'slack_reply')  # Served by permission_tool beside `approve`.
 CODEX_BROWSER_PLUGINS = ('browser@openai-bundled', 'chrome@openai-bundled', 'computer-use@openai-bundled', 'unified-computer-use@openai-bundled')
 
 def remember_commands(store, tenant_id, out):
@@ -348,6 +348,9 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
                 '--permission-mode', {'read': 'dontAsk', 'edit': 'acceptEdits', 'auto': 'bypassPermissions'}[mode]]
         if disallowed:
             argv += ['--disallowedTools', *disallowed]
+        if extras.get('steer'):
+            # The prompt arrives as a stream-json message, and the input stays open so the user can add to the turn.
+            argv += ['--input-format', 'stream-json']
         if extras.get('resume'):
             # Claude's own session continues, with its full internal state, instead of a replayed transcript.
             argv += ['--resume', extras['resume']]
@@ -424,7 +427,7 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
         argv += ['--command', extras['slash']['name']] + ([extras['slash']['args']] if extras['slash']['args'] else [])
     return argv + (['--auto'] if mode == 'auto' else [])
 
-async def run_cli(argv, stdin_text, work, env=None, on_line=None):
+async def run_cli(argv, stdin_text, work, env=None, on_line=None, steer=None):
     """Run an agent tool to completion, killing its whole tree on timeout or cancellation.
 
     Stderr comes back only so a spent subscription can be told apart from a broken install. It
@@ -441,13 +444,18 @@ async def run_cli(argv, stdin_text, work, env=None, on_line=None):
             if stdin_text is not None:
                 proc.stdin.write(stdin_text.encode('utf-8'))
                 await proc.stdin.drain()
-            proc.stdin.close()
+            if steer is not None:
+                steer.stdin = proc.stdin  # Left open for messages handed in mid-turn.
+            else:
+                proc.stdin.close()
         except (BrokenPipeError, ConnectionResetError):
             pass  # The tool exited without reading everything; its output says why.
 
     async def pump(stream, sink):
         while line := await stream.readline():
             sink.append(line)
+            if steer is not None and stream is proc.stdout and is_claude_result(line):
+                steer.close()  # Claude waits for more input after its result; closing it ends the run.
             if on_line:
                 try:
                     on_line(line.decode('utf-8', errors='replace'))
@@ -458,6 +466,8 @@ async def run_cli(argv, stdin_text, work, env=None, on_line=None):
         await asyncio.gather(feed(), pump(proc.stdout, out), pump(proc.stderr, err))
         await proc.wait()
     finally:
+        if steer is not None:
+            steer.close()
         await terminate(proc)
     return proc.returncode, b''.join(out).decode('utf-8', errors='replace'), b''.join(err).decode('utf-8', errors='replace')
 
@@ -598,7 +608,55 @@ def read_claude(out, err, code, provider):
             raise ProviderError(f'{CLI_TOOLS[provider][2]} stopped this turn: {reason}')
         raise ProviderError(f'{CLI_TOOLS[provider][2]} could not complete this turn (exit code {code}). Run it once in a terminal to see why; a sign-in problem shows there.')
     usage = payload.get('usage') or {}
-    return AgentResult(payload.get('result') or '', usage.get('input_tokens'), usage.get('output_tokens'), session_id=payload.get('session_id'))
+    # A message handed in mid-turn that reached Claude only as it finished is answered as a short turn of its own:
+    # both answers are the reply.
+    answers = []
+    for line in out.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and event.get('type') == 'result' and not event.get('is_error') and event.get('result'):
+            answers.append(event['result'])
+    return AgentResult('\n\n'.join(answers) or payload.get('result') or '', usage.get('input_tokens'), usage.get('output_tokens'), session_id=payload.get('session_id'))
+
+
+def claude_input(text):
+    """One user message in Claude's stream-json input."""
+    return json.dumps({'type': 'user', 'message': {'role': 'user', 'content': text}}) + '\n'
+
+
+def is_claude_result(line):
+    """Claude's closing result event; its keys come in no fixed order."""
+    if b'"result"' not in line:
+        return False
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return False
+    return isinstance(event, dict) and event.get('type') == 'result'
+
+
+class Steer:
+    """The open input of a running Claude turn. A message pushed here reaches the agent at its next step;
+    the input closes when Claude reports its result, after which nothing more can be handed in."""
+    def __init__(self):
+        self.stdin = None
+
+    def push(self, text):
+        if self.stdin is None or self.stdin.is_closing():
+            return False
+        try:
+            self.stdin.write(claude_input(text).encode('utf-8'))
+        except (BrokenPipeError, ConnectionResetError, RuntimeError):
+            return False
+        return True
+
+    def close(self):
+        if self.stdin is not None and not self.stdin.is_closing():
+            self.stdin.close()
+        self.stdin = None
+
 
 def agy_input(prompt):
     """The conversation as the one stream-json message agy reads from standard input."""
@@ -831,8 +889,10 @@ class ModelBroker:
                 async with asyncio.timeout(extras.get('timeout') or TURN_TIMEOUT):
                     live = extras.get('live')
                     format_live = CodexLive(prompt) if provider == 'codex_cli' else lambda raw: live_line(provider, raw, prompt)
-                    code, out, err = await run_cli(argv, agy_input(prompt) if provider == 'gemini_cli' else prompt, root, env,
-                                                   (lambda raw: (line := format_live(raw)) and live(line)) if live else None)
+                    steer = extras.get('steer') if provider == 'claude_cli' else None
+                    stdin_text = agy_input(prompt) if provider == 'gemini_cli' else claude_input(prompt) if steer else prompt
+                    code, out, err = await run_cli(argv, stdin_text, root, env,
+                                                   (lambda raw: (line := format_live(raw)) and live(line)) if live else None, steer)
                 # A tool may echo the conversation; words like 'quota' in it must not read as the tool running out.
                 err = strip_echo(err, prompt)
             except TimeoutError:

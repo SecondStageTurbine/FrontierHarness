@@ -255,6 +255,10 @@ class BoardTaskPatch(StrictModel):
     notes: str | None = Field(default=None, max_length=4000)
     status: Literal['todo', 'doing', 'blocked', 'done'] | None = None
 
+class SlackReplyInput(StrictModel):
+    thread_ts: str = Field(min_length=1, max_length=40)
+    text: str = Field(min_length=1, max_length=39000)
+
 class FanoutInput(StrictModel):
     content: str = Field(min_length=2, max_length=40000)
     model_ids: list[str] = Field(min_length=1, max_length=8)

@@ -23,7 +23,7 @@ from pathlib import Path
 
 from . import adaptive, benchmark, board, gitops, localhealth, push, sandbox, slash, team as teamwork
 from .adaptive import ADAPTIVE, MAX_ESCALATIONS
-from .broker import CLI_TOOLS, ProviderError, cooling
+from .broker import CLI_TOOLS, ProviderError, Steer, cooling
 from .projects import ProjectFiles
 from .store import TenantIsolationViolationException, now, uid
 
@@ -188,6 +188,9 @@ def browser_note(project, root):
             'take a screenshot, and report what you saw, not what you expect.')
 
 
+MIDTURN = 'The user sent this while you were working. Take it into account now, without dropping what you were doing:\n\n'
+
+
 def resumable(session, config, root, project, message):
     """The tool session to resume natively this turn, if the same tool that owns it is answering
     in the project folder itself (a worktree is another folder, which the tool's session does not know)."""
@@ -320,6 +323,8 @@ class AgentRunner:
         # approval tool speak for exactly one turn. Both are ephemeral: a restart ends the turn.
         self.turn_tokens: dict[str, tuple] = {}
         self.approvals: dict[str, dict] = {}
+        # The open input of each running Claude turn, for messages handed in while it works.
+        self.steers: dict[tuple[str, str], Steer] = {}
         # What each conversation's agent is doing right now, line by line, for the live view. Kept after the turn
         # ends, until the next one starts, so a finished turn can still be read back. Memory only.
         self.live: dict[tuple[str, str], dict] = {}
@@ -679,6 +684,24 @@ class AgentRunner:
             goal.update(status='paused', note=f'The next turn could not start: {exc}')
             self.store.put(tenant_id, 'sessions', session)
 
+    def inject(self, tenant_id, session_id, content, model_id=None, mode=None):
+        """Hand a message to the agent of the running turn, which reads it at its next step, and record it in the
+        conversation. None when that turn cannot take one: not a Claude turn, between steps of a fallback, finished,
+        or a message meant for another agent or posture, which waits for the turn to end instead."""
+        steer = self.steers.get((tenant_id, session_id))
+        if steer is None or content.lstrip().startswith('/'):
+            return None
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        running = next((m for m in reversed(session['messages']) if m['role'] == 'assistant' and m['status'] == 'running'), None)
+        if running is None or running.get('team') or (model_id and model_id not in (ADAPTIVE, running.get('model_id'))) or (mode and mode != running.get('mode')):
+            return None
+        if not steer.push(MIDTURN + content):
+            return None
+        session['messages'].insert(session['messages'].index(running), {'id': uid(), 'role': 'user', 'content': content, 'created_at': now(), 'context': [], 'midturn': True})
+        self.store.put(tenant_id, 'sessions', session)
+        self.store.event(tenant_id, session_id, 'turn.midturn', f'Handed to {running.get("model_name") or "the agent"} while it works.', message_id=running['id'])
+        return session
+
     def unqueue(self, tenant_id, session_id, item_id):
         session = self.store.get(tenant_id, 'sessions', session_id)
         session['queue'] = [q for q in session.get('queue') or [] if q['id'] != item_id]
@@ -766,6 +789,7 @@ class AgentRunner:
         root = str(self.files.root(tenant_id, project_id, session_id))
         token = secrets.token_urlsafe(24)
         self.turn_tokens[token] = (tenant_id, project_id, session_id, message_id)
+        steer = None if message.get('team') else self.steers.setdefault((tenant_id, session_id), Steer())
         await asyncio.to_thread(ensure_firefox, project)
         extras = self.extras(tenant_id, token, mode, project)
         extras['live'] = self.watch(tenant_id, session_id, message.get('model_name'))
@@ -838,6 +862,8 @@ class AgentRunner:
                 if cmd:
                     prompt = cmd['raw'] if config['provider'] == 'claude_cli' else ''
                 turn_extras = {**extras, 'slash': cmd} if cmd and config['provider'] == 'opencode_cli' else extras
+                if steer is not None and not cmd:
+                    turn_extras = {**turn_extras, 'steer': steer}
                 result, error = None, None
                 try:
                     if native:
@@ -923,6 +949,8 @@ class AgentRunner:
             status, error = 'failed', 'The turn stopped unexpectedly. Anything the agent had already written to the folder is still there.'
         finally:
             self.turn_tokens.pop(token, None)
+            if steer is not None and self.steers.get((tenant_id, session_id)) is steer:
+                self.steers.pop((tenant_id, session_id), None)
             self.abandon_approvals(session_id)
             if result is not None and status == 'complete':
                 error = None
