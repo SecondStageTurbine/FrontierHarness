@@ -372,6 +372,10 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
         # `-a` is a global flag and must precede the subcommand. Approvals are never waited on:
         # exec has no one to ask, so an unanswerable prompt would hang the turn to its timeout.
         argv = [*launch, '-a', 'never']
+        if model_name == 'gpt-6-astra':
+            # A user's Daybreak default is valid for compatible Codex sessions, but Astra rejects
+            # it before starting. Override this invocation without changing their shared config.
+            argv += ['-c', 'daybreak=false']
         if extras.get('effort'):
             argv += ['-c', f'model_reasoning_effort={toml_value(extras["effort"])}']
         if mode == 'edit' and not extras.get('outer_sandbox'):

@@ -98,6 +98,20 @@ def test_codex_default_edit_network_is_open_but_other_postures_are_unchanged(tmp
         assert not any(a.startswith('sandbox_workspace_write.network_access=') for a in argv(mode, extras))
 
 
+@pytest.mark.parametrize('mode,extras', [
+    ('read', None),
+    ('edit', None),
+    ('auto', None),
+    ('read', {'resume': 'existing-session'}),
+])
+def test_codex_disables_daybreak_only_for_astra(tmp_path, mode, extras):
+    from backend.broker import agent_argv
+    argv = lambda model: agent_argv('codex_cli', ['codex'], model, mode, tmp_path, tmp_path/'final', extras)
+    has_override = lambda args: any(args[i:i + 2] == ['-c', 'daybreak=false'] for i in range(len(args) - 1))
+    assert has_override(argv('gpt-6-astra'))
+    assert not has_override(argv('gpt-6-sol'))
+
+
 @pytest.mark.parametrize('network', ['agent', 'allowlist'])
 def test_codex_restricted_network_gets_a_running_frontier_filter(tmp_path, monkeypatch, network):
     from backend.broker import ModelBroker, AgentResult, agent_argv
