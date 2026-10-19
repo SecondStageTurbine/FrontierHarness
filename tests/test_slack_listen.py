@@ -171,6 +171,34 @@ def test_adaptive_slack_handoff_pins_codex_and_waits_for_the_review(tmp_path):
     assert len(runner.sent) == 1 and runner.sent[0][1] == 'codex_cli' and 'Review PR 334' in runner.sent[0][0]
 
 
+def test_routed_reviewer_assignment_pins_opus_and_runs_the_same_message(tmp_path):
+    store = setup_store(tmp_path / 'state'); runner = Runner(store)
+    project, session = open_project(store, runner, 'tenant-a', tmp_path)
+    store.put('tenant-a', 'models', {'id': 'opus', 'name': 'Claude Opus', 'model_name': 'Opus',
+                                    'provider': 'claude_cli', 'enabled': True})
+    store.put('tenant-a', 'mcp_servers', {'id': 's', 'name': 'slack', 'env': {'SLACK_MCP_XOXP_TOKEN': 'xoxp-1'}})
+    session['slack'] = {'channel': 'C1', 'name': 'reviews', 'user': 'UME', 'anyone': True,
+                        'model_id': 'adaptive', 'mode': 'edit', 'since': '100.0'}
+    store.put('tenant-a', 'sessions', session)
+    text = ('opynTech-platform PR 440 is routed to OpynBuildReviewer (Opus) for first review. '
+            'One fix first: edit the PR body only, then reply here when done.')
+
+    def slack(request):
+        method = request.url.path.rsplit('/', 1)[1]
+        return httpx.Response(200, json={'ok': True, 'messages': [{'ts': '101.0', 'user': 'UREVIEW', 'text': text}]
+                                         if method == 'conversations.history' else []})
+
+    async def tick():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(slack)) as client:
+            await slack_listen.step(store, runner, 'tenant-a', store.get('tenant-a', 'sessions', session['id']),
+                                    client, slack_listen.credentials(store, 'tenant-a'))
+
+    asyncio.run(tick())
+    pinned = store.get('tenant-a', 'sessions', session['id'])['slack']
+    assert pinned['model_id'] == 'opus' and pinned['pinned_agent']['id'] == 'opus'
+    assert len(runner.sent) == 1 and runner.sent[0][1] == 'opus' and text in runner.sent[0][0]
+
+
 def test_only_explicit_reviewer_handoffs_pin_an_agent(tmp_path):
     store = setup_store(tmp_path / 'state'); runner = Runner(store); models = runner.agents('tenant-a')
     assert slack_listen.requested_handoff('We need a Codex reviewer.', models)['id'] == 'codex_cli'

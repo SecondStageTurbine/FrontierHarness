@@ -15,6 +15,7 @@ import httpx
 PREFIX = '🤖 Frontier: '
 NOTE_AFTER = 90  # Seconds a handed-in message may go unanswered before the sender is told it waits on a long step.
 MODEL_CUE = re.compile(r'\b(?:use|using|with|via|on|ask)\s+|\bmodel\s*[:=]\s*', re.I)
+ROUTED_ASSIGNMENT_CUE = re.compile(r'\b(?:is|was|has\s+been)\s+routed\s+to\s+', re.I)
 HANDOFF_CUE = re.compile(
     r'\b(?P<need>need|want)\s+(?:(?:a|an|the)\s+)?|'
     r'\b(?P<switch>switch|route)(?:\s+(?:me|us|this|the|session|conversation|review))*\s+to\s+', re.I)
@@ -120,6 +121,18 @@ def requested_agent(text, agents):
         if re.search(r"(?:don't|do not|never)\s*$", text[max(0, cue.start()-12):cue.start()], re.I):
             continue
         if selected := _agent_from_tail(text[cue.end():], agents):
+            return selected
+    return None
+
+
+def routed_assignment(text, agents):
+    """A routing notice with work in the same message pins and uses its assigned agent now."""
+    for cue in ROUTED_ASSIGNMENT_CUE.finditer(text):
+        tail = text[cue.end():]
+        if selected := _agent_from_tail(tail, agents):
+            return selected
+        role = re.match(r'^[^()\r\n]{1,80}\(([^()\r\n]{1,80})\)', tail)
+        if role and (selected := _agent_from_tail(role.group(1), agents)):
             return selected
     return None
 
@@ -298,7 +311,8 @@ async def step(store, runner, tenant_id, session, client, headers):
     store.put(tenant_id, 'sessions', session)  # Moved past it first, so a message that cannot start is never retried every tick.
     await react(client, headers, listen, message)
     agents = runner.agents(tenant_id)
-    handoff = requested_handoff(message['text'], agents)
+    assignment = routed_assignment(message['text'], agents)
+    handoff = None if assignment else requested_handoff(message['text'], agents)
     if handoff:
         listen['model_id'] = handoff['id']
         listen['pinned_agent'] = {key: handoff.get(key) for key in ('id', 'name', 'model_name', 'provider')}
@@ -314,7 +328,14 @@ async def step(store, runner, tenant_id, session, client, headers):
                          f'Switched this Slack conversation to {identity}. It is ready; send the review.')[:39000])
         store.event(tenant_id, session['id'], 'slack.handoff', f'Slack switched this conversation to {identity}.')
         return
-    selected = requested_agent(message['text'], agents)
+    selected = assignment or requested_agent(message['text'], agents)
+    if assignment:
+        listen['model_id'] = assignment['id']
+        listen['pinned_agent'] = {key: assignment.get(key) for key in ('id', 'name', 'model_name', 'provider')}
+        listen['error'] = None
+        store.put(tenant_id, 'sessions', session)
+        identity = assignment.get('name') or assignment.get('model_name') or assignment['requested_model']
+        store.event(tenant_id, session['id'], 'slack.assignment', f'Slack routed this message to {identity}.')
     try:
         session = runner.send(tenant_id, session['project_id'], session['id'], prompt(listen, message),
                               selected['id'] if selected else listen['model_id'], listen['mode'])
