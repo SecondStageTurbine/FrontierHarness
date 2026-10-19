@@ -232,12 +232,6 @@ def _need_node(label):
 
 
 def resolve_cli(provider):
-    if provider == 'deepseek_harness' and os.name == 'nt' and os.environ.get('LOCALAPPDATA'):
-        base = Path(os.environ['LOCALAPPDATA'])/'Programs'/'DeepSeek Harness'
-        exe = base/'DeepSeek Harness.exe'
-        script = base/'resources'/'app.asar'/'dsh'/'node_modules'/'@deepseek-ai'/'dsh-desktop-host'/'lib'/'cli.js'
-        if exe.is_file() and (base/'resources'/'app.asar').is_file():
-            return [str(exe), '--expose-internals', str(script)]
     name, entry, label = CLI_TOOLS[provider]
     found = locate(provider)
     if found:
@@ -262,6 +256,12 @@ def resolve_cli(provider):
             if node:
                 return [node, str(script)]
             raise ProviderError(f'{label} is installed through npm, so Node.js is required to run it, and node was not found on the path.')
+    if provider == 'deepseek_harness' and os.name == 'nt' and os.environ.get('LOCALAPPDATA'):
+        base = Path(os.environ['LOCALAPPDATA'])/'Programs'/'DeepSeek Harness'
+        exe = base/'DeepSeek Harness.exe'
+        script = base/'resources'/'app.asar'/'dsh'/'node_modules'/'@deepseek-ai'/'dsh-desktop-host'/'lib'/'cli.js'
+        if exe.is_file() and (base/'resources'/'app.asar').is_file():
+            return [str(exe), '--expose-internals', str(script)]
     hint = {'claude_cli': 'Install it from https://claude.com/claude-code (in PowerShell: irm https://claude.ai/install.ps1 | iex), run `claude` once in a terminal to sign in',
             'codex_cli': 'Install it with `npm install -g @openai/codex`, run `codex login` once',
             'opencode_cli': 'Install it with `npm install -g opencode-ai`, run `opencode auth login` once',

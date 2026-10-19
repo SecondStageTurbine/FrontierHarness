@@ -1,12 +1,34 @@
 import json
+import os
 
 import pytest
 
-from backend import adaptive
+from backend import adaptive, broker
 from backend.broker import ProviderError, agent_argv, read_output
 from backend.agent import AgentRunner
 from backend.schemas import ModelConfig
 from tests.harness import ScriptedAgent, open_project, setup_store
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='DeepSeek Harness desktop fallback is Windows-only')
+def test_installed_dsh_cli_wins_over_desktop_internal_host(tmp_path, monkeypatch):
+    appdata = tmp_path/'AppData'; localappdata = tmp_path/'LocalAppData'
+    npm = appdata/'npm'; package = npm/'node_modules/@deepseek-ai/dsh'; program = package/'lib/bin.js'
+    program.parent.mkdir(parents=True)
+    program.write_text('', encoding='utf-8')
+    (package/'package.json').write_text(json.dumps({'bin': {'dsh': 'lib/bin.js'}}), encoding='utf-8')
+    shim = npm/'dsh.ps1'; shim.write_text('', encoding='utf-8')
+    node = tmp_path/'node.exe'; node.write_text('', encoding='utf-8')
+    desktop = localappdata/'Programs/DeepSeek Harness'
+    desktop.mkdir(parents=True)
+    (desktop/'DeepSeek Harness.exe').write_text('', encoding='utf-8')
+    (desktop/'resources').mkdir()
+    (desktop/'resources/app.asar').write_text('', encoding='utf-8')
+    monkeypatch.setenv('APPDATA', str(appdata)); monkeypatch.setenv('LOCALAPPDATA', str(localappdata))
+    monkeypatch.setattr(broker, 'locate', lambda provider: str(shim))
+    monkeypatch.setattr(broker.shutil, 'which', lambda name: str(node) if name == 'node' else None)
+
+    assert broker.resolve_cli('deepseek_harness') == [str(node), str(program.resolve())]
 
 
 def test_headless_turn_uses_profile_and_reads_terminal_answer(tmp_path):
