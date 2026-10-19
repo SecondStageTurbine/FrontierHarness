@@ -37,6 +37,12 @@ type ActivityPayload={active:{project_id:string;session_id:string}[];sessions?:{
 const sidebarStateLabels:Record<SidebarState,string>={working:'Working',waiting:'Waiting',done:'Done'};
 const sidebarStateTitles:Record<SidebarState,string>={working:'Agent is working',waiting:'Waiting for you',done:'Turn is done'};
 
+function sessionAgent(session?:Session){
+ const turn=[...(session?.messages||[])].reverse().find(m=>m.role==='assistant'&&m.routing);
+ if(!turn)return undefined;
+ return turn.routing?.mode==='adaptive'?ADAPTIVE:turn.model_id;
+}
+
 function SidebarStatus({state,compact=false}:{state?:SidebarState;compact?:boolean}){
  if(!state)return null;
  return <span className={`sidebar-status ${state}${compact?' compact':''}`} title={sidebarStateTitles[state]} aria-label={sidebarStateTitles[state]}><i/><span>{sidebarStateLabels[state]}</span></span>;
@@ -77,8 +83,10 @@ export default function DesktopWorkspace(){
  // A local agent whose server is down stays listed, greyed, and is never chosen by default.
  const up=(a:Model)=>a.online!==false;
  const remembered=project?.last_model_id;
- // Adaptive is the default whenever an agent is connected; a manual pick holds while this project stays open.
- const activeModelId=(modelId===ADAPTIVE||agents.some(a=>a.id===modelId&&up(a)))?modelId:agents.length?ADAPTIVE:'';
+ // A conversation reopens on the last selector choice used for one of its turns. New conversations
+ // keep the visible choice, while Adaptive remains a deliberate choice rather than a reset target.
+ const pinnedModelId=newSession?undefined:sessionAgent(session);
+ const activeModelId=(modelId===ADAPTIVE||agents.some(a=>a.id===modelId&&(up(a)||a.id===pinnedModelId)))?modelId:agents.length?ADAPTIVE:'';
  void remembered;
  const activeAgent=activeModelId===ADAPTIVE?{name:'Adaptive'}:agents.find(a=>a.id===activeModelId);
  const last=session?.messages.at(-1);const busy=working(last);
@@ -122,6 +130,7 @@ export default function DesktopWorkspace(){
   if(last&&Date.now()-new Date(last).getTime()>6*3600*1000)api.post<Catchup>(path(`/projects/${project.id}/catchup`),{since:last,summarize:false}).then(c=>{const n=c.counts;if(n.turns||n.commits||n.automation_runs)setCatchup(c)}).catch(()=>{})},[project?.id]);
  async function summarizeCatchup(){if(!project||!catchup)return;setSummarizing(true);setCatchupOpen(true);try{setCatchup(await api.post<Catchup>(path(`/projects/${project.id}/catchup`),{since:catchup.since,summarize:true}))}catch(e){setError((e as Error).message);setCatchupOpen(false)}finally{setSummarizing(false)}}
  useEffect(()=>{if(!project)return;setMode(project.default_mode||'auto');setModelId(project.default_model_id||ADAPTIVE);setChips([]);setTeamMode(false);setInput(sessionStorage.getItem(`frontier.composer.${project.id}`)||'');setStash(readStash(project.id));setHistoryAt(-1)},[project?.id]);
+ useEffect(()=>{if(newSession||!session)return;const chosen=sessionAgent(session);if(chosen)setModelId(chosen)},[session?.id,newSession]);
  useEffect(()=>{if(project)sessionStorage.setItem(`frontier.composer.${project.id}`,input)},[input,project?.id]);
  // Jump, not glide: a smooth scroll fires scroll events on its way down, which read as the user scrolling up and stopped following.
  // A scroll the content caused (a new turn, a reply growing, the browser keeping its place) is not the user scrolling up.

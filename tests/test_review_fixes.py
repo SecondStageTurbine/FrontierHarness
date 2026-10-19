@@ -79,7 +79,8 @@ def test_a_turn_keeps_what_the_user_changed_while_it_ran(tmp_path):
     asyncio.run(scenario())
     final = store.get('tenant-a', 'sessions', session['id'])
     assert final['name'] == 'Renamed meanwhile'
-    assert final['messages'][1]['content'] == 'Done by the next agent.'
+    assert final['messages'][1]['status'] == 'failed' and final['messages'][1]['model_id'] == 'claude_cli'
+    assert 'no usage left' in final['messages'][1]['content']
     assert any(m['content'] == 'And then docs.' for m in final['messages']) or [q['content'] for q in final.get('queue') or []] == ['And then docs.']
 
 
@@ -251,7 +252,7 @@ def test_a_stopped_team_continues_with_only_its_unfinished_tasks(tmp_path):
         runner.continue_team('tenant-a', project['id'], session['id'])
 
 
-def test_an_agent_that_cannot_run_hands_the_turn_to_another(tmp_path):
+def test_an_agent_that_cannot_run_stays_on_the_manual_choice(tmp_path):
     seen = []
     async def respond(config, prompt, mode, root):
         seen.append(config['provider'])
@@ -262,9 +263,9 @@ def test_an_agent_that_cannot_run_hands_the_turn_to_another(tmp_path):
     runner = AgentRunner(store, ScriptedAgent(respond=respond))
     project, session = open_project(store, runner, 'tenant-a', repo(tmp_path))
     reply = asyncio.run(turn(runner, store, 'tenant-a', project, session, 'Fix it.', 'claude_cli'))['messages'][-1]
-    assert reply['status'] == 'complete' and reply['content'] == 'Done by the next agent.'
-    assert seen[0] == 'claude_cli' and seen[1] != 'claude_cli' and reply['model_id'] != 'claude_cli'
-    assert reply['routing']['attempts'][0]['outcome'] == 'could not run'
+    assert reply['status'] == 'failed' and reply['error'] == 'Claude Code is not signed in.'
+    assert seen == ['claude_cli'] and reply['model_id'] == 'claude_cli'
+    assert reply['routing'] == {'mode': 'manual'}
 
 
 def test_an_agent_stopped_after_working_is_not_handed_over(tmp_path):

@@ -1,6 +1,6 @@
 [package]
 name = "frontier"
-version = "0.27.43"
+version = "0.27.44"
 description = "Desktop AI harness"
 edition = "2021"
 

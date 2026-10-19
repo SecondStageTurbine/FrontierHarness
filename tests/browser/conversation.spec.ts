@@ -68,6 +68,20 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  // Another turn, then the session menu: snooze hides the session under its own list.
  await page.getByRole('button',{name:'Send',exact:true}).click();
  await expect(page.locator('.agent-turn')).toContainText('Done.',{timeout:15000});
+ // A manual agent choice belongs to this conversation. Another conversation may choose another
+ // agent, and returning here (including after a reload) restores Claude rather than Adaptive.
+ await page.locator('.new-session-button').click();
+ await agent.selectOption({label:'Codex'});
+ await page.getByLabel('Ask Frontier',{exact:true}).fill('Use Codex in this conversation.');
+ await page.getByRole('button',{name:'Send',exact:true}).click();
+ await expect(page.locator('.agent-turn')).toContainText('Done.',{timeout:15000});
+ await page.locator('.session-list>button',{hasText:'Explain this project.'}).click();
+ await expect(agent.locator('option:checked')).toHaveText('Claude');
+ await page.reload();
+ await expect(agent.locator('option:checked')).toHaveText('Claude');
+ await page.locator('.session-list>button',{hasText:'Use Codex in this conversation.'}).click();
+ await expect(agent.locator('option:checked')).toHaveText('Codex');
+ await page.locator('.session-list>button',{hasText:'Explain this project.'}).click();
  // Selecting text in a reply offers to cite it, and the citation becomes a chip under the composer.
  await page.locator('.agent-turn .inline-build').first().evaluate(el=>{const r=document.createRange();r.selectNodeContents(el);const s=window.getSelection()!;s.removeAllRanges();s.addRange(r)});
  await page.locator('.conversation-thread').dispatchEvent('mouseup');

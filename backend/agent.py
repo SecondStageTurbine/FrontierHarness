@@ -834,14 +834,9 @@ class AgentRunner:
                 session, message = self.bind(tenant_id, session_id, message_id, config,
                                              f'Adaptive chose {config["name"]}: {message["routing"]["chosen"]["because"]}.')
             elif (await localhealth.availability([config])).get(config['id']) is False:
-                # Known in a second rather than a minute: hand the turn to another agent, or fail with the address.
-                down, where = config['name'], localhealth.where(config)
-                tried.add(config['id'])
-                following = await self.fallback(tenant_id, tried, mode=mode)
-                if following is None:
-                    raise ProviderError(f'{down} is not running: nothing at {where} is serving it. Start that server, or pick another agent.')
-                config = following
-                session, message = self.bind(tenant_id, session_id, message_id, config, f'{down} is not running (nothing at {where}); {config["name"]} takes this turn.')
+                # A manual choice is a pin, not a routing hint. Fail on that agent so the user can
+                # deliberately change it; only Adaptive is allowed to choose another one.
+                raise ProviderError(f'{config["name"]} is not running: nothing at {localhealth.where(config)} is serving it. Start that server, or pick another agent.')
             # How hard Codex thinks this turn, from Jev. Other tools keep their own setting: Claude's cache is keyed on it.
             effort = (message['routing'].get('requirements') or {}).get('effort') if adaptive_turn else                 await self.effort(tenant_id, session) if config['provider'] == 'codex_cli' and not message.get('team') else None
             if effort:
@@ -893,12 +888,12 @@ class AgentRunner:
                     if result is None:
                         result = await self.broker.invoke_agent(tenant_id, config, prompt, mode, root, turn_extras)
                 except ProviderError as exc:
-                    # An agent that is out of usage, or that could not take the turn at all (not signed in, not
-                    # installed, a model it does not know, its service down), hands the same turn to another agent
-                    # with a handoff, as an Adaptive escalation would. One stopped after doing work does not: its work
-                    # is in the folder, and a second agent redoing it blind would do more harm than the report.
-                    # An Adaptive turn's other failures escalate below instead.
-                    failover = exc.exhausted or (not exc.worked and not adaptive_turn)
+                    # Adaptive and automatically assigned team workers may route around an unavailable
+                    # or spent agent. A user's manual choice stays pinned and reports the failure instead
+                    # of silently changing the model. An agent stopped after doing work is never handed
+                    # over because its work is already in the folder.
+                    failover = (adaptive_turn and exc.exhausted) or \
+                               (bool(session.get('team_parent')) and (exc.exhausted or not exc.worked))
                     following = await self.fallback(tenant_id, tried, None if exc.exhausted else config['provider'],
                                                     (message.get('routing') or {}).get('requirements'), mode=mode) if failover and spare else None
                     if following is None:

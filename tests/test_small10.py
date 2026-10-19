@@ -16,7 +16,7 @@ from tests.test_api import setup
 needs_git = pytest.mark.skipif(not gitops.available(), reason='git is not installed')
 
 
-def test_a_spent_agent_hands_the_turn_to_another_agent(tmp_path):
+def test_a_spent_manually_chosen_agent_does_not_change_models(tmp_path):
     calls = []
     async def respond(config, prompt, mode, root):
         calls.append((config['id'], prompt))
@@ -29,12 +29,11 @@ def test_a_spent_agent_hands_the_turn_to_another_agent(tmp_path):
     project, session = open_project(store, runner, 'tenant-a', folder)
     session = asyncio.run(turn(runner, store, 'tenant-a', project, session, 'Do the thing.', 'claude_cli', 'edit'))
     reply = session['messages'][-1]
-    assert reply['status'] == 'complete' and reply['content'] == 'Finished for you.'
-    assert reply['model_id'] != 'claude_cli' and reply['switched_from'] is None  # No earlier agent in this conversation to be switched from.
-    assert reply['routing']['attempts'][0] == {'id': 'claude_cli', 'name': 'Claude', 'outcome': 'out of usage'} and reply['routing']['fallbacks'] == 1
-    assert 'objective' in calls[1][1].lower() or 'Continue the task' in calls[1][1]  # The second agent got a handoff.
+    assert reply['status'] == 'failed' and 'no usage left' in reply['error']
+    assert reply['model_id'] == 'claude_cli' and reply['routing'] == {'mode': 'manual'}
+    assert [model for model, _ in calls] == ['claude_cli']
     events = [e['message'] for e in store.events('tenant-a', session['id'])]
-    assert any('out of usage' in m and 'continues this turn' in m for m in events)
+    assert not any('continues this turn' in m for m in events)
 
 
 def test_with_no_other_agent_a_spent_subscription_still_fails_the_turn(tmp_path):
@@ -45,7 +44,8 @@ def test_with_no_other_agent_a_spent_subscription_still_fails_the_turn(tmp_path)
     project, session = open_project(store, runner, 'tenant-a', folder)
     session = asyncio.run(turn(runner, store, 'tenant-a', project, session, 'Do the thing.', 'claude_cli', 'read'))
     reply = session['messages'][-1]
-    assert reply['status'] == 'failed' and reply['routing'].get('fallbacks') == 2  # Every agent was tried, each spent.
+    assert reply['status'] == 'failed' and reply['model_id'] == 'claude_cli'
+    assert reply['routing'].get('fallbacks') is None
 
 
 def test_the_python_environment_is_detected_and_told_to_the_agent(tmp_path):
