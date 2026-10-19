@@ -29,6 +29,7 @@ COST_RANK = {'free': 0, 'low': 1, 'medium': 2, 'high': 3}
 # profiles are estimates, and a point of slack keeps a cheap agent from losing to noise.
 TOLERANCE = 1
 MAX_ESCALATIONS = 2
+LOW_CLASSIFICATION_CONFIDENCE = 0.6
 
 # ── Capability registry ──────────────────────────────────────────────────────
 # Routing intentions, not permanent truths. Every number can be overridden on the model row,
@@ -245,7 +246,7 @@ def repository_signals(files, tenant_id, project_id):
     return {'file_count': len(entries), 'languages': languages, 'flagged': sorted(flagged)}
 
 
-def _derive(task_type, broad_scope, ambiguous, risks, repo, note=None):
+def _derive(task_type, broad_scope, ambiguous, risks, repo, note=None, low_confidence=False):
     """A task type plus a handful of yes/no signals, turned into a requirements vector.
 
     Shared by the regex heuristics and the TypeSafe classifier below so the two ever differ
@@ -263,6 +264,13 @@ def _derive(task_type, broad_scope, ambiguous, risks, repo, note=None):
             needs['architecture'] = min(10, needs['architecture'] + 2)
     if ambiguous:
         needs['reasoning'] = min(10, needs['reasoning'] + 2); needs['repository'] = min(10, needs['repository'] + 1); bumps += 1
+    if low_confidence:
+        # An uncertain task label must not make the cheapest agent look sufficient merely because
+        # the selected base vector was too lenient. Keep the choice capability-based, but require
+        # solid judgment and verification until the task becomes clearer through the work itself.
+        for capability in ('reasoning', 'planning', 'review', 'repository', 'instruction_following'):
+            needs[capability] = max(needs[capability], 8)
+        bumps += 1
     if repo.get('file_count', 0) > 400:
         needs['repository'] = min(10, needs['repository'] + 1)
     complexity = 'high' if bumps >= 2 or task_type in ('analysis', 'planning') else 'medium' if bumps == 1 or task_type in ('implementation', 'debugging', 'refactor', 'review') else 'low'
@@ -427,9 +435,12 @@ async def typesafe_requirements(content, repo, api_key, model='jev-latest'):
         broad = answers['broad_scope']['noul'] > 0.6
         ambiguous = task_type in AMBIGUITY_APPLIES_TO and answers['ambiguous']['noul'] > 0.6
         risks = [name.removesuffix('_risk') for name in TYPESAFE_RISK_NOULS if answers[name]['noul'] > 0.6]
-        note = f"{answers['task_type']['confidence']:.2f} confidence"
+        confidence = max(0.0, min(1.0, float(answers['task_type']['confidence'])))
+        note = f'{confidence:.0%} task-classification confidence'
         effort = (answers.get('effort') or {}).get('choice')
-        return _derive(task_type, broad, ambiguous, risks, repo, note=note).model_copy(update={'effort': effort if effort in TYPESAFE_EFFORTS else None})
+        return _derive(task_type, broad, ambiguous, risks, repo, note=note,
+                       low_confidence=confidence < LOW_CLASSIFICATION_CONFIDENCE).model_copy(
+                           update={'effort': effort if effort in TYPESAFE_EFFORTS else None})
     except Exception:
         return None
 

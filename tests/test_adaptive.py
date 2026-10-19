@@ -146,12 +146,30 @@ async def test_typesafe_requirements_reads_answers_through_the_same_derivation_a
     heuristic_planning = adaptive._derive('planning', True, False, ['data'], repo)
     assert result.requirements == heuristic_planning.requirements
     assert result.complexity == 'high' and result.risk == 'high'
-    assert '0.90 confidence' in result.reason
+    assert '90% task-classification confidence' in result.reason
     # The request actually sent to TypeSafe carries the request text and the repo signals, and
     # nothing else - no project file contents.
     assert sent[0]['state'] == {'request': 'Design a zero-downtime migration strategy.', 'repository': repo}
     assert set(sent[0]['questions']) == {'task_type', 'broad_scope', 'ambiguous', 'effort', 'security_risk', 'data_risk', 'money_risk', 'external_risk'}
     assert result.effort is None  # No effort answer leaves the tool at its own default.
+
+
+@pytest.mark.asyncio
+async def test_low_task_classification_confidence_routes_conservatively(monkeypatch):
+    answers = {'task_type': choice('implementation', 0.33), 'broad_scope': noul(0.1), 'ambiguous': noul(0.1),
+              'security_risk': noul(0.1), 'data_risk': noul(0.1), 'money_risk': noul(0.1), 'external_risk': noul(0.1)}
+    monkeypatch.setattr(adaptive.httpx, 'AsyncClient', lambda **kw: FakeTypesafeClient(answers))
+    repo = {'file_count': 40, 'languages': ['.py'], 'flagged': []}
+    uncertain = await adaptive.typesafe_requirements('Build the requested feature.', repo, 'sk-test')
+    normal = adaptive._derive('implementation', False, False, [], repo)
+    cheap = {**QWEN, 'capabilities': normal.requirements}
+
+    assert '33% task-classification confidence' in uncertain.reason
+    assert uncertain.complexity == 'medium'
+    assert all(uncertain.need(capability) >= 8 for capability in
+               ('reasoning', 'planning', 'review', 'repository', 'instruction_following'))
+    assert adaptive.choose(normal, [cheap, CODEX, CLAUDE])[0]['id'] == 'qwen'
+    assert adaptive.choose(uncertain, [cheap, CODEX, CLAUDE])[0]['id'] == 'codex'
 
 
 @pytest.mark.asyncio
