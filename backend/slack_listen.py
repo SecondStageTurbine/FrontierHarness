@@ -15,8 +15,13 @@ import httpx
 PREFIX = '🤖 Frontier: '
 NOTE_AFTER = 90  # Seconds a handed-in message may go unanswered before the sender is told it waits on a long step.
 MODEL_CUE = re.compile(r'\b(?:use|using|with|via|on|ask)\s+|\bmodel\s*[:=]\s*', re.I)
+HANDOFF_CUE = re.compile(
+    r'\b(?P<need>need|want)\s+(?:(?:a|an|the)\s+)?|'
+    r'\b(?P<switch>switch|route)(?:\s+(?:me|us|this|the|session|conversation|review))*\s+to\s+', re.I)
 MODEL_IDENTIFIER = re.compile(r'^(?:gpt-\d+(?:\.\d+)?-[a-z0-9]+(?:[.-][a-z0-9]+)*|claude-[a-z0-9]+(?:[.-][a-z0-9]+)*|gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*)', re.I)
 GPT_VERSION = re.compile(r'^gpt-(\d+)(?:\.(\d+))?-([a-z0-9]+(?:[.-][a-z0-9]+)*)$', re.I)
+PROVIDER_REQUESTS = {'codex cli': 'codex_cli', 'claude code': 'claude_cli', 'open code': 'opencode_cli',
+                     'codex': 'codex_cli', 'claude': 'claude_cli', 'opencode': 'opencode_cli', 'gemini': 'gemini_cli'}
 
 
 def credentials(store, tenant_id):
@@ -69,28 +74,31 @@ def slack_markup(text):
     return re.sub(r'\[([^\]]+)\]\((https?://[^)\s]+)\)', r'<\2|\1>', text)
 
 
-def requested_agent(text, agents):
-    """Use an explicit model request in the Slack text; prefer the next connected GPT of the same line."""
+def _agent_from_tail(tail, agents):
+    """A leading configured name, model identifier, or agent family in some text."""
     labels = sorted({label for agent in agents for label in (agent.get('model_name'), agent.get('name')) if label},
                     key=len, reverse=True)
-    requested = None
-    for cue in MODEL_CUE.finditer(text):
-        if re.search(r"(?:don't|do not|never)\s*$", text[max(0, cue.start()-12):cue.start()], re.I):
-            continue
-        tail = re.sub(r'^(?:the\s+)?(?:model\s+)?', '', text[cue.end():], count=1, flags=re.I)
-        requested = next((label for label in labels if tail.casefold().startswith(label.casefold())
-                          and (len(tail) == len(label) or not re.match(r'[\w./-]', tail[len(label)]))), None)
-        if requested is None:
-            identifier = MODEL_IDENTIFIER.match(tail)
-            requested = identifier.group() if identifier else None
-        if requested:
-            break
+    tail = re.sub(r'^(?:the\s+)?(?:model\s+)?', '', tail, count=1, flags=re.I)
+    requested = next((label for label in labels if tail.casefold().startswith(label.casefold())
+                      and (len(tail) == len(label) or not re.match(r'[\w/-]', tail[len(label)]))), None)
+    if requested is None:
+        requested = next((label for label in PROVIDER_REQUESTS if tail.casefold().startswith(label)
+                          and (len(tail) == len(label) or not re.match(r'[\w/-]', tail[len(label)]))), None)
+    if requested is None:
+        identifier = MODEL_IDENTIFIER.match(tail)
+        requested = identifier.group() if identifier else None
     if not requested:
         return None
     exact = next((agent for agent in agents if requested.casefold() in
                   (agent.get('model_name', '').casefold(), agent.get('name', '').casefold())), None)
     if exact:
         return {**exact, 'requested_model': requested}
+    provider = PROVIDER_REQUESTS.get(requested.casefold())
+    if provider:
+        matches = [agent for agent in agents if agent.get('provider') == provider]
+        if matches:
+            chosen = next((agent for agent in matches if agent.get('online') is not False), matches[0])
+            return {**chosen, 'requested_model': requested}
     target = GPT_VERSION.fullmatch(requested)
     if target:
         wanted = (int(target[1]), int(target[2] or 0))
@@ -103,6 +111,32 @@ def requested_agent(text, agents):
             newer = [(version, agent) for version, agent in same_line if version >= wanted]
             chosen = min(newer, key=lambda item: item[0])[1] if newer else max(same_line, key=lambda item: item[0])[1]
             return {**chosen, 'requested_model': requested}
+    return None
+
+
+def requested_agent(text, agents):
+    """Use an explicit model request in the Slack text; prefer the next connected GPT of the same line."""
+    for cue in MODEL_CUE.finditer(text):
+        if re.search(r"(?:don't|do not|never)\s*$", text[max(0, cue.start()-12):cue.start()], re.I):
+            continue
+        if selected := _agent_from_tail(text[cue.end():], agents):
+            return selected
+    return None
+
+
+def requested_handoff(text, agents):
+    """A request for a reviewer/agent switch, which pins later Slack messages to that agent."""
+    for cue in HANDOFF_CUE.finditer(text):
+        tail = text[cue.end():]
+        selected = _agent_from_tail(tail, agents)
+        if not selected:
+            continue
+        if cue.group('need'):
+            requested_at = tail.casefold().find(selected['requested_model'].casefold())
+            rest = tail[requested_at + len(selected['requested_model']):]
+            if not re.match(r'\s+(?:reviewer|agent)\b', rest, re.I):
+                continue
+        return selected
     return None
 
 
@@ -263,7 +297,24 @@ async def step(store, runner, tenant_id, session, client, headers):
     listen.pop('midturn', None)
     store.put(tenant_id, 'sessions', session)  # Moved past it first, so a message that cannot start is never retried every tick.
     await react(client, headers, listen, message)
-    selected = requested_agent(message['text'], runner.agents(tenant_id))
+    agents = runner.agents(tenant_id)
+    handoff = requested_handoff(message['text'], agents)
+    if handoff:
+        listen['model_id'] = handoff['id']
+        listen['pinned_agent'] = {key: handoff.get(key) for key in ('id', 'name', 'model_name', 'provider')}
+        listen['error'] = None
+        store.put(tenant_id, 'sessions', session)
+        identity = handoff.get('name') or handoff.get('model_name') or handoff['requested_model']
+        model = handoff.get('model_name')
+        if model and model.casefold() != identity.casefold():
+            identity += f' ({model})'
+        thread = message.get('thread_ts', message['ts'])
+        await call(client, headers, 'chat.postMessage', channel=listen['channel'], thread_ts=thread,
+                   text=(PREFIX + mention_of(listen, message.get('user')) +
+                         f'Switched this Slack conversation to {identity}. It is ready; send the review.')[:39000])
+        store.event(tenant_id, session['id'], 'slack.handoff', f'Slack switched this conversation to {identity}.')
+        return
+    selected = requested_agent(message['text'], agents)
     try:
         session = runner.send(tenant_id, session['project_id'], session['id'], prompt(listen, message),
                               selected['id'] if selected else listen['model_id'], listen['mode'])

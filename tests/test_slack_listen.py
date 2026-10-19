@@ -138,3 +138,41 @@ def test_named_slack_model_uses_exact_connected_model_and_plain_text_keeps_adapt
     assert slack_listen.requested_agent('Please use gpt-5.6-sol for this review.', models)['id'] == 'codex_cli'
     assert slack_listen.requested_agent('Do not use Claude; use gpt-5.6-sol.', models)['id'] == 'codex_cli'
     assert slack_listen.requested_agent('Run the tests.', models) is None
+
+
+def test_adaptive_slack_handoff_pins_codex_and_waits_for_the_review(tmp_path):
+    store = setup_store(tmp_path / 'state'); runner = Runner(store)
+    project, session = open_project(store, runner, 'tenant-a', tmp_path)
+    store.put('tenant-a', 'mcp_servers', {'id': 's', 'name': 'slack', 'env': {'SLACK_MCP_XOXP_TOKEN': 'xoxp-1'}})
+    session['slack'] = {'channel': 'C1', 'name': 'reviews', 'user': 'UME', 'anyone': True,
+                        'model_id': 'adaptive', 'mode': 'edit', 'since': '100.0'}
+    store.put('tenant-a', 'sessions', session)
+    posted = []
+    history = [{'ts': '101.0', 'user': 'UREVIEW', 'text': 'We need a Codex reviewer.'},
+               {'ts': '102.0', 'user': 'UREVIEW', 'text': 'Review PR 334 and report in this thread.'}]
+
+    def slack(request):
+        method, params = request.url.path.rsplit('/', 1)[1], {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
+        if method == 'chat.postMessage':
+            posted.append(params)
+        return httpx.Response(200, json={'ok': True, 'messages': history if method == 'conversations.history' else []})
+
+    async def tick():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(slack)) as client:
+            await slack_listen.step(store, runner, 'tenant-a', store.get('tenant-a', 'sessions', session['id']),
+                                    client, slack_listen.credentials(store, 'tenant-a'))
+
+    asyncio.run(tick())
+    pinned = store.get('tenant-a', 'sessions', session['id'])['slack']
+    assert not runner.sent and pinned['model_id'] == 'codex_cli' and pinned['pinned_agent']['provider'] == 'codex_cli'
+    assert posted == [{'channel': 'C1', 'thread_ts': '101.0',
+                       'text': slack_listen.PREFIX + '<@UREVIEW> Switched this Slack conversation to Codex (gpt-5.6-sol). It is ready; send the review.'}]
+    asyncio.run(tick())
+    assert len(runner.sent) == 1 and runner.sent[0][1] == 'codex_cli' and 'Review PR 334' in runner.sent[0][0]
+
+
+def test_only_explicit_reviewer_handoffs_pin_an_agent(tmp_path):
+    store = setup_store(tmp_path / 'state'); runner = Runner(store); models = runner.agents('tenant-a')
+    assert slack_listen.requested_handoff('We need a Codex reviewer.', models)['id'] == 'codex_cli'
+    assert slack_listen.requested_handoff('Please switch this conversation to Claude.', models)['provider'] == 'claude_cli'
+    assert slack_listen.requested_handoff('The writer used Codex for this change.', models) is None

@@ -38,6 +38,8 @@ const sidebarStateLabels:Record<SidebarState,string>={working:'Working',waiting:
 const sidebarStateTitles:Record<SidebarState,string>={working:'Agent is working',waiting:'Waiting for you',done:'Turn is done'};
 
 function sessionAgent(session?:Session){
+ const slackModel=session?.slack?.model_id;
+ if(slackModel&&slackModel!==ADAPTIVE)return slackModel;
  const turn=[...(session?.messages||[])].reverse().find(m=>m.role==='assistant'&&m.routing);
  if(!turn)return undefined;
  return turn.routing?.mode==='adaptive'?ADAPTIVE:turn.model_id;
