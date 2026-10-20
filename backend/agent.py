@@ -33,6 +33,9 @@ MODES = ('read', 'edit', 'auto')
 # Oldest turns are dropped rather than refusing to continue: a conversation that stops being
 # answerable is worse than one that has forgotten its beginning, and the model is told.
 TRANSCRIPT_LIMIT = 120_000
+# Summarize while there is still enough room to do it reliably. The hard limit in build_prompt
+# remains the last-resort safety net for a failed compaction or one enormous current message.
+AUTO_COMPACT_RATIO = .8
 # The shortest time an agent gets for one turn, in any project. Engine builds and test gates run long.
 MIN_TURN_MINUTES = 90
 HANDOVER = (
@@ -837,6 +840,16 @@ class AgentRunner:
                 # A manual choice is a pin, not a routing hint. Fail on that agent so the user can
                 # deliberately change it; only Adaptive is allowed to choose another one.
                 raise ProviderError(f'{config["name"]} is not running: nothing at {localhealth.where(config)} is serving it. Start that server, or pick another agent.')
+            usage = context_usage(session)
+            if usage['chars'] >= usage['limit'] * AUTO_COMPACT_RATIO:
+                try:
+                    session = await self.compact(tenant_id, project_id, session_id, before_message_id=message_id)
+                    message = next(m for m in session['messages'] if m['id'] == message_id)
+                except (ProviderError, ValueError) as exc:
+                    # A failed summary must not prevent the actual turn. build_prompt still trims
+                    # oldest messages at the hard limit, and the event explains why it had to.
+                    self.store.event(tenant_id, session_id, 'session.compact_failed',
+                                     f'Automatic compaction could not run ({exc}); the turn continued with the context safety limit.')
             # How hard Codex thinks this turn, from Jev. Other tools keep their own setting: Claude's cache is keyed on it.
             effort = (message['routing'].get('requirements') or {}).get('effort') if adaptive_turn else                 await self.effort(tenant_id, session) if config['provider'] == 'codex_cli' and not message.get('team') else None
             if effort:
@@ -1080,9 +1093,25 @@ class AgentRunner:
             raise ValueError(f'{config["name"]} returned nothing to remember.')
         project = self.store.get(tenant_id, 'projects', project_id)
         stamp = now()[:10]
-        project['memory'] = ((project.get('memory') or '').rstrip() + f'\n\n{stamp} · {session["name"]}\n' + '\n'.join(bullets)).strip()[-20000:]
+        existing = (project.get('memory') or '').strip()
+        new_notes = f'{stamp} · {session["name"]}\n' + '\n'.join(bullets)
+        merge_prompt = (
+            'Reconcile the current project memory with the new dated notes worth remembering. Return the complete replacement '
+            'memory only, at most 20,000 characters. Remove exact and semantic duplicates. When facts conflict, keep the newest '
+            'fact. Keep every original date heading exactly as written for facts that remain, and keep each retained fact under its '
+            'original date heading. Order date sections oldest to newest. Do not add commentary or markdown fences.\n\n'
+            'CURRENT PROJECT MEMORY:\n' + (existing or '(empty)') + '\n\nNEW DATED NOTES:\n' + new_notes
+        )
+        merged = await self.broker.invoke_agent(tenant_id, config, merge_prompt, 'read',
+                                                str(self.files.root(tenant_id, project_id, session_id)),
+                                                self.protections(tenant_id, project_id))
+        memory = (merged.text or '').strip()
+        if not memory:
+            raise ValueError(f'{config["name"]} returned no reconciled project memory.')
+        project['memory'] = memory[-20_000:]
         self.store.put(tenant_id, 'projects', project)
-        self.store.event(tenant_id, session_id, 'project.remembered', f'{config["name"]} added {len(bullets)} notes to the project memory.')
+        self.store.event(tenant_id, session_id, 'project.remembered',
+                         f'{config["name"]} reconciled {len(bullets)} new notes with the project memory.')
         return project
 
     async def fanout(self, tenant_id, project_id, content, model_ids, mode):
@@ -1112,17 +1141,28 @@ class AgentRunner:
         preferred = [m.get('model_id') for m in reversed(session['messages']) if m.get('role') == 'assistant'] + [project.get('last_model_id')]
         return next((a for pick in preferred if pick and pick != ADAPTIVE for a in agents if a['id'] == pick), agents[0])
 
-    async def compact(self, tenant_id, project_id, session_id):
-        """Replace everything said so far with a summary the current agent writes, so the next turn
-        is sent that instead. The messages stay in the conversation for the user; only the agent
-        stops seeing them.
+    async def compact(self, tenant_id, project_id, session_id, before_message_id=None):
+        """Replace completed history with a summary the current agent writes.
+
+        The messages stay in the conversation for the user; only the agent stops seeing them.
+        During an automatic pre-turn compaction, the in-flight user/assistant pair stays visible.
         """
-        self.ensure_idle(tenant_id, session_id)
+        if before_message_id is None:
+            self.ensure_idle(tenant_id, session_id)
         session = self.store.get(tenant_id, 'sessions', session_id)
         project = self.store.get(tenant_id, 'projects', project_id)
         visible, summary = conversation(session)
-        done = [m for m in visible if m.get('status') != 'running']
+        if before_message_id is None:
+            candidates = visible
+        else:
+            boundary = next((i for i, m in enumerate(visible) if m['id'] == before_message_id), len(visible))
+            # The message immediately before the running assistant is the current user request.
+            # Keep both messages visible; compact only the completed history preceding that pair.
+            candidates = visible[:max(0, boundary - 1)]
+        done = [m for m in candidates if m.get('status') != 'running']
         if len(done) < 2:
+            if before_message_id is not None:
+                return session
             raise ValueError('There is nothing to compact yet.')
         config = self.writer(tenant_id, session, project)
         prompt = COMPACT_ASK + ('\n\nSummary of messages compacted earlier:\n' + summary if summary else '') + '\n\n' + '\n\n'.join(transcript(done))

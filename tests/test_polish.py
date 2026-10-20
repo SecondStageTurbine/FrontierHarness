@@ -1,4 +1,5 @@
 """Titles from the first reply, the context meter, and compacting a conversation into a summary."""
+import asyncio
 import pytest
 from backend.agent import AgentRunner, build_prompt, context_usage, take_title, TRANSCRIPT_LIMIT
 from backend.broker import AgentResult
@@ -66,3 +67,32 @@ async def test_compacting_replaces_what_the_agent_sees_but_keeps_the_conversatio
     session = await turn(runner, store, 'tenant-a', project, session, 'And gadgets?')
     assert 'compacted into this summary' in prompts[-1] and 'How many widgets?' not in prompts[-1] and 'And gadgets?' in prompts[-1]
     assert context_usage(session)['compacted'] == 2
+
+
+def test_a_turn_auto_compacts_completed_history_at_eighty_percent_without_hiding_the_new_request(tmp_path):
+    prompts = []
+
+    async def reply(config, prompt, mode, root):
+        prompts.append(prompt)
+        if prompt.startswith('Write a handoff summary'):
+            assert 'Current exact request' not in prompt
+            return AgentResult('Earlier work produced the large fixture.', 10, 5)
+        return AgentResult('Handled the current request.', 10, 5)
+
+    store, runner, project, session = make(tmp_path, ScriptedAgent(respond=reply))
+    session['messages'] = [
+        {'id': 'old-user', 'role': 'user', 'content': 'Old context: ' + 'x' * int(TRANSCRIPT_LIMIT * .8),
+         'created_at': '2026-01-01T00:00:00Z'},
+        {'id': 'old-reply', 'role': 'assistant', 'content': 'The old work is complete.', 'status': 'complete',
+         'model_id': 'claude_cli', 'model_name': 'Claude', 'created_at': '2026-01-01T00:00:01Z'},
+    ]
+    store.put('tenant-a', 'sessions', session)
+
+    session = asyncio.run(turn(runner, store, 'tenant-a', project, session, 'Current exact request', mode='read'))
+
+    assert len(prompts) == 2
+    assert session['summary']['through'] == 'old-reply' and session['summary']['count'] == 2
+    assert 'compacted into this summary' in prompts[-1]
+    assert 'Earlier work produced the large fixture.' in prompts[-1]
+    assert 'Current exact request' in prompts[-1]
+    assert 'x' * 100 not in prompts[-1]

@@ -243,10 +243,16 @@ def test_context_chips_rules_and_memory_reach_the_prompt_and_env_stays_closed(tm
     assert 'Bash' in argv and 'Read(./.env)' in argv and argv.count('--disallowedTools') == 1
 
 
-def test_remember_appends_the_agents_notes_to_the_project(tmp_path):
+def test_remember_reconciles_new_notes_with_the_existing_project_memory(tmp_path):
     async def respond(config, prompt, mode, root):
         assert mode == 'read' and 'worth remembering' in prompt
-        return AgentResult('- Tests live in tests/.\n- Run pytest -q.\nnot a bullet', 5, 5)
+        if 'CURRENT PROJECT MEMORY' not in prompt:
+            return AgentResult('- Tests live in specs/.\n- Run pytest -q.\nnot a bullet', 5, 5)
+        assert '2026-01-01 · Setup' in prompt and '- Tests live in tests/.' in prompt
+        assert 'NEW DATED NOTES' in prompt and '- Tests live in specs/.' in prompt
+        new_heading = next(line for line in prompt.splitlines() if line.endswith(' · New session'))
+        return AgentResult('2026-01-01 · Setup\n- Use Ruff.\n\n' + new_heading
+                           + '\n- Tests live in specs/.\n- Run pytest -q.', 5, 5)
     store = setup_store(tmp_path/'state'); folder = tmp_path/'work'; folder.mkdir()
     runner = AgentRunner(store, ScriptedAgent(respond=respond))
     project, session = open_project(store, runner, 'tenant-a', folder)
@@ -255,8 +261,13 @@ def test_remember_appends_the_agents_notes_to_the_project(tmp_path):
     session['messages'] = [{'id': 'u', 'role': 'user', 'content': 'Where are the tests?', 'created_at': '2026-01-01T00:00:00Z'},
                            {'id': 'a', 'role': 'assistant', 'content': 'In tests/.', 'created_at': '2026-01-01T00:00:01Z', 'status': 'complete', 'model_id': 'claude_cli', 'model_name': 'Claude'}]
     store.put('tenant-a', 'sessions', session)
+    project['memory'] = '2026-01-01 · Setup\n- Tests live in tests/.\n- Run pytest -q.\n- Use Ruff.'
+    store.put('tenant-a', 'projects', project)
     project = asyncio.run(runner.remember('tenant-a', project['id'], session['id']))
-    assert 'Tests live in tests/.' in project['memory'] and 'not a bullet' not in project['memory']
+    assert 'Tests live in specs/.' in project['memory'] and 'Tests live in tests/.' not in project['memory']
+    assert project['memory'].count('Run pytest -q.') == 1 and 'not a bullet' not in project['memory']
+    assert '2026-01-01 · Setup' in project['memory'] and '· New session' in project['memory']
+    assert len(project['memory']) <= 20_000
     assert 'PROJECT NOTES' in build_prompt(session['messages'], False, memory=project['memory'])
 
 
