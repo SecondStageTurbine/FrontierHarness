@@ -142,22 +142,20 @@ def board_call(name, arguments):
 
 STATUS = {'type': 'string', 'enum': ['todo', 'doing', 'blocked', 'done']}
 TOOLS = {
-    'approve': {'description': 'Ask the Frontier user whether a tool call may proceed.',
+    'approve': {'description': 'Ask the user whether a tool call may proceed.',
                 'inputSchema': {'type': 'object', 'properties': {'tool_name': {'type': 'string'}, 'input': {'type': 'object'}, 'tool_use_id': {'type': 'string'}}}},
-    'ask_user': {'description': 'Ask the user a question and wait for their answer. Use it when you need a decision or a fact only '
-                                'the user has, and a wrong guess would waste the turn or change something they care about: which of '
-                                'two designs, a name, a credential location, whether to delete something. Do not use it for things '
-                                'you can find out yourself or reasonably decide. Offer options when the answer is a choice.',
+    'ask_user': {'description': 'Ask the user and wait for the answer. Only for a decision or fact only they have, where a wrong '
+                                'guess would waste the turn or change something they care about; not for what you can find out or '
+                                'reasonably decide.',
                  'inputSchema': {'type': 'object', 'required': ['question'], 'properties': {
                      'question': {'type': 'string', 'description': 'One clear question, with the context needed to answer it.'},
                      'options': {'type': 'array', 'items': {'type': 'string'}, 'description': 'Up to six suggested answers; the user may also write their own.'}}}},
-    'board_list': {'description': "List every task on this project's task board, with ids and status.", 'inputSchema': {'type': 'object', 'properties': {}}},
-    'board_add': {'description': "Add a task to this project's task board: real follow-up work the user should see, not a step of this turn.",
+    'board_list': {'description': "The project's task board, with task ids.", 'inputSchema': {'type': 'object', 'properties': {}}},
+    'board_add': {'description': 'Add follow-up work the user should see to the task board; not steps of this turn.',
                   'inputSchema': {'type': 'object', 'required': ['title'], 'properties': {'title': {'type': 'string'}, 'notes': {'type': 'string'}, 'status': STATUS}}},
-    'board_update': {'description': "Change a task on this project's task board: its status when you start, finish or are blocked on it, and notes on what was done.",
+    'board_update': {'description': 'Update a board task when you start, finish or get blocked on it.',
                      'inputSchema': {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}, 'status': STATUS, 'notes': {'type': 'string'}, 'title': {'type': 'string'}}}},
-    'slack_reply': {'description': 'Reply now in a Slack thread this conversation was handed, without ending your turn. Use it when a Slack '
-                                   'message arrives while you work and names the thread_ts to answer. The sender is mentioned for you.',
+    'slack_reply': {'description': 'Answer a Slack message that arrives while you work, without ending your turn. The sender is mentioned for you.',
                     'inputSchema': {'type': 'object', 'required': ['thread_ts', 'text'], 'properties': {
                         'thread_ts': {'type': 'string', 'description': 'The thread_ts given with the Slack message.'},
                         'text': {'type': 'string', 'description': 'The reply, in Slack markdown.'}}}},
