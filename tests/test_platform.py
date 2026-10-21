@@ -16,7 +16,8 @@ from tests.harness import ScriptedAgent, open_project, setup_store, turn
 from tests.test_api import setup, agent as connect_agent
 
 
-def test_mcp_servers_reach_each_tool_in_its_own_spelling(tmp_path):
+def test_mcp_servers_reach_each_tool_in_its_own_spelling(tmp_path, monkeypatch):
+    monkeypatch.setattr('backend.broker.shutil.which', lambda c: None)  # Spelled as on Linux; Windows .cmd wrapping has its own test.
     servers = [{'name': 'graft', 'transport': 'stdio', 'command': 'npx', 'args': ['-y', 'graft-mcp'], 'env': {'A': '1'}},
                {'name': 'docs', 'transport': 'http', 'url': 'https://mcp.example.com/'}]
     approval = {'url': 'http://127.0.0.1:1234', 'token': 't0k', 'command': ['py', '--permission-tool'], 'env': {}}

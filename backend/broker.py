@@ -317,6 +317,15 @@ def remember_commands(store, tenant_id, out):
             return
 
 
+def windows_shim(command, args):
+    """Codex starts an MCP server without a shell, so on Windows a bare `npx` (really npx.cmd) never
+    launches and the server's tools silently go missing; a .cmd or .bat runs through cmd instead."""
+    found = shutil.which(command) if os.name == 'nt' else None
+    if found and found.lower().endswith(('.cmd', '.bat')):
+        return 'cmd', ['/c', command, *args]
+    return command, args
+
+
 def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None):
     """One posture, four spellings. This is the only place the tools differ on power.
 
@@ -390,7 +399,8 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
             if server.get('transport') == 'http':
                 argv += ['-c', f'{key}.url={toml_value(server["url"])}']
             else:
-                argv += ['-c', f'{key}.command={toml_value(server["command"])}', '-c', f'{key}.args={toml_value(server.get("args") or [])}']
+                command, args = windows_shim(server['command'], server.get('args') or [])
+                argv += ['-c', f'{key}.command={toml_value(command)}', '-c', f'{key}.args={toml_value(args)}']
                 if server.get('env'):
                     argv += ['-c', f'{key}.env={toml_value(server["env"])}']
             if server.get('trusted') or mode != 'read':

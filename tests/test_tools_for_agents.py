@@ -211,3 +211,13 @@ def test_a_fresh_browser_can_be_firefox_but_the_users_own_browser_never_is(tmp_p
     agent.ensure_firefox({'agent_browser': True, 'agent_browser_channel': 'firefox'})
     agent.ensure_firefox({'agent_browser': True, 'agent_browser_channel': 'firefox'})
     assert len(runs) == 1 and runs[0][-2:] == ['install-browser', 'firefox']  # Fetched once per run of Frontier.
+
+
+def test_codex_launches_a_windows_npx_server_through_cmd(tmp_path, monkeypatch):
+    import backend.broker as broker
+    monkeypatch.setattr(broker.os, 'name', 'nt')
+    monkeypatch.setattr(broker.shutil, 'which', lambda c: r'C:\nodejs\npx.CMD' if c == 'npx' else None)
+    added = {'name': 'playwright', 'transport': 'stdio', 'command': 'npx', 'args': ['-y', '@playwright/mcp@latest'], 'env': {}}
+    argv = agent_argv('codex_cli', ['codex'], 'gpt-6-sol', 'auto', tmp_path, tmp_path/'f', {'mcp_servers': [added]})
+    assert 'mcp_servers.playwright.command="cmd"' in argv
+    assert 'mcp_servers.playwright.args=["/c", "npx", "-y", "@playwright/mcp@latest"]' in argv
