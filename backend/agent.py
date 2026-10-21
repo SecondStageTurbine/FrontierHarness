@@ -223,11 +223,13 @@ PROCEED_ASK = re.compile(r"\b(?:(?:should|shall|can|may) I|(?:do you want|would 
 NOT_MINE_TO_TAKE = re.compile(r"\b(?:or|which|merge|deploy|release|publish|delete|remove|drop|force|reset|arm|post|send|email|pay|buy)\b", re.I)
 
 
-DO_IT = ('Your last reply has been sent. Now do the work it says you are starting, as far as you can take it in this turn. '
+DO_IT = ('Your last reply has been sent. Now start the work it says you are doing or will deliver, and take it as far as you can in this turn. '
          'Stop only for a decision that only I can make or for something that cannot be undone.')
-# A reply that says the work is under way when the turn is about to end: "I'm starting P9.21", "I'll build it next".
+# A reply that says the work is under way, or promises its result, when the turn is about to end: "I'm starting P9.21",
+# "I'll build it next", "Estimated first head: within 90 minutes", "ETA 18:30".
 COMMITS = re.compile(r"\bI(?:['\u2019]m| am) (?:now )?(?:starting|moving (?:on )?to|picking up|beginning|going to (?:start|build|begin|work))\b"
-                     r"|\bI(?:['\u2019]ll| will) (?:now )?(?:start|begin|build|move (?:on )?to|pick up|get started)\b", re.I)
+                     r"|\bI(?:['\u2019]ll| will) (?:now )?(?:start|begin|build|move (?:on )?to|pick up|get started)\b"
+                     r"|\b(?:ETA|first head|I expect)\b|\bwithin \d+ (?:min|minutes|hours?)\b", re.I)
 
 
 def commits_to_work(reply):

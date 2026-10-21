@@ -250,6 +250,7 @@ def test_saying_the_work_is_starting_counts_as_committing_to_it():
     assert commits_to_work('yes, jcBld3. I’m starting P9.21. Its branch is builder3/p9-21.')
     assert commits_to_work("I'll build the scoring first, then the table.")
     assert commits_to_work("I'm moving to **P9.21**, then P9.18.")
+    assert commits_to_work('Branch: `builder2/p9-1-acceptance`. Estimated first head: within 90 minutes of resuming acceptance work.')
     assert not commits_to_work('P9.21 is merged and tested. Nothing is left on it.')
 
 
@@ -265,7 +266,7 @@ async def test_a_slack_status_answer_that_says_it_is_starting_then_does_the_work
         await asyncio.sleep(0)
     messages = store.get('tenant-a', 'sessions', session['id'])['messages']
     assert [m['role'] for m in messages] == ['user', 'assistant', 'user', 'assistant']  # Once, though it says so again.
-    assert messages[2]['auto_continue'] and messages[2]['unattended'] and 'Now do the work' in messages[2]['content']
+    assert messages[2]['auto_continue'] and messages[2]['unattended'] and 'Now start the work' in messages[2]['content']
 
 
 @pytest.mark.asyncio
