@@ -194,6 +194,7 @@ def test_agents_in_the_users_browser_keep_to_one_tab():
     note = browser_note({'agent_browser': True, 'agent_browser_mode': 'mine'}, '.')
     assert 'Navigate that tab' in note and 'do not open new tabs' in note and 'close that tab' in note
     assert 'open new tabs rather than' not in note
+    assert 'leave it open on that page' in note  # A sign-in the user must finish is not closed under them.
 
 
 def test_a_fresh_browser_can_be_firefox_but_the_users_own_browser_never_is(tmp_path, monkeypatch):
@@ -221,3 +222,22 @@ def test_codex_launches_a_windows_npx_server_through_cmd(tmp_path, monkeypatch):
     argv = agent_argv('codex_cli', ['codex'], 'gpt-6-sol', 'auto', tmp_path, tmp_path/'f', {'mcp_servers': [added]})
     assert 'mcp_servers.playwright.command="cmd"' in argv
     assert 'mcp_servers.playwright.args=["/c", "npx", "-y", "@playwright/mcp@latest"]' in argv
+
+
+def test_the_users_browser_is_started_outside_the_turn_when_closed(tmp_path, monkeypatch):
+    import subprocess
+    from backend import agent
+    monkeypatch.setattr(agent.os, 'name', 'nt')
+    monkeypatch.setenv('PROGRAMFILES', str(tmp_path))
+    exe = tmp_path/'Google/Chrome/Application/chrome.exe'; exe.parent.mkdir(parents=True); exe.write_text('')
+    started = []
+    monkeypatch.setattr(subprocess, 'Popen', lambda argv, **kw: started.append((argv, kw['creationflags'])))
+    running = 'INFO: No tasks are running'
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: subprocess.CompletedProcess(a, 0, stdout=running))
+    project = {'agent_browser': True, 'agent_browser_mode': 'mine', 'agent_browser_channel': 'chrome'}
+    agent.ensure_own_browser(project)
+    assert started == [([str(exe)], 0x01000208)]
+    running = 'chrome.exe  1234 Console'
+    agent.ensure_own_browser(project)
+    agent.ensure_own_browser({**project, 'agent_browser_mode': 'fresh'})
+    assert len(started) == 1

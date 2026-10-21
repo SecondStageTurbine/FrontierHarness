@@ -170,6 +170,26 @@ def ensure_firefox(project):
         pass  # The turn goes on; the browser tool then reports what is missing.
 
 
+def ensure_own_browser(project):
+    """With "my own browser" and the browser closed, the Playwright extension starts it inside the agent's process tree,
+    and it dies when the turn ends, taking a half-done sign-in with it. Frontier starts it first, detached, so it stays."""
+    if os.name != 'nt' or not project.get('agent_browser') or project.get('agent_browser_mode') != 'mine':
+        return
+    import subprocess
+    exe = 'msedge.exe' if project.get('agent_browser_channel') == 'msedge' else 'chrome.exe'
+    running = subprocess.run(['tasklist', '/FI', f'IMAGENAME eq {exe}', '/NH'], capture_output=True, text=True, creationflags=0x08000000).stdout
+    if exe in running.lower():
+        return
+    folder = 'Microsoft/Edge/Application' if exe == 'msedge.exe' else 'Google/Chrome/Application'
+    found = next((p for p in (Path(os.environ.get(v, ''))/folder/exe for v in ('PROGRAMFILES', 'PROGRAMFILES(X86)', 'LOCALAPPDATA')) if p.is_file()), None)
+    if found:
+        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB: not a child of this turn.
+        try:
+            subprocess.Popen([str(found)], creationflags=0x00000008 | 0x00000200 | 0x01000000, close_fds=True)
+        except OSError:
+            subprocess.Popen([str(found)], creationflags=0x00000008 | 0x00000200, close_fds=True)  # A job that forbids breakaway.
+
+
 def browser_note(project, root):
     if not project.get('agent_browser'):
         return None
@@ -183,7 +203,8 @@ def browser_note(project, root):
                 'your connection starts on a tab of its own (a Playwright "Welcome" page). Navigate that tab to the page you need '
                 'and do all your browsing in it, moving it from page to page; do not open new tabs (a tab opened here outlives '
                 'your turn, and a goal or a team runs many turns). As your last browser step, close that tab with the tabs close '
-                'action, and make no browser call after it, so nothing is left behind. Do not touch the user\'s own tabs or '
+                'action, and make no browser call after it, so nothing is left behind, unless you are handing it to the user '
+                '(to sign in, approve, or pick something): then leave it open on that page and tell them it is waiting there. Do not touch the user\'s own tabs or '
                 'change their settings, and do only what the task asks on sites where they are signed in.')
     return ('A real browser is available through the frontier-browser tools (navigate, click, type, read the page, console '
             'messages, screenshots).' + where + ' Use these tools for any web page, not another browser or computer-use tool. '
@@ -803,6 +824,7 @@ class AgentRunner:
         self.turn_tokens[token] = (tenant_id, project_id, session_id, message_id)
         steer = None if message.get('team') else self.steers.setdefault((tenant_id, session_id), Steer())
         await asyncio.to_thread(ensure_firefox, project)
+        await asyncio.to_thread(ensure_own_browser, project)
         extras = self.extras(tenant_id, token, mode, project)
         extras['live'] = self.watch(tenant_id, session_id, message.get('model_name'))
         # Every project gets at least 90 minutes; a project may ask for more, never less.
