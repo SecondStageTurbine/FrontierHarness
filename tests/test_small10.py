@@ -36,6 +36,25 @@ def test_a_spent_manually_chosen_agent_does_not_change_models(tmp_path):
     assert not any('continues this turn' in m for m in events)
 
 
+def test_a_spent_agent_pinned_by_slack_hands_the_turn_on(tmp_path):
+    calls = []
+    async def respond(config, prompt, mode, root):
+        calls.append(config['id'])
+        if config['id'] == 'claude_cli':
+            raise ProviderError('The Claude Code subscription has no usage left in its current window.', retryable=True, exhausted=True)
+        return AgentResult('Finished for you.', 5, 5)
+    store = setup_store(tmp_path/'state'); folder = tmp_path/'work'; folder.mkdir()
+    runner = AgentRunner(store, ScriptedAgent(respond=respond))
+    project, session = open_project(store, runner, 'tenant-a', folder)
+    async def unattended():
+        runner.send('tenant-a', project['id'], session['id'], 'Review this.', 'claude_cli', 'edit', unattended=True)
+        await asyncio.gather(runner.turns[('tenant-a', session['id'])], return_exceptions=True)
+        return store.get('tenant-a', 'sessions', session['id'])
+    reply = asyncio.run(unattended())['messages'][-1]
+    assert reply['status'] == 'complete' and reply['content'] == 'Finished for you.'
+    assert calls[0] == 'claude_cli' and calls[-1] != 'claude_cli'
+
+
 def test_with_no_other_agent_a_spent_subscription_still_fails_the_turn(tmp_path):
     async def respond(config, prompt, mode, root):
         raise ProviderError('spent', retryable=True, exhausted=True)

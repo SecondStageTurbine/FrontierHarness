@@ -20,7 +20,7 @@ class Runner:
         return [model for model in self.store.list(tenant_id, 'models')
                 if model['provider'] in ('claude_cli', 'codex_cli', 'opencode_cli', 'gemini_cli') and model.get('enabled', True)]
 
-    def send(self, tenant_id, project_id, session_id, content, model_id, mode):
+    def send(self, tenant_id, project_id, session_id, content, model_id, mode, unattended=False):
         self.sent.append((content, model_id, mode))
         session = self.store.get(tenant_id, 'sessions', session_id)
         session['messages'] += [{'id': uid(), 'role': 'user', 'content': content}, {'id': uid(), 'role': 'assistant', 'content': '', 'status': 'running'}]

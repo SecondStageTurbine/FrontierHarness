@@ -564,14 +564,15 @@ class AgentRunner:
         return self.send(tenant_id, project_id, session_id, 'Continue the team\u2019s work where it stopped.', last['model_id'], last['mode'],
                          team={'objective': asked, **last['team']})
 
-    def send(self, tenant_id, project_id, session_id, content, model_id, mode, queue=False, team=False, context=None):
+    def send(self, tenant_id, project_id, session_id, content, model_id, mode, queue=False, team=False, context=None, unattended=False):
         """Record the message, start the turn, and answer immediately.
 
         The reply is written into a message that already exists and is marked running, so the
         conversation shows the turn in progress instead of appearing empty until it finishes.
         With Adaptive selected the agent is not yet known; it is chosen at the start of the turn
         and the message says so until then. While a turn is running, `queue` keeps the message
-        for the moment it finishes instead of refusing it.
+        for the moment it finishes instead of refusing it. An `unattended` turn (one from Slack) has nobody
+        watching to pick another agent, so a spent pinned agent hands it on like Adaptive would.
         """
         if mode not in MODES:
             raise ValueError('Choose read only, edit files, or full auto.')
@@ -610,7 +611,7 @@ class AgentRunner:
                  'model_name': 'Adaptive' if adaptive_turn else config['name'],
                  'provider': None if adaptive_turn else config['provider'],
                  'mode': mode, 'switched_from': switched_from,
-                 'routing': {'mode': 'adaptive', 'status': 'choosing'} if adaptive_turn else {'mode': 'manual'},
+                 'routing': {'mode': 'adaptive', 'status': 'choosing'} if adaptive_turn else {'mode': 'manual', **({'unattended': True} if unattended else {})},
                  'changes': [], 'input_tokens': None, 'output_tokens': None,
                  'created_at': now(), 'finished_at': None}
         if team:
@@ -925,9 +926,9 @@ class AgentRunner:
                 except ProviderError as exc:
                     # Adaptive and automatically assigned team workers may route around an unavailable
                     # or spent agent. A user's manual choice stays pinned and reports the failure instead
-                    # of silently changing the model. An agent stopped after doing work is never handed
-                    # over because its work is already in the folder.
-                    failover = (adaptive_turn and exc.exhausted) or \
+                    # of silently changing the model, unless nobody is there to read it (a Slack turn).
+                    # An agent stopped after doing work is never handed over because its work is already in the folder.
+                    failover = ((adaptive_turn or message['routing'].get('unattended')) and exc.exhausted) or \
                                (bool(session.get('team_parent')) and (exc.exhausted or not exc.worked))
                     following = await self.fallback(tenant_id, tried, None if exc.exhausted else config['provider'],
                                                     (message.get('routing') or {}).get('requirements'), mode=mode) if failover and spare else None

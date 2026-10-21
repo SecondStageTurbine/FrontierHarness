@@ -338,7 +338,7 @@ async def step(store, runner, tenant_id, session, client, headers):
         store.event(tenant_id, session['id'], 'slack.assignment', f'Slack routed this message to {identity}.')
     try:
         session = runner.send(tenant_id, session['project_id'], session['id'], prompt(listen, message),
-                              selected['id'] if selected else listen['model_id'], listen['mode'])
+                              selected['id'] if selected else listen['model_id'], listen['mode'], unattended=True)
     except Exception as exc:
         await call(client, headers, 'chat.postMessage', channel=listen['channel'], thread_ts=message.get('thread_ts', message['ts']), text=f'{PREFIX}could not start: {exc}')
         return
