@@ -22,6 +22,8 @@ export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,o
  const found=useResource<{hits:{path:string;line:number;text:string}[];files:number;truncated:boolean}>(`/projects/${project.id}/search?q=${encodeURIComponent(deferred)}${scope?`&${scope}`:''}`,deferred.length>=2&&tab==='Files');
  const [split,setSplit]=useState(false),[command,setCommand]=useState(''),[running,setRunning]=useState(false),[error,setError]=useState('');
  const [changeId,setChangeId]=useState('');
+ const tabList=useRef<HTMLDivElement>(null);
+ useEffect(()=>{tabList.current?.querySelector('.selected')?.scrollIntoView({block:'nearest',inline:'nearest'})},[tab]);
  // Every turn's edits, newest last, so the panel shows the conversation's whole effect on the
  // folder rather than only the last message's.
  const changes:FileChange[]=(session?.messages||[]).flatMap(m=>m.changes||[]);
@@ -30,7 +32,7 @@ export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,o
  useEffect(()=>{void tree.refetch()},[changes.length]);
  const selected=changes.find(c=>c.id===changeId)||[...changes].reverse().find(c=>c.path===filePath)||changes.at(-1);
  return <aside className="context-inspector">
-  <div className="inspector-tabs">{(['Activity','Files','Changes','Terminal','Preview','Tasks','Turns'] as InspectorTab[]).map(t=><button key={t} className={tab===t?'selected':''} onClick={()=>onTab(t)}>{t}</button>)}{!popped&&<button className="icon-button" title="Open this panel in its own window" aria-label="Pop out panel" onClick={()=>{void popOut(tab);onClose()}}><ExternalLink size={14}/></button>}<button className="icon-button" title="Close panel" aria-label="Close contextual panel" onClick={onClose}><X size={15}/></button></div>
+  <div className="inspector-tabs"><div className="inspector-tab-list" ref={tabList}>{(['Activity','Files','Changes','Terminal','Preview','Tasks','Turns'] as InspectorTab[]).map(t=><button key={t} className={tab===t?'selected':''} onClick={()=>onTab(t)}>{t}</button>)}</div>{!popped&&<button className="icon-button" title="Open this panel in its own window" aria-label="Pop out panel" onClick={()=>{void popOut(tab);onClose()}}><ExternalLink size={14}/></button>}<button className="icon-button" title="Close panel" aria-label="Close contextual panel" onClick={onClose}><X size={15}/></button></div>
   <div className="inspector-content">
    {tab==='Activity'&&<LiveActivity projectId={project.id} sessionId={session?.id}/>}
    {tab==='Tasks'&&<TaskBoard project={project} onOpenSession={onOpenSession}/>}

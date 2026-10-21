@@ -1,7 +1,7 @@
 """A turn is one message answered by one agent, in the project folder."""
 import asyncio
 import pytest
-from backend.agent import AgentRunner, build_prompt, changes_between, fingerprint, turn_record
+from backend.agent import AgentRunner, asks_to_proceed, build_prompt, changes_between, fingerprint, turn_record
 from backend.broker import AgentResult, ProviderError
 from backend.projects import ProjectFiles
 from tests.harness import ScriptedAgent, open_project, setup_store, turn
@@ -215,3 +215,43 @@ async def test_a_project_can_give_its_turns_more_time(tmp_path):
     store.put('tenant-a', 'projects', project)
     await turn(runner, store, 'tenant-a', project, session, 'Again.', 'claude_cli', 'read')
     assert agent.calls[-1]['extras']['timeout'] == 90*60
+
+
+def test_only_a_plain_request_to_start_counts_as_asking_leave():
+    assert asks_to_proceed("I haven't re-verified the branch. Should I start the rebase and tests now?")
+    assert asks_to_proceed('Want me to open the draft PR?')
+    assert not asks_to_proceed('Should I use Postgres or SQLite?')  # A choice is the user's.
+    assert not asks_to_proceed('Should I merge it?')  # So is anything that cannot be taken back.
+    assert not asks_to_proceed('Done. Should I start? No, it is finished.')
+    assert not asks_to_proceed('What should the title be?')
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_asks_whether_to_start_is_told_to_go_ahead_once(tmp_path):
+    prompts = []
+    async def respond(config, prompt, mode, root):
+        prompts.append(prompt)
+        return AgentResult('The rebase is next. Should I start it now?', 5, 5)  # Asks every time.
+    store, runner, project, session, _ = make(tmp_path, ScriptedAgent(respond=respond))
+    runner.send('tenant-a', project['id'], session['id'], 'Do you have work to do?', 'claude_cli', 'edit')
+    for _ in range(20):
+        task = runner.turns.get(('tenant-a', session['id']))
+        if task is None:
+            break
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.sleep(0)
+    messages = store.get('tenant-a', 'sessions', session['id'])['messages']
+    assert [m['role'] for m in messages] == ['user', 'assistant', 'user', 'assistant']  # One yes, never a loop.
+    assert messages[2]['auto_continue'] and 'go ahead' in messages[2]['content']
+    assert any(e['type'] == 'turn.carried_on' for e in store.events('tenant-a', session['id']))
+
+
+@pytest.mark.asyncio
+async def test_a_question_put_to_a_slack_sender_or_in_read_only_waits(tmp_path):
+    store, runner, project, session, _ = make(tmp_path, ScriptedAgent(reply='Should I start it now?'))
+    runner.send('tenant-a', project['id'], session['id'], 'From Slack.', 'claude_cli', 'edit', unattended=True)
+    await asyncio.gather(runner.turns[('tenant-a', session['id'])], return_exceptions=True)
+    await asyncio.sleep(0)
+    await turn(runner, store, 'tenant-a', project, session, 'Look only.', mode='read')
+    await asyncio.sleep(0)
+    assert len(store.get('tenant-a', 'sessions', session['id'])['messages']) == 4 and not runner.turns

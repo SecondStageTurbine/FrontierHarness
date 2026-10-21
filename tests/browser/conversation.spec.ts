@@ -228,6 +228,12 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await expect(page.locator('.turn-ledger')).toContainText('Latest prompt');
  await expect(page.locator('.ledger-part',{hasText:'Transcript'})).toBeVisible();
  expect(await page.locator('.ledger-table tbody tr').count()).toBeGreaterThan(0);
+ // However many tabs there are, the close button stays inside the panel, even at its narrowest.
+ const resizer=page.getByRole('separator',{name:'Resize contextual panel'});
+ for(let i=0;i<15;i++)await resizer.press('ArrowRight');
+ const panelBox=(await page.locator('.context-inspector').boundingBox())!,closeBox=(await page.getByRole('button',{name:'Close contextual panel'}).boundingBox())!;
+ expect(closeBox.x+closeBox.width).toBeLessThanOrEqual(panelBox.x+panelBox.width);
+ await page.locator('.inspector-tabs').screenshot({path:'test-results/inspector-tabs.png'});
  await page.locator('.inspector-tabs button',{hasText:'Tasks'}).click();
 
  // Pop out: the panel opens in its own window, which follows the project the main window has open.

@@ -197,10 +197,12 @@ body{overflow:hidden}
 .context-inspector{width:var(--inspector-width);flex:0 0 auto;display:flex;flex-direction:column;
  background:var(--surface);overflow:hidden}
 .inspector-tabs{display:flex;align-items:center;gap:2px;padding:7px 8px;height:44px;flex:0 0 auto;border-bottom:1px solid var(--border)}
-.inspector-tabs>button{border:0;background:transparent;color:var(--subtle);padding:5px 10px;font-size:11.5px}
-.inspector-tabs>button:hover{background:var(--card);color:var(--foreground)}
-.inspector-tabs>button.selected{background:var(--elevated);color:var(--foreground)}
+.inspector-tabs button{border:0;white-space:nowrap;flex:0 0 auto;background:transparent;color:var(--subtle);padding:5px 10px;font-size:11.5px}
+.inspector-tabs button:hover{background:var(--card);color:var(--foreground)}
+.inspector-tabs button.selected{background:var(--elevated);color:var(--foreground)}
 .inspector-tabs>button.icon-button{margin-left:auto}
+/* The pop-out and close buttons never get pushed off: the named tabs scroll instead. */
+.inspector-tab-list{display:flex;gap:2px;flex:1 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none}.inspector-tab-list::-webkit-scrollbar{display:none}.inspector-tabs>button.icon-button{flex:0 0 auto}.inspector-tabs>button.icon-button+button.icon-button{margin-left:0}
 .inspector-content{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column}
 .inspector-empty{padding:18px 14px;color:var(--subtle);font-size:11.5px;line-height:1.6}
 

@@ -215,7 +215,22 @@ def browser_note(project, root):
             'take a screenshot, and report what you saw, not what you expect.')
 
 
-MIDTURN = 'The user sent this while you were working. Take it into account now, without dropping what you were doing:\n\n'
+CARRY_ON = ('Yes, go ahead now with the work you described. Do not ask again whether to start; stop only for a decision '
+            'that only I can make or for something that cannot be undone.')
+# A reply that ends by asking leave to start: "Should I start the rebase now?", "Want me to open the PR?".
+PROCEED_ASK = re.compile(r"\b(?:(?:should|shall|can|may) I|(?:do you want|would you like|want) me to|(?:ready|ok|okay) to)\b", re.I)
+# A choice, or a step that cannot be taken back, stays with the user.
+NOT_MINE_TO_TAKE = re.compile(r"\b(?:or|which|merge|deploy|release|publish|delete|remove|drop|force|reset|arm|post|send|email|pay|buy)\b", re.I)
+
+
+def asks_to_proceed(reply):
+    """Whether a reply ends with a plain request for leave to start the work it describes."""
+    question = (reply or '').strip().rsplit('\n', 1)[-1].strip()
+    question = re.split(r'(?<=[.!])\s+', question)[-1]
+    return question.endswith('?') and bool(PROCEED_ASK.search(question)) and not NOT_MINE_TO_TAKE.search(question)
+
+
+MIDTURN ='The user sent this while you were working. Take it into account now, without dropping what you were doing:\n\n'
 
 
 def resumable(session, config, root, project, message):
@@ -634,7 +649,8 @@ class AgentRunner:
         # turn decides this once it has chosen.
         previous = self.previous_agent(session, None)
         switched_from = previous['model_name'] if previous and not adaptive_turn and previous['model_id'] != model_id else None
-        session['messages'].append({'id': uid(), 'role': 'user', 'content': content, 'created_at': now(), 'context': [c for c in (context or []) if c]})
+        session['messages'].append({'id': uid(), 'role': 'user', 'content': content, 'created_at': now(), 'context': [c for c in (context or []) if c],
+                                    **({'unattended': True} if unattended else {})})
         reply = {'id': uid(), 'role': 'assistant', 'content': '', 'status': 'running', 'error': None,
                  'model_id': None if adaptive_turn else model_id,
                  'model_name': 'Adaptive' if adaptive_turn else config['name'],
@@ -699,7 +715,9 @@ class AgentRunner:
             return  # The conversation went away with its project; nothing left to run.
         queued = session.get('queue') or []
         if not queued and not self.busy(tenant_id, session_id):
-            return self.advance_goal(tenant_id, project_id, session)
+            if (session.get('goal') or {}).get('status') == 'active':
+                return self.advance_goal(tenant_id, project_id, session)
+            return self.carry_on(tenant_id, project_id, session)
         if not queued or self.busy(tenant_id, session_id):
             return
         item, session['queue'] = queued[0], queued[1:]
@@ -768,6 +786,29 @@ class AgentRunner:
         except (ValueError, FileNotFoundError, TenantIsolationViolationException) as exc:
             goal.update(status='paused', note=f'The next turn could not start: {exc}')
             self.store.put(tenant_id, 'sessions', session)
+
+    def carry_on(self, tenant_id, project_id, session):
+        """A turn that ended by asking whether to start the work it just described gets a yes, once.
+
+        Asking leaves the work waiting on someone who already asked for it. Only a plain go-ahead is
+        given: a choice between options, anything irreversible, or a question put to a Slack sender
+        still waits for the person asked."""
+        messages = session.get('messages') or []
+        if len(messages) < 2:
+            return
+        asked, last = messages[-2], messages[-1]
+        if last['role'] != 'assistant' or last.get('status') != 'complete' or last.get('team') or last.get('mode') == 'read' \
+                or asked.get('auto_continue') or asked.get('unattended') or not asks_to_proceed(last.get('content')):
+            return
+        adaptive_turn = (last.get('routing') or {}).get('mode') == 'adaptive'
+        try:
+            session = self.send(tenant_id, project_id, session['id'], CARRY_ON, ADAPTIVE if adaptive_turn else last['model_id'], last['mode'])
+        except (ValueError, FileNotFoundError, TenantIsolationViolationException) as exc:
+            self.store.event(tenant_id, session['id'], 'turn.carry_on_failed', f'Could not go on by itself: {exc}')
+            return
+        session['messages'][-2]['auto_continue'] = True  # Marks the yes as Frontier's, so it is never given twice in a row.
+        self.store.put(tenant_id, 'sessions', session)
+        self.store.event(tenant_id, session['id'], 'turn.carried_on', f'{last.get("model_name") or "The agent"} asked whether to start; Frontier told it to go ahead.')
 
     def inject(self, tenant_id, session_id, content, model_id=None, mode=None):
         """Hand a message to the agent of the running turn, which reads it at its next step, and record it in the
