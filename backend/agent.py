@@ -223,6 +223,18 @@ PROCEED_ASK = re.compile(r"\b(?:(?:should|shall|can|may) I|(?:do you want|would 
 NOT_MINE_TO_TAKE = re.compile(r"\b(?:or|which|merge|deploy|release|publish|delete|remove|drop|force|reset|arm|post|send|email|pay|buy)\b", re.I)
 
 
+DO_IT = ('Your last reply has been sent. Now do the work it says you are starting, as far as you can take it in this turn. '
+         'Stop only for a decision that only I can make or for something that cannot be undone.')
+# A reply that says the work is under way when the turn is about to end: "I'm starting P9.21", "I'll build it next".
+COMMITS = re.compile(r"\bI(?:['\u2019]m| am) (?:now )?(?:starting|moving (?:on )?to|picking up|beginning|going to (?:start|build|begin|work))\b"
+                     r"|\bI(?:['\u2019]ll| will) (?:now )?(?:start|begin|build|move (?:on )?to|pick up|get started)\b", re.I)
+
+
+def commits_to_work(reply):
+    """Whether a reply says the agent is starting work that the turn, by ending, leaves undone."""
+    return bool(COMMITS.search(reply or ''))
+
+
 def asks_to_proceed(reply):
     """Whether a reply ends with a plain request for leave to start the work it describes."""
     question = (reply or '').strip().rsplit('\n', 1)[-1].strip()
@@ -788,7 +800,8 @@ class AgentRunner:
             self.store.put(tenant_id, 'sessions', session)
 
     def carry_on(self, tenant_id, project_id, session):
-        """A turn that ended by asking whether to start the work it just described gets a yes, once.
+        """A turn that ended by asking whether to start the work it just described gets a yes, once; one that
+        said it is starting the work, and then ended, is told to do it, once.
 
         Asking leaves the work waiting on someone who already asked for it. Only a plain go-ahead is
         given: a choice between options, anything irreversible, or a question put to a Slack sender
@@ -798,17 +811,25 @@ class AgentRunner:
             return
         asked, last = messages[-2], messages[-1]
         if last['role'] != 'assistant' or last.get('status') != 'complete' or last.get('team') or last.get('mode') == 'read' \
-                or asked.get('auto_continue') or asked.get('unattended') or not asks_to_proceed(last.get('content')):
+                or asked.get('auto_continue'):
+            return
+        if not asked.get('unattended') and asks_to_proceed(last.get('content')):
+            content = CARRY_ON
+        elif commits_to_work(last.get('content')):
+            content = DO_IT  # Said it is starting, then ended the turn: a status answer to Slack does this.
+        else:
             return
         adaptive_turn = (last.get('routing') or {}).get('mode') == 'adaptive'
         try:
-            session = self.send(tenant_id, project_id, session['id'], CARRY_ON, ADAPTIVE if adaptive_turn else last['model_id'], last['mode'])
+            session = self.send(tenant_id, project_id, session['id'], content, ADAPTIVE if adaptive_turn else last['model_id'], last['mode'],
+                                unattended=bool(asked.get('unattended')))
         except (ValueError, FileNotFoundError, TenantIsolationViolationException) as exc:
             self.store.event(tenant_id, session['id'], 'turn.carry_on_failed', f'Could not go on by itself: {exc}')
             return
         session['messages'][-2]['auto_continue'] = True  # Marks the yes as Frontier's, so it is never given twice in a row.
         self.store.put(tenant_id, 'sessions', session)
-        self.store.event(tenant_id, session['id'], 'turn.carried_on', f'{last.get("model_name") or "The agent"} asked whether to start; Frontier told it to go ahead.')
+        self.store.event(tenant_id, session['id'], 'turn.carried_on', f'{last.get("model_name") or "The agent"} ' + ('asked whether to start; Frontier told it to go ahead.' if content == CARRY_ON
+                                                                     else 'said it was starting work and ended its turn; Frontier told it to do the work.'))
 
     def inject(self, tenant_id, session_id, content, model_id=None, mode=None):
         """Hand a message to the agent of the running turn, which reads it at its next step, and record it in the

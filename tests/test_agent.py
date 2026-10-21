@@ -1,7 +1,7 @@
 """A turn is one message answered by one agent, in the project folder."""
 import asyncio
 import pytest
-from backend.agent import AgentRunner, asks_to_proceed, build_prompt, changes_between, fingerprint, turn_record
+from backend.agent import AgentRunner, asks_to_proceed, commits_to_work, build_prompt, changes_between, fingerprint, turn_record
 from backend.broker import AgentResult, ProviderError
 from backend.projects import ProjectFiles
 from tests.harness import ScriptedAgent, open_project, setup_store, turn
@@ -244,6 +244,28 @@ async def test_a_turn_that_asks_whether_to_start_is_told_to_go_ahead_once(tmp_pa
     assert [m['role'] for m in messages] == ['user', 'assistant', 'user', 'assistant']  # One yes, never a loop.
     assert messages[2]['auto_continue'] and 'go ahead' in messages[2]['content']
     assert any(e['type'] == 'turn.carried_on' for e in store.events('tenant-a', session['id']))
+
+
+def test_saying_the_work_is_starting_counts_as_committing_to_it():
+    assert commits_to_work('yes, jcBld3. I’m starting P9.21. Its branch is builder3/p9-21.')
+    assert commits_to_work("I'll build the scoring first, then the table.")
+    assert commits_to_work("I'm moving to **P9.21**, then P9.18.")
+    assert not commits_to_work('P9.21 is merged and tested. Nothing is left on it.')
+
+
+@pytest.mark.asyncio
+async def test_a_slack_status_answer_that_says_it_is_starting_then_does_the_work(tmp_path):
+    store, runner, project, session, _ = make(tmp_path, ScriptedAgent(reply="I'm starting P9.21 now; first head by 18:30."))
+    runner.send('tenant-a', project['id'], session['id'], 'From Slack: what are you on?', 'claude_cli', 'edit', unattended=True)
+    for _ in range(20):
+        task = runner.turns.get(('tenant-a', session['id']))
+        if task is None:
+            break
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.sleep(0)
+    messages = store.get('tenant-a', 'sessions', session['id'])['messages']
+    assert [m['role'] for m in messages] == ['user', 'assistant', 'user', 'assistant']  # Once, though it says so again.
+    assert messages[2]['auto_continue'] and messages[2]['unattended'] and 'Now do the work' in messages[2]['content']
 
 
 @pytest.mark.asyncio
