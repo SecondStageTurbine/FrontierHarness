@@ -15,6 +15,7 @@ handoff. A manual choice is never second-guessed.
 import asyncio
 import logging
 from collections import deque
+from datetime import datetime
 import os
 import re
 import secrets
@@ -38,6 +39,8 @@ TRANSCRIPT_LIMIT = 120_000
 AUTO_COMPACT_RATIO = .8
 # The shortest time an agent gets for one turn, in any project. Engine builds and test gates run long.
 MIN_TURN_MINUTES = 90
+# How many turns a session's ledger keeps; older records fall off the front.
+LEDGER_TURNS = 200
 HANDOVER = (
     'You are continuing a conversation that a different agent was handling. The conversation so '
     'far follows. Your working directory is the project it concerns and is the shared state '
@@ -253,41 +256,67 @@ def context_usage(session):
     return {'chars': chars, 'limit': TRANSCRIPT_LIMIT, 'dropped': dropped, 'compacted': compacted}
 
 
-def build_prompt(messages, switched, handoff=None, mode=None, summary=None, first=False, rules=None, memory=None, environment=None, board=None):
+def build_prompt(messages, switched, handoff=None, mode=None, summary=None, first=False, rules=None, memory=None, environment=None, board=None, composition=None):
     """Instructions, then as much of the conversation as fits, ending at the new message.
 
     A handoff, when present, is what a previous agent left behind on this same turn; it goes
     ahead of the conversation so the next agent continues rather than starts over. A summary
-    stands in for messages that were compacted away.
+    stands in for messages that were compacted away. A `composition` dict, when given, is filled
+    with the characters each part took and how many messages were dropped, for the turn ledger.
     """
     lines = transcript(messages)
     dropped = 0
     while len('\n\n'.join(lines)) > TRANSCRIPT_LIMIT and len(lines) > 1:
         lines.pop(0)
         dropped += 1
-    head = (HANDOVER if switched else CONTINUING) + ' ' + HOST
+    parts, chars = [], {}
+
+    def add(part, text):
+        parts.append(text)
+        chars[part] = chars.get(part, 0) + len(text)
+    add('instructions', (HANDOVER if switched else CONTINUING) + ' ' + HOST)
     if mode in POSTURE:
-        head += ' ' + POSTURE[mode]
+        add('instructions', ' ' + POSTURE[mode])
     if first:
-        head += ' ' + TITLE_ASK
+        add('instructions', ' ' + TITLE_ASK)
     if dropped:
-        head += f' The first {dropped} messages of this conversation were dropped to fit; say so if one is needed.'
+        add('instructions', f' The first {dropped} messages of this conversation were dropped to fit; say so if one is needed.')
     if handoff:
-        head += '\n\n' + handoff
+        add('handoff', '\n\n' + handoff)
     if rules and rules.strip():
-        head += '\n\nWORKSPACE RULES (set by the user; follow them in every turn):\n' + rules.strip()[:8000]
+        add('rules', '\n\nWORKSPACE RULES (set by the user; follow them in every turn):\n' + rules.strip()[:8000])
     if memory and memory.strip():
-        head += '\n\nPROJECT NOTES (kept by the user and earlier conversations about this project):\n' + memory.strip()[:20000]
+        add('notes', '\n\nPROJECT NOTES (kept by the user and earlier conversations about this project):\n' + memory.strip()[:20000])
     if environment:
-        head += '\n\nPROJECT ENVIRONMENT: ' + environment
+        add('environment', '\n\nPROJECT ENVIRONMENT: ' + environment)
     if board:
-        head += ('\n\nPROJECT TASK BOARD (open tasks shared by every session in this project). When this turn finishes, '
-                 'advances or blocks one of them, update it with the frontier board_update tool if you have it; otherwise '
-                 'say in your reply which task changed. Add a task with board_add only for real follow-up work the user '
-                 'should see, not for steps of this turn.\n' + board)
+        add('board', '\n\nPROJECT TASK BOARD (open tasks shared by every session in this project). When this turn finishes, '
+                     'advances or blocks one of them, update it with the frontier board_update tool if you have it; otherwise '
+                     'say in your reply which task changed. Add a task with board_add only for real follow-up work the user '
+                     'should see, not for steps of this turn.\n' + board)
     if summary:
-        head += '\n\nEarlier messages of this conversation were compacted into this summary:\n' + summary
-    return head + '\n\n' + '\n\n'.join(lines)
+        add('summary', '\n\nEarlier messages of this conversation were compacted into this summary:\n' + summary)
+    add('transcript', '\n\n' + '\n\n'.join(lines))
+    if composition is not None:
+        composition.update(chars=chars, dropped=dropped)
+    return ''.join(parts)
+
+
+def turn_record(session, message, ledger):
+    """One finished turn's line in the session ledger: who answered, how long it took, and where its context went."""
+    chars = ledger.get('chars') or {}
+    routing = message.get('routing') or {}
+    finished = message.get('finished_at') or now()
+    try:
+        seconds = round((datetime.fromisoformat(finished) - datetime.fromisoformat(ledger['started_at'])).total_seconds(), 1)
+    except (KeyError, TypeError, ValueError):
+        seconds = None
+    return {'message_id': message['id'], 'status': message.get('status'), 'agent': message.get('model_name'),
+            'model': ledger.get('model'), 'started_at': ledger.get('started_at'), 'finished_at': finished, 'seconds': seconds,
+            'input_tokens': message.get('input_tokens'), 'output_tokens': message.get('output_tokens'),
+            'chars': chars, 'prompt_chars': sum(chars.values()), 'dropped': ledger.get('dropped', 0),
+            'compacted': (session.get('summary') or {}).get('count', 0),
+            'escalated': bool(routing.get('escalations')), 'fallbacks': routing.get('fallbacks', 0)}
 
 
 def take_title(text):
@@ -557,7 +586,7 @@ class AgentRunner:
         """Pick a stopped team back up: the same lead, posture and plan, with only unfinished tasks run again."""
         session = self.store.get(tenant_id, 'sessions', session_id)
         last = session['messages'][-1] if session['messages'] else {}
-        if not last.get('team', {}).get('tasks') or last.get('status') not in ('cancelled', 'failed'):
+        if not last.get('team', {}).get('tasks') or last.get('status') not in ('cancelled', 'failed', 'interrupted'):
             raise ValueError('Only a team that stopped before finishing can be continued.')
         # A team from before 0.20.8 did not record its request; it is the message that started it.
         asked = next((m['content'] for m in reversed(session['messages']) if m['role'] == 'user'), '')
@@ -628,11 +657,38 @@ class AgentRunner:
         self.store.event(tenant_id, session_id, 'turn.started',
                          ('Adaptive is choosing an agent' if adaptive_turn else f'{config["name"]} is working') + f' in {project["name"]}.',
                          message_id=reply['id'], mode=mode)
+        self.launch(tenant_id, project_id, session_id, reply['id'], config, mode)
+        return session
+
+    def launch(self, tenant_id, project_id, session_id, message_id, config, mode):
         key = (tenant_id, session_id)
-        task = asyncio.create_task(self.run_turn(tenant_id, project_id, session_id, reply['id'], config, mode))
+        task = asyncio.create_task(self.run_turn(tenant_id, project_id, session_id, message_id, config, mode))
         self.turns[key] = task
         task.add_done_callback(lambda finished: self.turns.pop(key, None) if self.turns.get(key) is finished else None)
         task.add_done_callback(lambda finished: self.drain(tenant_id, project_id, session_id))
+
+    def resume(self, tenant_id, project_id, session_id, message_id):
+        """Run a turn a restart interrupted again, on the same message, agent and posture.
+
+        Only the user starts this. The prompt is rebuilt from the stored transcript and the folder
+        holds whatever the interrupted run already wrote, so nothing it knew is lost.
+        """
+        self.ensure_idle(tenant_id, session_id)
+        session = self.store.get(tenant_id, 'sessions', session_id)
+        message = session['messages'][-1] if session['messages'] else {}
+        if message.get('id') != message_id or message.get('status') != 'interrupted':
+            raise ValueError('Only the last turn, interrupted by a restart, can be resumed.')
+        if message.get('team'):
+            raise ValueError('Continue the team instead; its finished tasks are kept.')
+        adaptive_turn = (message.get('routing') or {}).get('mode') == 'adaptive'
+        config = None if adaptive_turn else self.select(tenant_id, message['model_id'])
+        message.update(status='running', error=None, content='', finished_at=None)
+        if adaptive_turn:
+            message['routing'] = {'mode': 'adaptive', 'status': 'choosing'}
+        session['updated_at'] = now()
+        self.store.put(tenant_id, 'sessions', session)
+        self.store.event(tenant_id, session_id, 'turn.resumed', f'Resumed the interrupted turn with {message["model_name"]}.', message_id=message_id)
+        self.launch(tenant_id, project_id, session_id, message_id, config, message.get('mode') or 'edit')
         return session
 
     def drain(self, tenant_id, project_id, session_id):
@@ -853,6 +909,7 @@ class AgentRunner:
                                                    self.checkpoint(root, f'Frontier: before turn {message_id}'))) if mode != 'read' else ({}, None)
         status, error, result = 'complete', None, None
         attempts, tried, handoff_text, ranked = [], set(), None, []
+        started, composition = now(), {}  # For the turn ledger: what the last prompt sent was made of.
         try:
             if adaptive_turn:
                 config, ranked = await self.route(tenant_id, project_id, session, message)
@@ -886,7 +943,7 @@ class AgentRunner:
                 message = next(m for m in session['messages'] if m['id'] == message_id)
                 visible, summary = conversation(session)
                 objective = message['team'].get('objective') or next(m['content'] for m in reversed(session['messages']) if m['role'] == 'user')
-                lead_prompt = build_prompt(visible, False, None, 'read', summary, rules=rules, memory=memory, environment=environment, board=board_text)
+                lead_prompt = build_prompt(visible, False, None, 'read', summary, rules=rules, memory=memory, environment=environment, board=board_text, composition=composition)
                 result = await teamwork.Team(self, tenant_id, project_id, session_id, message_id, config, mode, root).run(lead_prompt, objective)
             rounds = 0 if message.get('team') else 1 + (MAX_ESCALATIONS if adaptive_turn else 0)
             spare = 2  # How many times a spent agent may hand this turn to another agent.
@@ -897,11 +954,13 @@ class AgentRunner:
                 extras['effort'] = effort if config['provider'] == 'codex_cli' else None
                 visible, summary = conversation(session)
                 prompt = build_prompt(visible, bool(message.get('switched_from')), handoff_text, mode, summary,
-                                      first=sum(1 for m in session['messages'] if m['role'] == 'user') == 1, rules=rules, memory=memory, environment=environment, board=board_text)
+                                      first=sum(1 for m in session['messages'] if m['role'] == 'user') == 1, rules=rules, memory=memory, environment=environment, board=board_text,
+                                      composition=composition)
                 native = resumable(session, config, root, project, message)
                 cmd = command if command and config['provider'] in ('claude_cli', 'opencode_cli') else None
                 if cmd:
                     prompt = cmd['raw'] if config['provider'] == 'claude_cli' else ''
+                    composition.update(chars={'command': len(prompt)}, dropped=0)
                 turn_extras = {**extras, 'slash': cmd} if cmd and config['provider'] == 'opencode_cli' else extras
                 if steer is not None and not cmd:
                     turn_extras = {**turn_extras, 'steer': steer}
@@ -912,7 +971,7 @@ class AgentRunner:
                         # only what was said since it last spoke is sent. A session it cannot find falls back to the replay.
                         fresh = [m for m in session['messages'][native['upto']:] if m['id'] != message_id]
                         try:
-                            result = await self.broker.invoke_agent(tenant_id, config, prompt if cmd else build_prompt(fresh, False, handoff_text, mode, rules=rules, memory=memory, environment=environment, board=board_text),
+                            result = await self.broker.invoke_agent(tenant_id, config, prompt if cmd else build_prompt(fresh, False, handoff_text, mode, rules=rules, memory=memory, environment=environment, board=board_text, composition=composition),
                                                                     mode, root, {**turn_extras, 'resume': native['id']})
                             result.resumed = True
                         except ProviderError as exc:
@@ -1004,7 +1063,8 @@ class AgentRunner:
                 except (OSError, ValueError, asyncio.CancelledError):
                     after_print = None
             self.finish(tenant_id, project_id, session_id, message_id, status, error, result, before, mode, attempts, after=after_print,
-                        checkpoint={'before': before_ref, 'after': after_ref} if before_ref and after_ref else None)
+                        checkpoint={'before': before_ref, 'after': after_ref} if before_ref and after_ref else None,
+                        ledger={'started_at': started, 'model': (config or {}).get('model_name'), **composition})
 
     async def checkpoint(self, root, label):
         try:
@@ -1012,7 +1072,7 @@ class AgentRunner:
         except (gitops.GitError, OSError, asyncio.CancelledError):
             return None  # A folder that is not a repository, or a git that cannot run, simply has no checkpoint.
 
-    def finish(self, tenant_id, project_id, session_id, message_id, status, error, result, before, mode, attempts=(), checkpoint=None, after=None):
+    def finish(self, tenant_id, project_id, session_id, message_id, status, error, result, before, mode, attempts=(), checkpoint=None, after=None, ledger=None):
         session = self.store.get(tenant_id, 'sessions', session_id)
         message = next((m for m in session['messages'] if m['id'] == message_id), None)
         if message is None or message['status'] != 'running':
@@ -1056,6 +1116,8 @@ class AgentRunner:
             message.update(model_id=result.served_by, model_name=served['name'])
             self.store.event(tenant_id, session_id, 'account.switched',
                              f'{served["name"]} took over after the previous subscription ran out of usage.', message_id=message_id)
+        if ledger is not None:
+            session['ledger'] = (session.get('ledger') or [])[-(LEDGER_TURNS-1):] + [turn_record(session, message, ledger)]
         session['updated_at'] = now()
         self.store.put(tenant_id, 'sessions', session)
         if status in ('complete', 'failed'):
@@ -1261,8 +1323,9 @@ class AgentRunner:
     def recover(self):
         """A turn cannot survive a restart: its subprocess died with the application.
 
-        The message is closed out rather than left running forever, because a message stuck in
-        running blocks its conversation from ever being used again.
+        The message is closed out as interrupted rather than left running forever, because a message
+        stuck in running blocks its conversation from ever being used again. It is not rerun on its
+        own: the user resumes it with one click, or moves on.
         """
         import json
         with self.store.db() as db:
@@ -1273,7 +1336,10 @@ class AgentRunner:
             if not stuck:
                 continue
             for message in stuck:
-                message.update(status='failed', finished_at=now(),
+                message.update(status='interrupted', finished_at=now(),
                                error='Frontier closed while this turn was running. Anything already written to the folder is still there.')
                 message['content'] = message['content'] or message['error']
             self.store.put(row['tenant_id'], 'sessions', session)
+            for message in stuck:
+                self.store.event(row['tenant_id'], session['id'], 'turn.interrupted',
+                                 f'{message.get("model_name") or "The agent"} was interrupted when Frontier closed.', message_id=message['id'])

@@ -4,10 +4,10 @@ import {MarkdownOutput} from '../components/Markdown';
 import {duration,money} from '../lib/api';
 import {working} from '../types';
 import {modeLabels,type Approval,type Message,type Mode,type Session,type Team as TeamState,type TeamVerified} from '../types';
-export type InspectorTab='Activity'|'Files'|'Changes'|'Terminal'|'Preview'|'Tasks';
+export type InspectorTab='Activity'|'Files'|'Changes'|'Terminal'|'Preview'|'Tasks'|'Turns';
 const modeIcon={read:Eye,edit:Pencil,auto:Zap};
 
-export function Conversation({session,onInspect,onUnqueue,onRevert,onDecide,onRewind,onOpenSession,onCite,onContinueTeam}:{session:Session;onContinueTeam?:()=>void;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onUnqueue?:(id:string)=>void;onRevert?:(id:string)=>void;onDecide?:(approval:Approval,allow:boolean,message?:string)=>void;onRewind?:(id:string)=>void;onOpenSession?:(id:string)=>void;onCite?:(text:string,from:string)=>void}){
+export function Conversation({session,onInspect,onUnqueue,onRevert,onDecide,onRewind,onOpenSession,onCite,onContinueTeam,onResume}:{session:Session;onContinueTeam?:()=>void;onResume?:(id:string)=>void;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onUnqueue?:(id:string)=>void;onRevert?:(id:string)=>void;onDecide?:(approval:Approval,allow:boolean,message?:string)=>void;onRewind?:(id:string)=>void;onOpenSession?:(id:string)=>void;onCite?:(text:string,from:string)=>void}){
  const busy=working(session.messages.at(-1));
  const [cite,setCite]=useState<{text:string;from:string;x:number;y:number}|null>(null);
  // Selecting text inside a reply offers to cite it in the composer as a typed reference.
@@ -26,7 +26,7 @@ export function Conversation({session,onInspect,onUnqueue,onRevert,onDecide,onRe
   {start>0&&<button className="history-more" onClick={()=>setFrom(Math.max(0,start-20))}>Load earlier messages</button>}
   {shown.map(message=><div key={message.id} className={message.id===boundary?'':undefined}>{message.role==='user'
    ?<section className="conversation-turn"><div className="user-message"><span className="message-author">You{message.midturn?" · while it worked":""}</span>{onRewind&&!busy&&<button className="rewind-button" title="Edit this message and resend it; later messages are removed and the folder is put back to how it was before it" onClick={()=>onRewind(message.id)}><Pencil size={11}/>Edit from here</button>}<p>{message.content.split('\n\nREFERENCED CONTEXT')[0].split('\n\nAttached for context')[0]}</p>{!!message.context?.length&&<div className="context-chips read">{message.context.map((c,i)=><span key={i}>{c.kind==='file'?<FileText size={10}/>:c.kind==='terminal'?<Terminal size={10}/>:<GitCompareArrows size={10}/>}{c.label||c.path||c.kind}{c.start?`:${c.start}${c.end&&c.end!==c.start?`-${c.end}`:''}`:''}</span>)}</div>}<time dateTime={message.created_at}>{sentAt(message.created_at)}</time></div></section>
-   :<AgentMessage message={message} onInspect={onInspect} onRevert={onRevert} approvals={(session.approvals||[]).filter(a=>a.message_id===message.id)} onDecide={onDecide} onOpenSession={onOpenSession} onContinueTeam={message.id===session.messages.at(-1)?.id?onContinueTeam:undefined}/>}
+   :<AgentMessage message={message} onInspect={onInspect} onRevert={onRevert} approvals={(session.approvals||[]).filter(a=>a.message_id===message.id)} onDecide={onDecide} onOpenSession={onOpenSession} onContinueTeam={message.id===session.messages.at(-1)?.id?onContinueTeam:undefined} onResume={message.id===session.messages.at(-1)?.id&&onResume?()=>onResume(message.id):undefined}/>}
    {message.id===boundary&&session.summary&&<div className="compact-note"><button onClick={()=>setShowSummary(v=>!v)}><FoldVertical size={13}/>{session.summary.count} earlier messages compacted by {session.summary.model_name}. The agent now sees this summary instead.<ChevronRight size={12} className={showSummary?'expanded-chevron':''}/></button>{showSummary&&<div className="compact-summary"><MarkdownOutput text={session.summary.text}/></div>}</div>}</div>)}
   {queue.map((q,i)=><section className="conversation-turn queued" key={q.id}><div className="user-message"><span className="message-author"><Clock size={11}/> Queued {i+1} of {queue.length} · {modeLabels[q.mode]}</span><p>{q.content}</p>{onUnqueue&&<button className="icon-button" aria-label="Remove from queue" title="Remove from queue" onClick={()=>onUnqueue(q.id)}><X size={12}/></button>}</div></section>)}
  </div>;
@@ -73,7 +73,7 @@ function TeamCard({team,running,onOpenSession,onContinue}:{team:TeamState;runnin
   {onContinue&&<button className="team-continue" title="Run the unfinished tasks again with the same lead and plan; finished tasks stay done" onClick={onContinue}><Users size={12}/>Continue the team</button>}
  </div>;
 }
-function AgentMessage({message,onInspect,onRevert,approvals=[],onDecide,onOpenSession,onContinueTeam}:{message:Message;onContinueTeam?:()=>void;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onRevert?:(id:string)=>void;approvals?:Approval[];onDecide?:(approval:Approval,allow:boolean,message?:string)=>void;onOpenSession?:(id:string)=>void}){
+function AgentMessage({message,onInspect,onRevert,approvals=[],onDecide,onOpenSession,onContinueTeam,onResume}:{message:Message;onContinueTeam?:()=>void;onResume?:()=>void;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onRevert?:(id:string)=>void;approvals?:Approval[];onDecide?:(approval:Approval,allow:boolean,message?:string)=>void;onOpenSession?:(id:string)=>void}){
  const running=message.status==='running';
  const replyAt=running?message.created_at:message.finished_at||message.created_at;
  const status=running?`Working · ${duration(message.created_at,null)}`:[message.status!=='complete'?message.status:'',turnStats(message)].filter(Boolean).join(' · ');
@@ -92,9 +92,10 @@ function AgentMessage({message,onInspect,onRevert,approvals=[],onDecide,onOpenSe
     ?message.routing.attempts.map((a,i)=><span key={a.id+i}>{i>0&&' → '}<strong>{a.name}</strong>{a.outcome!=='completed'&&<em> · {a.outcome}</em>}</span>)
     :<><strong>{message.routing.chosen.name}</strong><em> · {message.routing.chosen.because}</em></>}
   </div>}
-  {message.team&&<TeamCard team={message.team} running={running} onOpenSession={onOpenSession} onContinue={onContinueTeam&&(message.status==='cancelled'||message.status==='failed')&&message.team.tasks.some(t=>t.status!=='done')?onContinueTeam:undefined}/>}
+  {message.team&&<TeamCard team={message.team} running={running} onOpenSession={onOpenSession} onContinue={onContinueTeam&&(message.status==='cancelled'||message.status==='failed'||message.status==='interrupted')&&message.team.tasks.some(t=>t.status!=='done')?onContinueTeam:undefined}/>}
   {running&&approvals.filter(a=>a.kind==='question').map(a=><QuestionCard key={a.id} approval={a} asker={message.model_name||'The agent'} onAnswer={(text)=>onDecide?.(a,text!==null,text??undefined)}/>)}
   {running&&approvals.filter(a=>a.kind!=='question').map(a=><div key={a.id} className="approval-card" role="alertdialog" aria-label={`${a.tool_name} needs permission`}><ShieldQuestion size={16}/><div><strong>{message.model_name} wants to run {a.tool_name}</strong><code>{describeInput(a.tool_name,a.input)}</code><small>Allowed once; the turn continues either way. Nothing happens until you answer.</small></div><div className="approval-actions"><button className="primary" onClick={()=>onDecide?.(a,true)}>Allow</button><button onClick={()=>onDecide?.(a,false)}>Deny</button></div></div>)}
+  {message.status==='interrupted'&&!message.team&&onResume&&<div className="handover-note"><AlertTriangle size={13}/>Frontier closed while this turn was running.<button onClick={onResume}>Resume turn</button></div>}
   {running
    ?<div className="agent-working-caption">{message.routing?.status==='choosing'?'Adaptive is choosing an agent for this message.':message.team?'The team is working. Each task runs in its own session; open one from the card to watch it.':'Reading the project and working in it. The reply appears when the agent finishes.'}</div>
    :message.content&&<div className="inline-build"><MarkdownOutput text={message.content} onFile={(p,l)=>onInspect('Files',p,l)}/></div>}

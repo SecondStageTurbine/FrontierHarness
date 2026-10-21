@@ -223,6 +223,13 @@ test('one conversation, any agent: selection, switching, team mode, rewind, snoo
  await page.getByLabel('Status of Add a dark theme',{exact:true}).selectOption('doing');
  await expect(page.locator('.task-column.doing')).toContainText('Add a dark theme');
 
+ // The turn ledger: one row per finished turn, and what the latest prompt was made of.
+ await page.locator('.inspector-tabs button',{hasText:'Turns'}).click();
+ await expect(page.locator('.turn-ledger')).toContainText('Latest prompt');
+ await expect(page.locator('.ledger-part',{hasText:'Transcript'})).toBeVisible();
+ expect(await page.locator('.ledger-table tbody tr').count()).toBeGreaterThan(0);
+ await page.locator('.inspector-tabs button',{hasText:'Tasks'}).click();
+
  // Pop out: the panel opens in its own window, which follows the project the main window has open.
  const [popup]=await Promise.all([page.waitForEvent('popup'),page.getByRole('button',{name:'Pop out panel',exact:true}).click()]);
  await expect(popup.locator('.task-column.doing')).toContainText('Add a dark theme',{timeout:15000});

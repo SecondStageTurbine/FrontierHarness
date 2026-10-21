@@ -87,20 +87,19 @@ def brief(message):
 
 
 TOOLS = [
-    {'name': 'list_projects', 'description': 'The projects in Frontier, with their folders.',
+    {'name': 'list_projects', 'description': 'Projects and their folders.',
      'inputSchema': {'type': 'object', 'properties': {'workspace': {'type': 'string'}}}},
-    {'name': 'list_sessions', 'description': 'The conversations in one project, newest first.',
+    {'name': 'list_sessions', 'description': 'A project\'s conversations, newest first.',
      'inputSchema': {'type': 'object', 'properties': {'project': {'type': 'string'}, 'workspace': {'type': 'string'}}, 'required': ['project']}},
-    {'name': 'read_session', 'description': 'The last messages of a conversation, with the files each turn changed.',
+    {'name': 'read_session', 'description': 'Recent messages of a conversation, with files changed.',
      'inputSchema': {'type': 'object', 'properties': {'project': {'type': 'string'}, 'session': {'type': 'string'}, 'last': {'type': 'integer'}, 'workspace': {'type': 'string'}}, 'required': ['project', 'session']}},
-    {'name': 'send_message', 'description': 'Send a message to a Frontier conversation and, by default, wait for the agent\'s reply. '
-                                            'Without a session a new conversation is started. The agent is Adaptive unless named; mode is read, edit or auto.',
+    {'name': 'send_message', 'description': 'Message a conversation (a new one without session) and wait for the reply unless wait is false. Agent defaults to Adaptive.',
      'inputSchema': {'type': 'object', 'properties': {'project': {'type': 'string'}, 'message': {'type': 'string'}, 'session': {'type': 'string'},
                                                       'agent': {'type': 'string'}, 'mode': {'type': 'string', 'enum': ['read', 'edit', 'auto']},
                                                       'wait': {'type': 'boolean'}, 'workspace': {'type': 'string'}}, 'required': ['project', 'message']}},
-    {'name': 'project_changes', 'description': 'The git branch and uncommitted changes of a project.',
+    {'name': 'project_changes', 'description': 'Git branch and uncommitted changes.',
      'inputSchema': {'type': 'object', 'properties': {'project': {'type': 'string'}, 'workspace': {'type': 'string'}}, 'required': ['project']}},
-    {'name': 'catch_up', 'description': 'What happened in a project since a number of hours ago: turns, files, commits, automation runs.',
+    {'name': 'catch_up', 'description': 'Turns, files, commits and automation runs in the last hours (default 24).',
      'inputSchema': {'type': 'object', 'properties': {'project': {'type': 'string'}, 'hours': {'type': 'number'}, 'workspace': {'type': 'string'}}, 'required': ['project']}},
 ]
 

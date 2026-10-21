@@ -121,7 +121,7 @@ def session_sidebar_state(session,active_sessions):
         status=last.get('status')
         if status=='running':
             return 'working'
-        if status in ('failed','cancelled'):
+        if status in ('failed','cancelled','interrupted'):
             return 'waiting'
         return 'done'
     return 'waiting'
@@ -642,6 +642,12 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         scoped(request,tenant_id)
         get_session(tenant_id,project_id,session_id)
         return runner.continue_team(tenant_id,project_id,session_id)
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/messages/{message_id}/resume')
+    async def resume_turn(tenant_id:str,project_id:str,session_id:str,message_id:str,request:Request):
+        scoped(request,tenant_id)
+        get_session(tenant_id,project_id,session_id)
+        return runner.resume(tenant_id,project_id,session_id,message_id)
 
     @app.post('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/instructions')
     async def instruct(tenant_id:str,project_id:str,session_id:str,payload:InstructionInput,request:Request):

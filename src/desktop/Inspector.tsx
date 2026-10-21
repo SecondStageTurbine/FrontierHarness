@@ -5,7 +5,7 @@ import {Term} from './Term';
 import {Preview} from './Preview';
 import {useResource,useWorkspace,useRefresh} from '../app/context';
 import {api,download} from '../lib/api';
-import type {ProjectFile,Project,Session,FileChange,ContextChip} from '../types';
+import type {ProjectFile,Project,Session,FileChange,ContextChip,TurnRecord} from '../types';
 import type {InspectorTab} from './Conversation';
 import {GitPanel} from './GitPanel';
 import {TaskBoard} from './TaskBoard';
@@ -30,10 +30,11 @@ export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,o
  useEffect(()=>{void tree.refetch()},[changes.length]);
  const selected=changes.find(c=>c.id===changeId)||[...changes].reverse().find(c=>c.path===filePath)||changes.at(-1);
  return <aside className="context-inspector">
-  <div className="inspector-tabs">{(['Activity','Files','Changes','Terminal','Preview','Tasks'] as InspectorTab[]).map(t=><button key={t} className={tab===t?'selected':''} onClick={()=>onTab(t)}>{t}</button>)}{!popped&&<button className="icon-button" title="Open this panel in its own window" aria-label="Pop out panel" onClick={()=>{void popOut(tab);onClose()}}><ExternalLink size={14}/></button>}<button className="icon-button" title="Close panel" aria-label="Close contextual panel" onClick={onClose}><X size={15}/></button></div>
+  <div className="inspector-tabs">{(['Activity','Files','Changes','Terminal','Preview','Tasks','Turns'] as InspectorTab[]).map(t=><button key={t} className={tab===t?'selected':''} onClick={()=>onTab(t)}>{t}</button>)}{!popped&&<button className="icon-button" title="Open this panel in its own window" aria-label="Pop out panel" onClick={()=>{void popOut(tab);onClose()}}><ExternalLink size={14}/></button>}<button className="icon-button" title="Close panel" aria-label="Close contextual panel" onClick={onClose}><X size={15}/></button></div>
   <div className="inspector-content">
    {tab==='Activity'&&<LiveActivity projectId={project.id} sessionId={session?.id}/>}
    {tab==='Tasks'&&<TaskBoard project={project} onOpenSession={onOpenSession}/>}
+   {tab==='Turns'&&<TurnLedger ledger={session?.ledger||[]}/>}
    {tab==='Files'&&<><div className="file-browser">
     <div className="file-browser-heading"><Folder size={14}/>{project.name}{session?.worktree&&<em className="branch-chip" title={session.worktree.path}>{session.worktree.branch}</em>}<small>{tree.data?.length||0} files</small></div>
     <label className="file-search"><Search size={12}/><input aria-label="Search project files" placeholder="Search in files…" value={query} onChange={e=>setQuery(e.target.value)}/>{query&&<button className="icon-button" aria-label="Clear search" onClick={()=>setQuery('')}><X size={11}/></button>}</label>
@@ -70,6 +71,28 @@ export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,o
    </>}
   </div>
  </aside>;
+}
+
+const PARTS:[string,string][]=[['instructions','Instructions'],['handoff','Handoff'],['rules','Workspace rules'],['notes','Project notes'],['environment','Environment'],['board','Task board'],['summary','Summary'],['transcript','Transcript'],['command','Command']];
+const kchars=(n:number)=>n>=1000?`${(n/1000).toFixed(n>=10000?0:1)}k`:String(n);
+
+/** Every turn's context bill, newest first, so bloated notes, repeated drops and escalations show at a glance. */
+function TurnLedger({ledger}:{ledger:TurnRecord[]}){
+ if(!ledger.length)return <p className="inspector-empty">Each finished turn appears here with its time, tokens and what its prompt was made of.</p>;
+ const latest=ledger.at(-1)!,total=Math.max(1,latest.prompt_chars);
+ return <div className="turn-ledger">
+  <div className="git-section-label"><span>Latest prompt</span><small>{kchars(latest.prompt_chars)} chars{latest.dropped?` · ${latest.dropped} dropped`:''}{latest.compacted?` · ${latest.compacted} compacted`:''}</small></div>
+  <div className="ledger-parts">{PARTS.filter(([k])=>latest.chars[k]).map(([k,label])=><div key={k} className="ledger-part"><span>{label}</span><div className="usage-limit-track"><div className="usage-limit-fill" style={{width:`${Math.round(latest.chars[k]/total*100)}%`}}/></div><small>{kchars(latest.chars[k])}</small></div>)}</div>
+  <div className="git-section-label"><span>Turns</span><small>{ledger.length}</small></div>
+  <table className="usage-table ledger-table"><thead><tr><th>Agent</th><th>Time</th><th>Tokens</th><th>Prompt</th><th>Notes</th><th>Flags</th></tr></thead><tbody>
+   {[...ledger].reverse().map(r=><tr key={r.message_id+r.started_at} title={`${r.model||''} · ${r.status} · ${new Date(r.started_at).toLocaleString()}`}>
+    <td>{r.agent||'—'}</td><td>{r.seconds!=null?`${Math.round(r.seconds)}s`:'—'}</td>
+    <td>{r.input_tokens!=null||r.output_tokens!=null?`${kchars(r.input_tokens||0)}/${kchars(r.output_tokens||0)}`:'—'}</td>
+    <td>{kchars(r.prompt_chars)}</td><td>{kchars(r.chars.notes||0)}</td>
+    <td>{[r.status!=='complete'&&r.status,r.dropped&&`${r.dropped} dropped`,r.compacted&&`${r.compacted} compacted`,r.escalated&&'escalated',r.fallbacks&&`${r.fallbacks} fallback`].filter(Boolean).join(' · ')||'—'}</td>
+   </tr>)}
+  </tbody></table>
+ </div>;
 }
 
 /** A plain text editor over one project file: type, Ctrl+S or Save. Nothing fancier until it is missed. */
