@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import httpx
 
 PREFIX = '🤖 Frontier: '
+NOTHING_TO_DO = re.compile(r'\W*nothing to do\b', re.I)  # A follow-through that found no work of its own posts nothing.
 NOTE_AFTER = 90  # Seconds a handed-in message may go unanswered before the sender is told it waits on a long step.
 MODEL_CUE = re.compile(r'\b(?:use|using|with|via|on|ask)\s+|\bmodel\s*[:=]\s*', re.I)
 ROUTED_ASSIGNMENT_CUE = re.compile(r'\b(?:is|was|has\s+been)\s+routed\s+to\s+', re.I)
@@ -268,8 +269,26 @@ async def reply(store, tenant_id, session, thread_ts, text):
     return {'ok': True}
 
 
+def follow_through(session):
+    """The turn Frontier started after a Slack reply, to do the work it named: its reply goes to the same thread."""
+    follow = session['slack'].get('follow') or {}
+    ids = [m['id'] for m in session['messages']]
+    if follow.get('after') not in ids:
+        return None
+    rest = session['messages'][ids.index(follow['after']) + 1:]
+    if len(rest) >= 2 and rest[0]['role'] == 'user' and rest[0].get('auto_continue'):
+        return {'ts': follow['ts'], 'user': follow.get('user'), 'message_id': rest[1]['id'], 'follow': True}
+    return None
+
+
 async def step(store, runner, tenant_id, session, client, headers):
     listen = session['slack']
+    if not listen.get('pending') and listen.get('follow'):
+        listen['pending'] = follow_through(session)
+        if listen['pending'] is None and runner.busy(tenant_id, session['id']):
+            return await during(store, runner, tenant_id, session, client, headers)  # The follow-through may still be starting.
+        listen.pop('follow')
+        store.put(tenant_id, 'sessions', session)
     pending = listen.get('pending')
     if pending:
         reply_message = next((m for m in session['messages'] if m['id'] == pending['message_id']), None)
@@ -285,7 +304,8 @@ async def step(store, runner, tenant_id, session, client, headers):
                 used = reply_message.get('model_name') or used
             if used and requested.casefold() != used.casefold():
                 text = f'Requested {requested}; used {used}, the available model selected for this turn.\n\n{text}'
-        await call(client, headers, 'chat.postMessage', channel=listen['channel'], thread_ts=pending['ts'], text=(PREFIX + mention_of(listen, pending.get('user')) + slack_markup(text))[:39000])
+        if not (pending.get('follow') and NOTHING_TO_DO.match(text)):
+            await call(client, headers, 'chat.postMessage', channel=listen['channel'], thread_ts=pending['ts'], text=(PREFIX + mention_of(listen, pending.get('user')) + slack_markup(text))[:39000])
         for extra in listen.get('midturn') or []:
             # Handed in mid-turn but never answered with slack_reply: the turn's reply answers it too.
             if not extra.get('answered') and extra['ts'] != pending['ts']:
@@ -293,6 +313,8 @@ async def step(store, runner, tenant_id, session, client, headers):
         session = store.get(tenant_id, 'sessions', session['id'])
         for key in ('pending', 'midturn'):
             session['slack'].pop(key, None)
+        if not pending.get('follow') and reply_message:
+            session['slack']['follow'] = {'ts': pending['ts'], 'user': pending.get('user'), 'after': reply_message['id']}
         session['slack']['error'] = None
         store.put(tenant_id, 'sessions', session)
         return

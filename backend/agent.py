@@ -226,8 +226,9 @@ NOT_MINE_TO_TAKE = re.compile(r"\b(?:or|which|merge|deploy|release|publish|delet
 DO_IT = ('Your last reply has been sent. Now start the work it says you are doing or will deliver, and take it as far as you can in this turn. '
          'Stop only for a decision that only I can make or for something that cannot be undone.')
 FOLLOW_THROUGH = ('Your reply has been sent. If it names work of yours that is unfinished and not blocked, do it now, as far as you '
-                  'can take it in this turn. If nothing is yours to do, or you asked the sender something and need the answer first, '
-                  'say "nothing to do" and stop. Stop only for a decision that only I can make or for something that cannot be undone.')
+                  'can take it in this turn; your final reply is posted to the same Slack thread, so make it the update the sender '
+                  'needs. If nothing is yours to do, or you asked the sender something and need the answer first, reply only '
+                  '"nothing to do", which is not posted. Stop only for a decision that only I can make or for something that cannot be undone.')
 # A reply that says the work is under way, or promises its result, when the turn is about to end: "I'm starting P9.21",
 # "I'll build it next", "Estimated first head: within 90 minutes", "ETA 18:30".
 COMMITS = re.compile(r"\bI(?:['\u2019]m| am) (?:now )?(?:starting|moving (?:on )?to|picking up|beginning|going to (?:start|build|begin|work))\b"

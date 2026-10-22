@@ -63,6 +63,25 @@ def test_a_message_becomes_a_turn_and_the_reply_goes_to_its_thread(tmp_path):
     asyncio.run(tick())  # Nothing newer than the handled message.
     assert len(runner.sent) == 1 and not store.get('tenant-a', 'sessions', session['id'])['slack'].get('pending')
 
+    def follow_through(reply):  # The turn Frontier starts after a Slack reply, to do the work it named.
+        s = store.get('tenant-a', 'sessions', session['id'])
+        s['slack']['follow'] = {'ts': '101.0', 'user': 'UME', 'after': s['messages'][-1]['id']}
+        s['messages'] += [{'id': uid(), 'role': 'user', 'content': 'Do it.', 'auto_continue': True, 'unattended': True},
+                          {'id': uid(), 'role': 'assistant', 'content': '', 'status': 'running'}]
+        store.put('tenant-a', 'sessions', s)
+        asyncio.run(tick())
+        assert len(posted) == before and len(runner.sent) == 1  # Running: nothing yet.
+        s = store.get('tenant-a', 'sessions', session['id'])
+        s['messages'][-1].update(status='complete', content=reply)
+        store.put('tenant-a', 'sessions', s)
+        asyncio.run(tick())
+    before = len(posted)
+    follow_through('PR 696 is ready for review at 2e657dd6.')
+    assert posted[-1] == {'channel': 'C1', 'thread_ts': '101.0', 'text': '🤖 Frontier: PR 696 is ready for review at 2e657dd6.'}
+    before = len(posted)
+    follow_through('Nothing to do.')
+    assert len(posted) == before and not store.get('tenant-a', 'sessions', session['id'])['slack'].get('follow')
+
 
 def test_other_peoples_thread_replies_count_but_the_users_own_never_do(tmp_path):
     store = setup_store(tmp_path / 'state');runner = Runner(store)
