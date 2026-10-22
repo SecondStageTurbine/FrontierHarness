@@ -45,3 +45,20 @@ def test_another_workspace_cannot_delete(tmp_path):
         s = c.post(f'/api/t/{a}/projects/{p["id"]}/sessions', json={}).json()
         assert c.delete(f'/api/t/{b}/projects/{p["id"]}/sessions/{s["id"]}').status_code == 403
         assert c.get(f'/api/t/{a}/projects/{p["id"]}/sessions/{s["id"]}').status_code == 200
+
+
+def test_picking_another_agent_moves_slack_to_it_without_losing_its_place(tmp_path):
+    state = tmp_path/'state'
+    with TestClient(create_app(str(state), ScriptedAgent())) as c:
+        t = setup(c)
+        (tmp_path/'work').mkdir()
+        p = c.post(f'/api/t/{t}/projects', json={'name': 'P', 'root': str(tmp_path/'work')}).json()
+        base = f'/api/t/{t}/projects/{p["id"]}/sessions'
+        session = c.post(base, json={}).json()
+        store = Store(str(state))
+        listen = {'channel': 'C1', 'name': 'bld2', 'user': 'U1', 'anyone': True, 'model_id': 'astra', 'mode': 'auto', 'since': '100.0',
+                  'pending': {'ts': '99.0', 'message_id': 'm'}, 'error': None}
+        store.put(t, 'sessions', {**store.get(t, 'sessions', session['id']), 'slack': listen})
+        response = c.put(f'{base}/{session["id"]}/slack', json={'channel': 'C1', 'anyone': True, 'model_id': 'adaptive', 'mode': 'auto'})
+        assert response.status_code == 200
+        assert response.json()['slack'] == {**listen, 'model_id': 'adaptive', 'pinned_agent': None}

@@ -1123,6 +1123,12 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         if payload.model_id!=ADAPTIVE:
             runner.select(tenant_id,payload.model_id)
         listen=None
+        current=get_session(tenant_id,project_id,session_id).get('slack') or {}
+        if payload.channel and payload.channel==current.get('channel'):
+            # The same channel with another agent or posture: keep its place in the channel and any reply it owes.
+            session=get_session(tenant_id,project_id,session_id)
+            session['slack']={**current,'anyone':payload.anyone,'model_id':payload.model_id,'mode':payload.mode,'pinned_agent':None}
+            return store.put(tenant_id,'sessions',session)
         if payload.channel:
             channel,name,user=await slack_listen.resolve(store,tenant_id,payload.channel)
             other=next((s for s in store.list(tenant_id,'sessions') if s['id']!=session_id and not s.get('archived') and (s.get('slack') or {}).get('channel')==channel),None)

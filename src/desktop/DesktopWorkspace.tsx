@@ -175,6 +175,12 @@ export default function DesktopWorkspace(){
  function inspect(tab:InspectorTab,file?:string,line?:number){setPanel(tab);if(file){setFilePath(file);setFileLine(line)}}
  function openHit(h:{project_id:string;session_id:string}){if(h.project_id!==project?.id){setProjectId(h.project_id);localStorage.setItem(selectionKey,h.project_id)}setNewSession(false);setSessionId(h.session_id);localStorage.setItem(`frontier.session.${h.project_id}`,h.session_id);setPanel(null);setSearch('');follow.current=true}
  async function pinProject(p:Project,pinned:boolean){try{await api.put(path(`/projects/${p.id}/settings`),{pinned});await refresh()}catch(e){setError((e as Error).message)}}
+ function pickAgent(id:string){
+  setModelId(id);
+  // A session listening to Slack answers it with the agent picked here; otherwise the picker would say Adaptive while Slack stayed on the old agent.
+  const listen=newSession?null:session?.slack;
+  if(listen?.channel&&listen.model_id!==id)api.put(path(`/projects/${project?.id}/sessions/${session!.id}/slack`),{channel:listen.channel,anyone:listen.anyone,model_id:id,mode:listen.mode}).then(refresh).catch(e=>setError((e as Error).message));
+ }
  async function listenSlack(s:Session,channel:string){setSlackBusy(true);setSlackError('');try{await api.put(path(`/projects/${project?.id}/sessions/${s.id}/slack`),{channel,anyone:slackAnyone,model_id:activeModelId||ADAPTIVE,mode});await refresh();setSlackTarget(null);setSessionMenu(null);notify(channel?`Listening to #${channel.replace(/^#/,'')}`:'Stopped listening to Slack')}catch(e){setSlackError((e as Error).message);if(!channel)setError((e as Error).message)}finally{setSlackBusy(false)}}
  async function patchSession(s:Session,patch:{name?:string;pinned?:boolean;archived?:boolean}){setSessionMenu(null);try{await api.patch(path(`/projects/${project?.id}/sessions/${s.id}`),patch);await refresh()}catch(e){setError((e as Error).message)}}
  function addChip(chip:ContextChip){setChips(v=>v.length>=20?v:[...v,chip]);composer.current?.focus()}
@@ -257,7 +263,7 @@ export default function DesktopWorkspace(){
      {repo.data?.repo&&agents.length>1&&<button title="Fan out: send this to several agents, each on its own branch" aria-label="Fan out to several agents" disabled={!project||!input.trim()||busy} onClick={()=>{setFanPicks(agents.filter(up).slice(0,3).map(a=>a.id));setFanOpen(true)}}><Split size={15}/></button>}
      <input type="file" multiple hidden ref={uploadInput} onChange={e=>attach(e.target.files)}/>
      <span className="composer-control-divider"/>
-     <select aria-label="Agent" value={activeModelId} onChange={e=>setModelId(e.target.value)} disabled={!agents.length}>
+     <select aria-label="Agent" value={activeModelId} onChange={e=>pickAgent(e.target.value)} disabled={!agents.length}>
       {!agents.length&&<option value="">No agent connected</option>}
       {agents.length>0&&<option value={ADAPTIVE} title={ADAPTIVE_HINT}>Adaptive</option>}
       {agentProviders.filter(provider=>agents.some(a=>a.provider===provider)).map(provider=>
