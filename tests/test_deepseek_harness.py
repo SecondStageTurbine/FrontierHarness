@@ -94,3 +94,8 @@ def test_routing_judges_headless_by_the_model_its_profile_names(tmp_path, monkey
     patch.parent.mkdir(parents=True)
     patch.write_text('- id: agent-default-model\n  config:\n    provider: deepseek-account\n    model: deepseek-flash\n', encoding='utf-8')
     assert adaptive.profile(row)['cost_class'] == 'low'
+    luna = {'id': 'luna', 'name': 'Luna', 'provider': 'codex_cli', 'model_name': 'gpt-6-luna'}
+    haiku = {'id': 'haiku', 'name': 'Haiku', 'provider': 'claude_cli', 'model_name': 'haiku'}
+    sol = {'id': 'sol', 'name': 'Sol', 'provider': 'codex_cli', 'model_name': 'gpt-6-sol'}
+    needs = adaptive.TaskRequirements(task_type='implementation', complexity='medium', risk='low', requirements={'coding': 8, 'debugging': 7}, reason='x')
+    assert adaptive.choose(needs, [sol, luna, haiku, row])[0]['id'] == 'dsh'  # A cheap turn it covers is its, not Sol's.

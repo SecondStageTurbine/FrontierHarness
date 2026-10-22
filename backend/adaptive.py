@@ -57,6 +57,10 @@ FAMILY_PROFILES = [
     ('gpt-6-astra', dict(cost_class='high',   coding=10, reasoning=10, planning=9, debugging=10, architecture=9, review=9, tool_use=10, repository=10, instruction_following=9, speed=5)),
     ('gpt-6-sol',   dict(cost_class='medium', coding=9,  reasoning=8,  planning=8, debugging=9,  architecture=8, review=8, tool_use=9,  repository=9,  instruction_following=9, speed=7)),
     ('gpt-6-luna',  dict(cost_class='low',    coding=7,  reasoning=6,  planning=6, debugging=6,  architecture=5, review=6, tool_use=8,  repository=7,  instruction_following=8, speed=9)),
+    # DeepSeek's own models out-code the generic "flash" tier above, cheap as they are; judged so, a DeepSeek
+    # agent wins a cheap turn against Haiku or Luna instead of losing every tie on strength. Cost stays the
+    # tier's or the row's, so a free DeepSeek stays free.
+    ('deepseek',    dict(coding=8, reasoning=8, planning=7, debugging=8, architecture=7, review=7, tool_use=8, repository=8, instruction_following=8, speed=9)),
     # Last, so a free model stays free whatever family its name also matches (a free "flash" is still free).
     ('-free',      dict(cost_class='free')),
 ]
