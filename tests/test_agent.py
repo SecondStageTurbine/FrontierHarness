@@ -255,8 +255,8 @@ def test_saying_the_work_is_starting_counts_as_committing_to_it():
 
 
 @pytest.mark.asyncio
-async def test_a_slack_status_answer_that_says_it_is_starting_then_does_the_work(tmp_path):
-    store, runner, project, session, _ = make(tmp_path, ScriptedAgent(reply="I'm starting P9.21 now; first head by 18:30."))
+async def test_a_slack_answer_is_followed_by_one_turn_to_do_the_work_it_names(tmp_path):
+    store, runner, project, session, _ = make(tmp_path, ScriptedAgent(reply='P9.2 acceptance in draft #696; full validation remains unfinished. This is my next work.'))
     runner.send('tenant-a', project['id'], session['id'], 'From Slack: what are you on?', 'claude_cli', 'edit', unattended=True)
     for _ in range(20):
         task = runner.turns.get(('tenant-a', session['id']))
@@ -266,15 +266,12 @@ async def test_a_slack_status_answer_that_says_it_is_starting_then_does_the_work
         await asyncio.sleep(0)
     messages = store.get('tenant-a', 'sessions', session['id'])['messages']
     assert [m['role'] for m in messages] == ['user', 'assistant', 'user', 'assistant']  # Once, though it says so again.
-    assert messages[2]['auto_continue'] and messages[2]['unattended'] and 'Now start the work' in messages[2]['content']
+    assert messages[2]['auto_continue'] and messages[2]['unattended'] and 'unfinished and not blocked' in messages[2]['content']
 
 
 @pytest.mark.asyncio
-async def test_a_question_put_to_a_slack_sender_or_in_read_only_waits(tmp_path):
-    store, runner, project, session, _ = make(tmp_path, ScriptedAgent(reply='Should I start it now?'))
-    runner.send('tenant-a', project['id'], session['id'], 'From Slack.', 'claude_cli', 'edit', unattended=True)
-    await asyncio.gather(runner.turns[('tenant-a', session['id'])], return_exceptions=True)
-    await asyncio.sleep(0)
+async def test_a_read_only_turn_waits(tmp_path):
+    store, runner, project, session, _ = make(tmp_path, ScriptedAgent(reply="Should I start it now? I'm starting P9.21."))
     await turn(runner, store, 'tenant-a', project, session, 'Look only.', mode='read')
     await asyncio.sleep(0)
-    assert len(store.get('tenant-a', 'sessions', session['id'])['messages']) == 4 and not runner.turns
+    assert len(store.get('tenant-a', 'sessions', session['id'])['messages']) == 2 and not runner.turns

@@ -225,6 +225,9 @@ NOT_MINE_TO_TAKE = re.compile(r"\b(?:or|which|merge|deploy|release|publish|delet
 
 DO_IT = ('Your last reply has been sent. Now start the work it says you are doing or will deliver, and take it as far as you can in this turn. '
          'Stop only for a decision that only I can make or for something that cannot be undone.')
+FOLLOW_THROUGH = ('Your reply has been sent. If it names work of yours that is unfinished and not blocked, do it now, as far as you '
+                  'can take it in this turn. If nothing is yours to do, or you asked the sender something and need the answer first, '
+                  'say "nothing to do" and stop. Stop only for a decision that only I can make or for something that cannot be undone.')
 # A reply that says the work is under way, or promises its result, when the turn is about to end: "I'm starting P9.21",
 # "I'll build it next", "Estimated first head: within 90 minutes", "ETA 18:30".
 COMMITS = re.compile(r"\bI(?:['\u2019]m| am) (?:now )?(?:starting|moving (?:on )?to|picking up|beginning|going to (?:start|build|begin|work))\b"
@@ -815,10 +818,12 @@ class AgentRunner:
         if last['role'] != 'assistant' or last.get('status') != 'complete' or last.get('team') or last.get('mode') == 'read' \
                 or asked.get('auto_continue'):
             return
-        if not asked.get('unattended') and asks_to_proceed(last.get('content')):
+        if asked.get('unattended'):
+            content = FOLLOW_THROUGH  # A reply to Slack names the work and ends the turn; whether any is left is the agent's to judge.
+        elif asks_to_proceed(last.get('content')):
             content = CARRY_ON
         elif commits_to_work(last.get('content')):
-            content = DO_IT  # Said it is starting, then ended the turn: a status answer to Slack does this.
+            content = DO_IT  # Said it is starting, then ended the turn.
         else:
             return
         adaptive_turn = (last.get('routing') or {}).get('mode') == 'adaptive'
@@ -830,7 +835,8 @@ class AgentRunner:
             return
         session['messages'][-2]['auto_continue'] = True  # Marks the yes as Frontier's, so it is never given twice in a row.
         self.store.put(tenant_id, 'sessions', session)
-        self.store.event(tenant_id, session['id'], 'turn.carried_on', f'{last.get("model_name") or "The agent"} ' + ('asked whether to start; Frontier told it to go ahead.' if content == CARRY_ON
+        self.store.event(tenant_id, session['id'], 'turn.carried_on', f'{last.get("model_name") or "The agent"} ' + ('answered Slack; Frontier told it to do any work of its own left unfinished.' if content == FOLLOW_THROUGH
+                                                                     else 'asked whether to start; Frontier told it to go ahead.' if content == CARRY_ON
                                                                      else 'said it was starting work and ended its turn; Frontier told it to do the work.'))
 
     def inject(self, tenant_id, session_id, content, model_id=None, mode=None):

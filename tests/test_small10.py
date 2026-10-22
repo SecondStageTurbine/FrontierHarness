@@ -50,7 +50,7 @@ def test_a_spent_agent_pinned_by_slack_hands_the_turn_on(tmp_path):
         runner.send('tenant-a', project['id'], session['id'], 'Review this.', 'claude_cli', 'edit', unattended=True)
         await asyncio.gather(runner.turns[('tenant-a', session['id'])], return_exceptions=True)
         return store.get('tenant-a', 'sessions', session['id'])
-    reply = asyncio.run(unattended())['messages'][-1]
+    reply = asyncio.run(unattended())['messages'][1]  # [2] on is Frontier's follow-through.
     assert reply['status'] == 'complete' and reply['content'] == 'Finished for you.'
     assert calls[0] == 'claude_cli' and calls[-1] != 'claude_cli'
 
