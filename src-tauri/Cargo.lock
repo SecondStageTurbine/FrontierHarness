@@ -1126,7 +1126,7 @@ dependencies = [
 
 [[package]]
 name = "frontier"
-version = "0.27.59"
+version = "0.27.60"
 dependencies = [
  "portable-pty",
  "serde",
