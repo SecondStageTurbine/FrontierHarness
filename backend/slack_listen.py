@@ -12,6 +12,9 @@ from datetime import datetime, timezone
 
 import httpx
 
+# PREFIX marks Frontier's machine-posted handoff packets. NC's filter keys on this prefix (or the packet's
+# "Ready for PR/CI/merge" header) to pick packets up, and Frontier sessions listening on the channel skip
+# prefixed messages so a packet never starts a turn. Change the prefix only together with NC's filter.
 PREFIX = '🤖 Frontier: '
 NOTHING_TO_DO = re.compile(r'\W*nothing to do\b', re.I)  # A follow-through that found no work of its own posts nothing.
 NOTE_AFTER = 90  # Seconds a handed-in message may go unanswered before the sender is told it waits on a long step.
