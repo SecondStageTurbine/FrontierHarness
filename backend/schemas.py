@@ -153,6 +153,7 @@ class ProjectSettings(StrictModel):
     verified_delivery: bool = False  # Team work is reviewed by agent-stack and committed only on its GO.
     gate_approver: bool = False  # The independent gate's counting GO is the only success exit; the lead's done alone never commits.
     team_max_rounds: int = Field(default=8, ge=1, le=50)  # Cost guard on the team's review→fix→re-review loop.
+    nc_channel: str | None = Field(default=None, max_length=40)  # Slack channel ID a gate_approver team's commit is handed to NC in.
     pinned: bool = False  # Kept at the top of the sidebar and the Projects dashboard.
 
 class PrCreateInput(StrictModel):

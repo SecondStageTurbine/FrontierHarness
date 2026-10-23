@@ -43,6 +43,12 @@ async def call(client, headers, method, **params):
     return body
 
 
+async def post(store, tenant_id, channel, text):
+    """One top-level message in a channel, as the Slack MCP server's identity; Slack's own error is raised as it is."""
+    async with httpx.AsyncClient(timeout=20) as client:
+        return await call(client, credentials(store, tenant_id), 'chat.postMessage', channel=channel, text=text)
+
+
 async def resolve(store, tenant_id, channel):
     """A channel ID or #name → (id, name, the token's own user ID)."""
     headers = credentials(store, tenant_id)

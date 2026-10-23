@@ -619,7 +619,9 @@ class AgentRunner:
         """Pick a stopped team back up: the same lead, posture and plan, with only unfinished tasks run again."""
         session = self.store.get(tenant_id, 'sessions', session_id)
         last = session['messages'][-1] if session['messages'] else {}
-        if not last.get('team', {}).get('tasks') or last.get('status') not in ('cancelled', 'failed', 'interrupted'):
+        # A finished team whose NC handoff failed may be continued too: that run only retries the post.
+        retry = last.get('team', {}).get('handoff', {}).get('state') == 'failed'
+        if not last.get('team', {}).get('tasks') or (last.get('status') not in ('cancelled', 'failed', 'interrupted') and not retry):
             raise ValueError('Only a team that stopped before finishing can be continued.')
         # A team from before 0.20.8 did not record its request; it is the message that started it.
         asked = next((m['content'] for m in reversed(session['messages']) if m['role'] == 'user'), '')

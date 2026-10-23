@@ -13,8 +13,10 @@ import json
 import re
 from pathlib import Path
 
+import httpx
+
 from . import board
-from . import adaptive, agentstack, benchmark, gitops, localhealth
+from . import adaptive, agentstack, benchmark, gitops, localhealth, slack_listen
 from .adaptive import TaskRequirements
 from .broker import CLI_TOOLS, AgentResult, ProviderError, cooling as broker_cooling
 from .store import now, uid
@@ -325,6 +327,9 @@ class Team:
         self.agents = agents
         self.agents = agents
         team = message['team']
+        if team.get('handoff') and (team.get('verified') or {}).get('status') == 'committed':
+            # Already committed: a continued team only finishes the NC handoff, and never reviews or commits again.
+            return AgentResult(f'The team\u2019s work is already committed as `{team["verified"]["commit"][:10]}`.' + await self.hand_off(), None, None)
         cooling = lambda mid: broker_cooling(self.runner.broker, self.tenant_id, mid)
         repo = await gitops.toplevel(self.root)
         if team.get('tasks'):
@@ -420,6 +425,7 @@ class Team:
             team['status'] = 'fixing'
             team['review_round'] = round_number
             team['review_findings'] = sorted(finding_ids)
+            team['review_raised'] = sorted(set(team.get('review_raised') or []) | {i for i in finding_ids if i})  # For the NC handoff's totals.
             self.save(message, session, f'{self.lead["name"]} asked for {len(fixes)} fixes (round {round_number}).')
             for fix in fixes:
                 task = next(t for t in team['tasks'] if t['id'] == str(fix['task_id']))
@@ -648,16 +654,79 @@ class Team:
         team['status'] = 'done'
         team['review_round'] = round_number
         team['review_exit'] = reason
+        team['review_tests'] = tests and {'command': tests['command'], 'passed': tests['passed']}
         self.save(message, session, self.exit_note(reason, round_number, cap))
         reply = (reply or '').strip() or self.summary(team)
         if reason == 'done':
             if gate:
                 reply += await self.deliver(gate, objective)
+                if getattr(self, 'gate_approver', False) and gate['status'] == 'committed':
+                    reply += await self.hand_off()
         else:
             reply += self.not_committed(reason, round_number, gate, cap)
         if tests and not tests['passed']:
             reply += f'\n\n**Tests:** `{tests["command"]}` failed after the team\'s work. The output is in the Terminal panel.'
         return AgentResult(reply, self.tokens[0] or None, self.tokens[1] or None)
+
+    async def hand_off(self):
+        """Post the committed work's packet to NC's Slack channel, at most once per commit. The commit stands whatever
+        happens to the post: a failure is recorded and reported, and only a failed post is tried again, on a continue."""
+        session, message = self.state()
+        team = message['team']
+        commit = team['verified']['commit']
+        marker = team.get('handoff') or {}
+        if marker.get('commit') == commit and marker.get('state') == 'posted':
+            return f'\n\n**NC handoff:** `{commit[:10]}` was already posted to NC; it is not posted again.'
+        if marker.get('commit') == commit and marker.get('state') == 'posting':
+            # The last attempt stopped mid-post, so NC may have it: posting again could open a second PR.
+            return (f'\n\n**NC handoff unknown:** committed as `{commit}`; the post to NC was interrupted, so it is not sent again. '
+                    'Check NC\u2019s channel and post it by hand if it is missing.')
+        project = self.runner.store.get(self.tenant_id, 'projects', self.project_id)
+        channel = (project.get('nc_channel') or '').strip()
+        if not channel:
+            return f'\n\n**NC handoff skipped:** committed locally as `{commit}`; no NC channel is set for this project, so nothing was handed off.'
+        text = await self.packet(team, project, commit)
+        team['handoff'] = {'commit': commit, 'state': 'posting'}
+        self.save(message, session, 'Handing the commit to NC.')
+        try:
+            await slack_listen.post(self.runner.store, self.tenant_id, channel, text)
+            team['handoff'] = {'commit': commit, 'state': 'posted', 'ts': now()}
+            outcome = f'\n\n**Handed to NC:** the packet for `{commit[:10]}` is posted in <#{channel}>.'
+        except (ValueError, httpx.HTTPError) as exc:
+            # Never rolled back, and never a channel join: a not_in_channel or a dead token is for a person to fix.
+            team['handoff'] = {'commit': commit, 'state': 'failed', 'error': str(exc)}
+            outcome = (f'\n\n**NC handoff failed.** Committed as `{commit}`, but the post to NC failed: {exc}. '
+                       'The commit stands; continue the team to try the post once more.')
+        self.save(message, session, f'NC handoff {team["handoff"]["state"]}.')
+        return outcome
+
+    async def packet(self, team, project, commit):
+        """The handoff message: what NC needs to open the PR and judge it, read from the saved exit record."""
+        gate = team['verified']
+        try:
+            branch = ', '.join((await gitops.run(self.root, 'branch', '--contains', commit, '--format=%(refname:short)')).split()) or '(no branch)'
+        except gitops.GitError as exc:
+            branch = f'unknown ({exc})'
+        raised = set(team.get('review_raised') or [])
+        still = {f.get('id') for f in gate.get('findings') or []}
+        rounds = team.get('review_round')
+        tests = team.get('review_tests')
+        family = (f':warning: *Same-family review:* {gate["reviewer_model"]} is from the authors\u2019 own family ({gate["reviewer_provider"]}). '
+                  'It is a different model, so its GO counted, but it is a weaker check than a cross-family one.'
+                  if gate.get('same_family') else f'*Cross-family review:* {gate["reviewer_provider"]} reviewed work written by the other family.')
+        what = (team.get('objective') or '').strip().splitlines()
+        return '\n'.join([
+            f'{slack_listen.PREFIX}*Ready for PR/CI/merge:* {what[0][:200] if what else "(no objective recorded)"}',
+            f'*Project:* {project.get("name")}',
+            f'*Branch:* {branch}',
+            f'*Commit:* `{commit}`',
+            f'*Reviewer:* {gate["reviewer_model"]} ({gate["reviewer_provider"]}), counting GO on round {rounds} of {rounds}',
+            family,
+            f'*Findings:* {len(raised)} raised, {len(raised - still)} fixed across the rounds; final state: counting GO, '
+            + (f'{len(still)} still open' if still else 'no open findings'),
+            '*Tests:* ' + ('none configured' if not tests else f'passed (`{tests["command"]}`)' if tests['passed'] else
+                           f'FAILED (`{tests["command"]}`): the reviewed commit carries failing tests'),
+        ])
 
     def exit_note(self, reason, round_number, cap):
         if reason == 'done':
