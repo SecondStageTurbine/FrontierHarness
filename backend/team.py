@@ -361,14 +361,26 @@ class Team:
                 for task in batch:
                     await self.work(task['id'], objective, team, repo)
         previous, gate = None, None
-        verified = bool(repo and self.runner.store.get(self.tenant_id, 'projects', self.project_id).get('verified_delivery'))
-        for round_number in range(2):
+        project = self.runner.store.get(self.tenant_id, 'projects', self.project_id)
+        verified = bool(repo and project.get('verified_delivery'))
+        approver = bool(repo and project.get('gate_approver'))
+        self.gate_approver = approver
+        gate_flow = verified or approver  # The approver flow runs the gate every round, whatever verified_delivery says.
+        cap = project.get('team_max_rounds')
+        cap = cap if isinstance(cap, int) and cap >= 1 else 8  # A cost guard on the loop, not a target.
+        # The round count and the last round's findings survive a stop/resume, so neither the cap nor the
+        # stall detection is reset when a team is continued.
+        round_number = int(self.state()[1]['team'].get('review_round') or 0)
+        previous_findings = set(self.state()[1]['team'].get('review_findings') or [])
+        while True:
+            round_number += 1
             session, message = self.state()
             team = message['team']
             team['status'] = 'reviewing'
-            self.save(message, session, f'{self.lead["name"]} is reviewing the team’s work.')
+            team['review_round'] = round_number
+            self.save(message, session, f'{self.lead["name"]} is reviewing the team’s work (round {round_number}).')
             tests = await self.run_tests()
-            gate = await self.verify(objective, gate) if verified else None
+            gate = await self.verify(objective, gate) if gate_flow else None
             verdict = parse_json(await self.ask_lead(await self.review_prompt(objective, team, repo, tests, previous, gate))) or {}
             previous = verdict
             reply = (verdict.get('reply') or '').strip()
@@ -378,30 +390,49 @@ class Team:
             if vetoed and not fixes:
                 # The lead may not wave an independent NO-GO through: its findings go back to the workers as they stand.
                 fixes = findings_as_fixes(gate['findings'], team['tasks'])
-            if (verdict.get('verdict') == 'fix' or vetoed) and fixes and round_number == 0:
-                session, message = self.state()
-                team = message['team']
-                team['status'] = 'fixing'
-                self.save(message, session, f'{self.lead["name"]} asked for {len(fixes)} fixes.')
-                for fix in fixes:
-                    task = next(t for t in team['tasks'] if t['id'] == str(fix['task_id']))
-                    if task.get('model_id'):
-                        self.record(task['model_id'], fixes=1)
-                for fix in fixes:
-                    await self.work(str(fix['task_id']), objective, team, repo, fix=fix['instructions'])
-                continue
+            wants_fixes = (verdict.get('verdict') == 'fix' or vetoed) and bool(fixes)
+            # A broken gate is never retried inside the loop: stop at once and tell the user what failed.
+            if gate and gate['status'] == 'failed':
+                return await self.finish_team(objective, 'review-failed', round_number, tests, gate, reply, cap)
+            # No reviewer model that is not also a writer: the gate cannot be made independent, so stop and say so.
+            if gate and gate['status'] == 'no-reviewer':
+                return await self.finish_team(objective, 'stalled', round_number, tests, gate, reply, cap)
+            if approver:
+                # Under the approver flow only a counting GO — one from a model that wrote none of the change — commits;
+                # the lead's own done never exits on its own.
+                if gate and gate['status'] == 'GO' and gate.get('counts'):
+                    return await self.finish_team(objective, 'done', round_number, tests, gate, reply, cap)
+            elif not wants_fixes and (gate is None or gate['status'] in ('GO', 'nothing')):
+                # Approved: the lead asks for nothing and the independent gate is absent, GO or nothing. A fix round
+                # already run changed the content, so only this round's gate can carry the approval.
+                return await self.finish_team(objective, 'done', round_number, tests, gate, reply, cap)
+            # Not converging: the lead wants fixes but named none it can act on, or the gate keeps returning the
+            # very findings the last fix round was meant to close.
+            finding_ids = {f.get('id') for f in (gate or {}).get('findings') or []}
+            if (verdict.get('verdict') == 'fix' and not fixes) or (finding_ids and finding_ids == previous_findings):
+                return await self.finish_team(objective, 'stalled', round_number, tests, gate, reply, cap)
+            # The cost guard: stop at the cap rather than cycle for ever.
+            if round_number >= cap:
+                return await self.finish_team(objective, 'cap', round_number, tests, gate, reply, cap)
+            # Send the fixes back to the workers, then review the result again next round.
             session, message = self.state()
             team = message['team']
-            team['status'] = 'done'
-            self.save(message, session, 'The team finished.')
-            reply = reply or self.summary(team)
-            if gate:
-                reply += await self.deliver(gate, objective)
-            if tests and not tests['passed']:
-                # The lead may judge a failure unrelated, but the user is never left thinking the tests passed.
-                reply += f'\n\n**Tests:** `{tests["command"]}` failed after the team\'s work. The output is in the Terminal panel.'
-            return AgentResult(reply, self.tokens[0] or None, self.tokens[1] or None)
-        return AgentResult(self.summary(team), self.tokens[0] or None, self.tokens[1] or None)
+            team['status'] = 'fixing'
+            team['review_round'] = round_number
+            team['review_findings'] = sorted(finding_ids)
+            self.save(message, session, f'{self.lead["name"]} asked for {len(fixes)} fixes (round {round_number}).')
+            for fix in fixes:
+                task = next(t for t in team['tasks'] if t['id'] == str(fix['task_id']))
+                if task.get('model_id'):
+                    self.record(task['model_id'], fixes=1)
+            fix_task_ids = {str(f['task_id']) for f in fixes}
+            for fix in fixes:
+                await self.work(str(fix['task_id']), objective, team, repo, fix=fix['instructions'])
+            # A fix round that changed nothing cannot converge: the next review would see exactly this.
+            session, message = self.state()
+            if sum(len(t.get('changed') or []) for t in message['team']['tasks'] if t['id'] in fix_task_ids) == 0:
+                return await self.finish_team(objective, 'stalled', round_number, tests, gate, reply, cap)
+            previous_findings = finding_ids
 
     async def resume(self, agents, repo, cooling):
         """Continue a stopped team: finished tasks stand, the rest run again from where their workers got to.
@@ -467,6 +498,66 @@ class Team:
                 weight['claude' if providers.get(t.get('model_id')) == 'claude_cli' else 'codex'] += len(t.get('changed') or []) or 1
         return max(weight, key=weight.get)
 
+    def writer_models(self, team, paths=None, strict=False):
+        """The model names of the agents that wrote the change, by recorded task model_id — never the provider bucket.
+
+        With `paths` (a sealed change) only writers of those files count, and `strict` refuses to guess: a changed
+        file no task owns means the writer identity cannot be reconstructed, so the gate must not fall back to a bucket.
+        """
+        names = {a['id']: a.get('model_name') for a in getattr(self, 'agents', [])}
+        owners = {}
+        for t in team['tasks']:
+            if t.get('adversary'):
+                continue
+            changed = t.get('changed') or []
+            if not changed:
+                continue
+            name = names.get(t.get('model_id'))
+            if not name:
+                try:
+                    name = self.runner.store.get(self.tenant_id, 'models', t.get('model_id')).get('model_name')
+                except Exception:
+                    name = None
+            if not name:
+                continue
+            for path in changed:
+                owners.setdefault(path, set()).add(name)
+        if paths is None:
+            return {name for group in owners.values() for name in group}
+        writers = set()
+        for path in paths:
+            if path not in owners:
+                if strict:
+                    raise agentstack.AgentStackError(f'Cannot attribute every changed file to a team task: {path} was changed but no task owns it.')
+                continue
+            writers |= owners[path]
+        return writers
+
+    def pick_reviewer(self, team, writers):
+        """An agent-stack reviewer that is not any writer's own model: a different family first, then the
+        strongest different model in the writer's family. Returns (provider, model) as agent-stack names them."""
+        author = self.author_provider(team)
+        bucket = lambda a: 'claude' if a['provider'] == 'claude_cli' else 'codex'
+        candidates = [a for a in getattr(self, 'agents', []) if a['provider'] in ('claude_cli', 'codex_cli') and a.get('model_name') and a['model_name'] not in writers]
+        if not candidates:
+            return None
+        tier = [a for a in candidates if bucket(a) != author] or [a for a in candidates if bucket(a) == author]
+        needs = {c: 8 for c in CAPABILITIES if c != 'speed'}
+        best, _ = adaptive.choose(TaskRequirements(task_type='implementation', complexity='high', risk='high', requirements=needs, reason='independent reviewer'), tier, lambda mid: False)
+        chosen = next((a for a in tier if a['id'] == best['id']), tier[0]) if best else tier[0]
+        return (bucket(chosen), chosen['model_name'])
+
+    def seal_fields(self, sealed, author, approver):
+        """What a sealed change records about its reviewer; under the approver flow same-family is the provider comparison."""
+        same = (sealed['reviewer']['provider'] == author) if approver else (sealed['reviewer'].get('assurance') == 'operator-selected-same-provider')
+        return {'sealed': sealed, 'same_family': same,
+                'reviewer': f'{sealed["reviewer"]["model"]} ({sealed["reviewer"]["provider"]}{", same family as the authors" if same else ""})',
+                'reviewer_model': sealed['reviewer']['model'], 'reviewer_provider': sealed['reviewer']['provider']}
+
+    def counts_go(self, team, sealed):
+        """A GO counts only when the reviewer's model is not the model of any writer of the sealed change."""
+        return sealed['reviewer']['model'] not in self.writer_models(team, sealed['paths'], strict=True)
+
     async def verify(self, objective, previous=None):
         """Seal the integrated work and have the other model family review it. After a NO-GO the same change is
         routed again, so the reviewer rechecks its findings; after a GO it is a new change, since a GO is final for what it saw."""
@@ -477,25 +568,47 @@ class Team:
         rounds = (previous or {}).get('round', 0) + (1 if (previous or {}).get('status') == 'GO' else 0)
         change = f'frontier-{self.message_id[:12]}' + (f'-{rounds}' if rounds else '')
         gate = {'round': rounds, 'change': change}
+        approver = getattr(self, 'gate_approver', False)
         try:
             if not agentstack.installed():
                 raise agentstack.AgentStackError('agent-stack is not installed on this computer, so the work could not be independently reviewed.')
             if not await gitops.has_head(self.root):
                 raise agentstack.AgentStackError('The repository has no commits yet; agent-stack reviews changes against one.')
             author = self.author_provider(team)
-            sealed = await agentstack.route(self.root, change, f'frontier-{self.session_id}', objective, author,
-                                            reviewer=agentstack.CLAUDE_WORK_REVIEWER if author == 'claude' else None)
+            if approver:
+                reviewer = self.pick_reviewer(team, self.writer_models(team))
+                if reviewer is None:
+                    writers = self.writer_models(team)
+                    gate.update(status='no-reviewer', error=f'No reviewer model is eligible: every connected reviewer is also a writer of this change ({", ".join(sorted(writers)) or "unknown"}).')
+                    self.show_gate(gate, 'Independent review: no eligible reviewer.')
+                    return gate
+            else:
+                reviewer = agentstack.CLAUDE_WORK_REVIEWER if author == 'claude' else None
+            sealed = await agentstack.route(self.root, change, f'frontier-{self.session_id}', objective, author, reviewer=reviewer)
             if sealed is None:
                 gate.update(status='nothing', error='The team left no changes to review.')
             else:
-                same = sealed['reviewer'].get('assurance') == 'operator-selected-same-provider'
-                gate.update(sealed=sealed, same_family=same,
-                            reviewer=f'{sealed["reviewer"]["model"]} ({sealed["reviewer"]["provider"]}{", same family as the authors" if same else ""})')
+                gate.update(**self.seal_fields(sealed, author, approver))
                 session, message = self.state()
                 message['team']['verified'] = {'status': 'reviewing', 'reviewer': gate['reviewer'], 'files': len(sealed['paths'])}
                 self.save(message, session, f'{gate["reviewer"]} is reviewing {len(sealed["paths"])} changed files.')
                 result = await agentstack.review(self.root, sealed)
                 gate.update(status=result['verdict'], findings=result.get('findings') or [])
+                if approver and result['verdict'] == 'GO':
+                    counts = self.counts_go(team, sealed)
+                    if not counts:
+                        # The GO came from a model that also wrote this change: discard it and re-review the same
+                        # sealed change once with a reviewer that is not any writer's own model.
+                        retry = self.pick_reviewer(team, self.writer_models(team, sealed['paths'], strict=True))
+                        if retry is None:
+                            gate.update(status='no-reviewer', error=f'The only GO came from {sealed["reviewer"]["model"]}, which also wrote this change, and no other reviewer model is eligible.')
+                        else:
+                            sealed = await agentstack.route(self.root, change, f'frontier-{self.session_id}', objective, author, reviewer=retry)
+                            gate.update(**self.seal_fields(sealed, author, approver))
+                            result = await agentstack.review(self.root, sealed)
+                            gate.update(status=result['verdict'], findings=result.get('findings') or [])
+                            counts = result['verdict'] != 'GO' or self.counts_go(team, sealed)
+                    gate['counts'] = counts
         except (agentstack.AgentStackError, gitops.GitError, OSError) as exc:
             gate.update(status='failed', error=str(exc))
         self.show_gate(gate, f'Independent review: {gate["status"]}.')
@@ -525,6 +638,46 @@ class Team:
         why = gate.get('error') or '\n'.join(f'- {f.get("id")} ({f.get("severity")}): {f.get("impact")}' for f in gate.get('findings') or [])
         return (f'\n\n**Not committed.** The independent review ({gate.get("reviewer") or "agent-stack"}) did not give GO '
                 f'({gate["status"]}).\n{why}\nThe changes are staged in the folder for you to look at.')
+
+    async def finish_team(self, objective, reason, round_number, tests, gate, reply, cap):
+        """End the run on any exit path. Only an approved round commits; every other path leaves the work staged
+        and says why the loop stopped. A test failure is reported whatever the verdict, so the user is never left
+        thinking the tests passed."""
+        session, message = self.state()
+        team = message['team']
+        team['status'] = 'done'
+        team['review_round'] = round_number
+        team['review_exit'] = reason
+        self.save(message, session, self.exit_note(reason, round_number, cap))
+        reply = (reply or '').strip() or self.summary(team)
+        if reason == 'done':
+            if gate:
+                reply += await self.deliver(gate, objective)
+        else:
+            reply += self.not_committed(reason, round_number, gate, cap)
+        if tests and not tests['passed']:
+            reply += f'\n\n**Tests:** `{tests["command"]}` failed after the team\'s work. The output is in the Terminal panel.'
+        return AgentResult(reply, self.tokens[0] or None, self.tokens[1] or None)
+
+    def exit_note(self, reason, round_number, cap):
+        if reason == 'done':
+            return 'The team finished.'
+        if reason == 'cap':
+            return f'The team stopped at the {cap}-round review limit without approval.'
+        if reason == 'stalled':
+            return f'The review loop stalled at round {round_number}.'
+        return f'The independent review failed at round {round_number}.'
+
+    def not_committed(self, reason, round_number, gate, cap):
+        why = {'cap': f'the {cap}-round review limit', 'stalled': 'the review loop stalling',
+               'review-failed': 'the independent review failing'}[reason]
+        text = (f'\n\n**Not committed.** The team stopped after review round {round_number} because of {why}; the work was '
+                'not approved. The changes are staged in the folder for you to look at.')
+        if gate:
+            detail = gate.get('error') or '\n'.join(f'- {f.get("id")} ({f.get("severity")}): {f.get("impact")}' for f in gate.get('findings') or [])
+            if detail:
+                text += f'\nOutstanding from the independent review ({gate.get("reviewer") or "agent-stack"}, {gate["status"]}):\n{detail}'
+        return text
 
     async def review_prompt(self, objective, team, repo, tests=None, previous=None, gate=None):
         reports = '\n\n'.join(f'TASK {t["id"]} — {t["title"]} — {t["model_name"]} — {t["status"]}' + (' — ADVERSARIAL CHECK' if t.get('adversary') else '')
