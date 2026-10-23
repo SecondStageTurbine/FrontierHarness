@@ -81,7 +81,7 @@ body{overflow:hidden}
 .user-message{align-self:flex-end;max-width:85%;background:var(--card);border:1px solid var(--border);
  border-radius:14px 14px 4px 14px;padding:10px 14px}
 .message-author{display:none}
-.user-message p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65}
+.user-message p{margin:0;color:var(--foreground);white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65}
 .user-message>time{display:block;margin-top:6px;text-align:right;color:var(--subtle);font-size:10px}
 
 .agent-turn{display:flex;flex-direction:column;gap:10px}
