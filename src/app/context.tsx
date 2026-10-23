@@ -6,7 +6,7 @@ import {api} from '../lib/api';
 import type {Tenant} from '../types';
 
 interface WorkspaceContext {tenant:Tenant|null;tenants:Tenant[];switchTenant:(id:string)=>void;refreshTenants:()=>void;path:(p:string)=>string;notify:(text:string)=>void;theme:string;setTheme:(s:string)=>void;accent:string;setAccent:(s:string)=>void;advanced:boolean;setAdvanced:(v:boolean)=>void;scale:number;setScale:(n:number)=>void;spellcheck:boolean;setSpellcheck:(v:boolean)=>void;copy:(text:string,done?:string)=>void;customTheme:CustomTheme|null;setCustomTheme:(t:CustomTheme|null)=>void}
-export const THEMES:{id:string;name:string;blurb:string;dark:boolean}[]=[{id:'dark',name:'Dark',blurb:'Focused and understated',dark:true},{id:'midnight',name:'Midnight',blurb:'Deep blue, like the icon',dark:true},{id:'warm',name:'Warm',blurb:'Amber on charcoal',dark:true},{id:'light',name:'Light',blurb:'Clear and open',dark:false},{id:'claude',name:'Claude Code',blurb:'Terminal type, Claude orange',dark:true}];
+export const THEMES:{id:string;name:string;blurb:string;dark:boolean}[]=[{id:'dark',name:'Dark',blurb:'Focused and understated',dark:true},{id:'midnight',name:'Midnight',blurb:'Deep blue, like the icon',dark:true},{id:'warm',name:'Warm',blurb:'Amber on charcoal',dark:true},{id:'light',name:'Light',blurb:'Clear and open',dark:false},{id:'claude',name:'Claude Code',blurb:'The Claude Code desktop look',dark:true}];
 /** Mix a hex colour toward black or white by a fraction. */
 function mix(hex:string,to:number,amount:number){const n=parseInt(hex.replace('#',''),16);const c=[n>>16&255,n>>8&255,n&255].map(v=>Math.round(v+(to-v)*amount));return '#'+c.map(v=>v.toString(16).padStart(2,'0')).join('')}
 const Workspace=createContext<WorkspaceContext>(null!);
