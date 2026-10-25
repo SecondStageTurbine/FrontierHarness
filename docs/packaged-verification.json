@@ -1,6 +1,6 @@
 {
   "executable": "frontier-backend-x86_64-pc-windows-msvc.exe",
-  "executable_sha256": "2963598d0b2f6fd381ed127c8745daaf0866b67f2acd3aa37532575ffc289545",
+  "executable_sha256": "1f3c5f45e227c357470eb4b2e92351651522009c6567706e48d81b534907ab6a",
   "no_system_python_or_node_on_path": true,
   "checks": [
     {
