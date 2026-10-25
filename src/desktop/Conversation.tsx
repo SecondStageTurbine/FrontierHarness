@@ -1,17 +1,19 @@
 import {useEffect,useState} from 'react';
-import {Check,ChevronRight,LoaderCircle,FileCode2,AlertTriangle,Square,ArrowRightLeft,Eye,Pencil,Zap,Clock,X,Undo2,FoldVertical,ShieldQuestion,MessageCircleQuestion,Users,FileText,Terminal,GitCompareArrows,ExternalLink,MessageSquare} from 'lucide-react';
+import {Check,ChevronRight,LoaderCircle,FileCode2,AlertTriangle,Square,ArrowRightLeft,Eye,Pencil,Zap,Clock,X,Undo2,FoldVertical,ShieldQuestion,MessageCircleQuestion,Users,FileText,Terminal,GitCompareArrows,ExternalLink,MessageSquare,Copy} from 'lucide-react';
 import {MarkdownOutput} from '../components/Markdown';
 import {duration,money} from '../lib/api';
 import {working} from '../types';
+import {useWorkspace} from '../app/context';
 import {modeLabels,type Approval,type Message,type Mode,type Session,type Team as TeamState,type TeamVerified} from '../types';
 export type InspectorTab='Activity'|'Files'|'Changes'|'Terminal'|'Preview'|'Tasks'|'Turns';
 const modeIcon={read:Eye,edit:Pencil,auto:Zap};
 
 export function Conversation({session,onInspect,onUnqueue,onRevert,onDecide,onRewind,onOpenSession,onCite,onContinueTeam,onResume}:{session:Session;onContinueTeam?:()=>void;onResume?:(id:string)=>void;onInspect:(tab:InspectorTab,path?:string,line?:number)=>void;onUnqueue?:(id:string)=>void;onRevert?:(id:string)=>void;onDecide?:(approval:Approval,allow:boolean,message?:string)=>void;onRewind?:(id:string)=>void;onOpenSession?:(id:string)=>void;onCite?:(text:string,from:string)=>void}){
- const busy=working(session.messages.at(-1));
+ const busy=working(session.messages.at(-1));const {copy}=useWorkspace();
  const [cite,setCite]=useState<{text:string;from:string;x:number;y:number}|null>(null);
- // Selecting text inside a reply offers to cite it in the composer as a typed reference.
- function onSelect(e:React.MouseEvent){if(!onCite)return;const sel=window.getSelection();const text=sel?.toString().trim()||'';if(!text||!sel||sel.rangeCount===0){setCite(null);return}const node=sel.anchorNode instanceof Element?sel.anchorNode:sel.anchorNode?.parentElement;const turn=node?.closest('.agent-turn');if(!turn){setCite(null);return}const rect=sel.getRangeAt(0).getBoundingClientRect();const host=(e.currentTarget as HTMLElement).getBoundingClientRect();setCite({text:text.slice(0,20000),from:turn.querySelector('.frontier-author strong')?.textContent||'the agent',x:rect.left-host.left,y:rect.top-host.top})}
+ // Selecting text inside a reply offers to copy it, or cite it in the composer as a typed reference. Only a left-button
+ // release counts, so a right-click leaves the selection and the browser's own Copy menu alone.
+ function onSelect(e:React.MouseEvent){if(!onCite||e.button!==0)return;const sel=window.getSelection();const text=sel?.toString().trim()||'';if(!text||!sel||sel.rangeCount===0){setCite(null);return}const node=sel.anchorNode instanceof Element?sel.anchorNode:sel.anchorNode?.parentElement;const turn=node?.closest('.agent-turn');if(!turn){setCite(null);return}const rect=sel.getRangeAt(0).getBoundingClientRect();const host=(e.currentTarget as HTMLElement).getBoundingClientRect();setCite({text:text.slice(0,20000),from:turn.querySelector('.frontier-author strong')?.textContent||'the agent',x:rect.left-host.left,y:rect.top-host.top})}
  // The first message shown stays put as new ones arrive: a window that slid would drop messages off the top
  // mid-turn and jerk the view. It resets per conversation; "Load earlier" moves it back.
  const [from,setFrom]=useState(()=>Math.max(0,session.messages.length-20));
@@ -22,7 +24,10 @@ export function Conversation({session,onInspect,onUnqueue,onRevert,onDecide,onRe
  const [showSummary,setShowSummary]=useState(false);
  const boundary=session.summary?.through;
  return <div className="conversation-thread" onMouseUp={onSelect} style={{position:'relative'}}>
-  {cite&&<button type="button" className="cite-button" style={{left:Math.max(0,cite.x),top:Math.max(0,cite.y-30)}} onMouseDown={e=>e.preventDefault()} onClick={()=>{onCite?.(cite.text,cite.from);setCite(null);window.getSelection()?.removeAllRanges()}}><MessageSquare size={11}/>Cite in composer</button>}
+  {cite&&<div className="cite-bar" style={{left:Math.max(0,cite.x),top:Math.max(0,cite.y-30)}} onMouseDown={e=>e.preventDefault()}>
+   <button type="button" className="cite-button" onClick={()=>{copy(window.getSelection()?.toString()||cite.text);setCite(null)}}><Copy size={11}/>Copy</button>
+   <button type="button" className="cite-button" onClick={()=>{onCite?.(cite.text,cite.from);setCite(null);window.getSelection()?.removeAllRanges()}}><MessageSquare size={11}/>Cite in composer</button>
+  </div>}
   {start>0&&<button className="history-more" onClick={()=>setFrom(Math.max(0,start-20))}>Load earlier messages</button>}
   {shown.map(message=><div key={message.id} className={message.id===boundary?'':undefined}>{message.role==='user'
    ?<section className="conversation-turn"><div className="user-message"><span className="message-author">You{message.midturn?" · while it worked":""}</span>{onRewind&&!busy&&<button className="rewind-button" title="Edit this message and resend it; later messages are removed and the folder is put back to how it was before it" onClick={()=>onRewind(message.id)}><Pencil size={11}/>Edit from here</button>}<p>{message.content.split('\n\nREFERENCED CONTEXT')[0].split('\n\nAttached for context')[0]}</p>{!!message.context?.length&&<div className="context-chips read">{message.context.map((c,i)=><span key={i}>{c.kind==='file'?<FileText size={10}/>:c.kind==='terminal'?<Terminal size={10}/>:<GitCompareArrows size={10}/>}{c.label||c.path||c.kind}{c.start?`:${c.start}${c.end&&c.end!==c.start?`-${c.end}`:''}`:''}</span>)}</div>}<time dateTime={message.created_at}>{sentAt(message.created_at)}</time></div></section>
@@ -78,7 +83,7 @@ function AgentMessage({message,onInspect,onRevert,approvals=[],onDecide,onOpenSe
  const replyAt=running?message.created_at:message.finished_at||message.created_at;
  const status=running?`Working · ${duration(message.created_at,null)}`:[message.status!=='complete'?message.status:'',turnStats(message)].filter(Boolean).join(' · ');
  const ModeIcon=modeIcon[(message.mode||'edit') as Mode];
- const changes=message.changes||[];
+ const changes=message.changes||[];const {copy}=useWorkspace();
  return <div className={`agent-turn ${running?'working':''}`}>
   <div className="frontier-author">
    <span className="frontier-spark">{running?<LoaderCircle size={14} className="spin"/>:'✳'}</span>
@@ -98,7 +103,7 @@ function AgentMessage({message,onInspect,onRevert,approvals=[],onDecide,onOpenSe
   {message.status==='interrupted'&&!message.team&&onResume&&<div className="handover-note"><AlertTriangle size={13}/>Frontier closed while this turn was running.<button onClick={onResume}>Resume turn</button></div>}
   {running
    ?<div className="agent-working-caption">{message.routing?.status==='choosing'?'Adaptive is choosing an agent for this message.':message.team?'The team is working. Each task runs in its own session; open one from the card to watch it.':'Reading the project and working in it. The reply appears when the agent finishes.'}</div>
-   :message.content&&<div className="inline-build"><MarkdownOutput text={message.content} onFile={(p,l)=>onInspect('Files',p,l)}/></div>}
+   :message.content&&<div className="inline-build"><MarkdownOutput text={message.content} onFile={(p,l)=>onInspect('Files',p,l)}/><button type="button" className="reply-copy" title="Copy the whole reply as Markdown" onClick={()=>copy(message.content)}><Copy size={12}/>Copy</button></div>}
   {changes.length>0&&<div className={`changed-summary ${message.reverted_at?'reverted':''}`}>
    <button onClick={()=>onInspect('Changes')}><FileCode2 size={14}/>{changes.length} file{changes.length===1?'':'s'} changed<ChevronRight size={13}/></button>
    {message.reverted_at?<span className="reverted-badge"><Undo2 size={12}/>Reverted</span>:onRevert&&!running&&<button className="revert-button" title={message.checkpoint?'Put every file this turn touched back exactly as it was, from the repository checkpoint':'Write back what each changed file held before this turn'} onClick={()=>onRevert(message.id)}><Undo2 size={12}/>Revert this turn</button>}

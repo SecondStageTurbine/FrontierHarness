@@ -107,6 +107,8 @@ body{overflow:hidden}
 .capability-grid input{width:58px;padding:5px 8px;font-size:12px}
 .inline-build{margin-top:-2px}
 .inline-build .markdown{line-height:1.7}
+.code-wrap{position:relative}.code-copy{position:absolute;top:8px;right:22px;padding:5px;border-radius:6px;background:var(--elevated);border:1px solid var(--border);color:var(--muted);opacity:0;transition:opacity .12s}.code-wrap:hover .code-copy,.code-copy:focus-visible{opacity:1}.code-copy:hover{color:var(--foreground)}
+.reply-copy{display:inline-flex;align-items:center;gap:5px;margin-top:4px;padding:3px 8px;font-size:11px;background:transparent;border:0;color:var(--subtle);border-radius:6px}.reply-copy:hover{color:var(--foreground);background:var(--elevated)}
 
 .changed-summary{display:flex;flex-direction:column;gap:1px;
  border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface);overflow:hidden}
@@ -360,7 +362,7 @@ body{overflow:hidden}
 
 .mcp-catalog{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;margin:0 0 16px}.mcp-catalog>button{display:flex;flex-direction:column;align-items:flex-start;gap:4px;text-align:left;padding:12px;white-space:normal;background:var(--card)}.mcp-catalog strong{font-size:12px}.mcp-catalog span{font-size:10px;color:var(--subtle);line-height:1.5}.mcp-catalog code{font-size:9px;color:var(--muted)}.mcp-catalog small{font-size:9px;color:var(--success)}
 .term-agent{position:relative}.term-agent-menu{position:absolute;top:26px;left:0}
-.cite-button{position:absolute;z-index:5;display:inline-flex;align-items:center;gap:5px;font-size:10px;padding:4px 9px;background:var(--elevated);border:1px solid var(--border);color:var(--foreground);border-radius:6px;box-shadow:var(--shadow)}
+.cite-bar{position:absolute;z-index:5;display:flex;gap:4px}.cite-button{display:inline-flex;align-items:center;gap:5px;font-size:10px;padding:4px 9px;background:var(--elevated);border:1px solid var(--border);color:var(--foreground);border-radius:6px;box-shadow:var(--shadow)}
 /* Model cards: as many columns as fit at a readable width, never three squeezed ones; the footer wraps instead of pushing the delete button out of the card. */
 .desktop-settings-body .model-grid{grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}.model-card-footer{flex-wrap:wrap;row-gap:8px}.model-card-footer>button{flex:0 0 auto;min-width:0}.model-card-footer>.icon-button{margin-left:auto}
 /* Wide dialogs, settings and project settings among them, use the window: the earlier :has() rule never matched in the desktop webview. */
