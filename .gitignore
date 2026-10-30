@@ -34,3 +34,6 @@ src-tauri/binaries/
 opencode.json
 AGENTS.md
 GEMINI.md
+.frontier/
+.playwright-mcp/
+.provolega
