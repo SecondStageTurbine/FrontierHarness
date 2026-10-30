@@ -2,7 +2,7 @@ import {useState} from 'react';
 import {ArrowRight,Sparkles} from 'lucide-react';
 
 /** Curated starting points, by the kind of work. Picking one fills the composer to edit before sending. */
-export const STARTERS:{category:string;prompts:{title:string;text:string}[]}[]=[
+const STARTERS:{category:string;prompts:{title:string;text:string}[]}[]=[
  {category:'Build',prompts:[
   {title:'Add a feature with tests',text:'Add <feature>. Follow the conventions already in this project, add tests for the new behaviour, run them, and tell me how to try it.'},
   {title:'Add an API endpoint',text:'Add an endpoint that <does what>, with input validation, error handling that matches the rest of the API, and tests. Run the tests.'},

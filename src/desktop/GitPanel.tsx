@@ -48,7 +48,7 @@ export function GitPanel({projectId,sessionId,busy,onChip,onCompose}:{projectId:
 }
 
 /** The branch's pull request through gh: open one, watch its checks and review, hand review comments to the agent. */
-export function UnifiedDiff({text}:{text:string}){
+function UnifiedDiff({text}:{text:string}){
  const lines=text.split('\n');
  if(!text.trim())return <p className="inspector-empty">No differences.</p>;
  return <div className="unified-diff">{lines.map((line,i)=>{const kind=line.startsWith('+++')||line.startsWith('---')?'diff-meta':line.startsWith('@@')?'diff-hunk':line.startsWith('+')?'diff-add':line.startsWith('-')?'diff-remove':'';return <div key={i} className={kind}><span>{i+1}</span><code>{line||' '}</code></div>})}</div>;
