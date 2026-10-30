@@ -2,11 +2,15 @@ r"""Watch a spent subscription hand the turn over, without needing two real subs
 
 Run:  .venv\Scripts\python switch_demo.py
 """
-import asyncio, pathlib, sys, tempfile
+import asyncio
+import pathlib
+import sys
+import tempfile
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from tests.harness import setup_store
 from backend import broker
 from backend.schemas import ModelConfig
+from tests.harness import setup_store
 
 # Stands in for the Claude CLI. 'seat-1' answers the way a spent subscription answers:
 # the reason inside the JSON, and a nonzero exit. 'seat-2' answers normally.

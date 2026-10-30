@@ -15,10 +15,10 @@ from pathlib import Path
 
 import httpx
 
-from . import board
-from . import adaptive, agentstack, benchmark, gitops, localhealth, slack_listen
+from . import adaptive, agentstack, benchmark, board, gitops, localhealth, slack_listen
 from .adaptive import TaskRequirements
-from .broker import CLI_TOOLS, AgentResult, ProviderError, cooling as broker_cooling
+from .broker import CLI_TOOLS, AgentResult, ProviderError
+from .broker import cooling as broker_cooling
 from .store import now, uid
 
 MAX_TASKS = 6
@@ -295,7 +295,8 @@ class Team:
         tried = {self.lead['id']}
         while True:
             try:
-                live = lambda text: self.runner.say(self.tenant_id, self.session_id, f'[lead · {self.lead["name"]}] {text}')
+                def live(text):
+                    return self.runner.say(self.tenant_id, self.session_id, f'[lead · {self.lead["name"]}] {text}')
                 result = await self.runner.broker.invoke_agent(self.tenant_id, self.lead, prompt, 'read', self.root,
                                                                {**self.runner.protections(self.tenant_id, self.project_id), 'live': live})
                 break
@@ -330,7 +331,8 @@ class Team:
         if team.get('handoff') and (team.get('verified') or {}).get('status') == 'committed':
             # Already committed: a continued team only finishes the NC handoff, and never reviews or commits again.
             return AgentResult(f'The team\u2019s work is already committed as `{team["verified"]["commit"][:10]}`.' + await self.hand_off(), None, None)
-        cooling = lambda mid: broker_cooling(self.runner.broker, self.tenant_id, mid)
+        def cooling(mid):
+            return broker_cooling(self.runner.broker, self.tenant_id, mid)
         repo = await gitops.toplevel(self.root)
         if team.get('tasks'):
             await self.resume(agents, repo, cooling)
@@ -543,7 +545,8 @@ class Team:
         """An agent-stack reviewer that is not any writer's own model: a different family first, then the
         strongest different model in the writer's family. Returns (provider, model) as agent-stack names them."""
         author = self.author_provider(team)
-        bucket = lambda a: 'claude' if a['provider'] == 'claude_cli' else 'codex'
+        def bucket(a):
+            return 'claude' if a['provider'] == 'claude_cli' else 'codex'
         candidates = [a for a in getattr(self, 'agents', []) if a['provider'] in ('claude_cli', 'codex_cli') and a.get('model_name') and a['model_name'] not in writers]
         if not candidates:
             return None

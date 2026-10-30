@@ -1,7 +1,8 @@
 """Transport-independent contracts."""
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field, model_validator
 from urllib.parse import urlparse
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Mode = Literal['read', 'edit', 'auto']
 

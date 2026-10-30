@@ -5,9 +5,9 @@ Nothing here is required of a project. A folder that is not a repository gets `{
 from `status` and no checkpoints; every other feature keeps working without it.
 """
 import asyncio
+import functools
 import os
 import re
-import functools
 import shutil
 import tempfile
 from pathlib import Path

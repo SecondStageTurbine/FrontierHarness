@@ -66,6 +66,7 @@ def send(directory, event, title, message, click=None, wait=False, force=False):
 def link(directory, tenant_id, project_id, session_id):
     """Where tapping the notification goes: this conversation, at the first address remote access answers on."""
     import os
+
     from . import remote
     port = os.environ.get('HARNESS_DESKTOP_PORT')
     addresses = remote.addresses() if remote.enabled(directory) else []

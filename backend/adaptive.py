@@ -19,6 +19,7 @@ from pathlib import Path
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
+
 from . import benchmark, localhealth
 
 ADAPTIVE = 'adaptive'

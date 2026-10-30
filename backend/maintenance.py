@@ -5,8 +5,8 @@ import re
 import shutil
 from pathlib import Path
 
-from .broker import CLI_TOOLS, ProviderError, probe_cli, resolve_cli
 from . import localprocess
+from .broker import CLI_TOOLS, ProviderError, probe_cli, resolve_cli
 from .localprocess import child_env, child_flags, terminate
 from .store import now, uid
 
@@ -340,7 +340,8 @@ LIMITS_TTL = 300
 
 def fetch_json(url, headers):
     """GET a JSON document; a refusal carries the server's Retry-After when it sends one."""
-    import urllib.error, urllib.request
+    import urllib.error
+    import urllib.request
     try:
         with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'Frontier', **headers}), timeout=15) as response:
             return json.loads(response.read().decode('utf-8')), None, None
@@ -430,18 +431,18 @@ def one_login(login, force):
 def pool(provider, label, logins):
     """Several logins for one tool as one allowance: each window is the average of the logins that have
     it, since each login brings its own full window; it resets when the first of them does."""
-    good = [l for l in logins if not l['error']]
+    good = [login for login in logins if not login['error']]
     windows = {}
     for login in good:
         for limit in login['limits']:
             windows.setdefault(limit['label'], []).append(limit)
     limits = []
     for name, found in windows.items():
-        resets = sorted(l['resets_at'] for l in found if l.get('resets_at'))
+        resets = sorted(entry['resets_at'] for entry in found if entry.get('resets_at'))
         rank = {'normal': 0, 'warning': 1, 'critical': 2}
-        limits.append({'label': name, 'percent': round(sum(l['percent'] for l in found) / len(found), 1), 'logins': len(found),
-                       'severity': max((l.get('severity') or 'normal' for l in found), key=lambda v: rank.get(v, 0)), 'resets_at': resets[0] if resets else None})
-    plans = sorted({l['plan'] for l in good if l.get('plan')})
+        limits.append({'label': name, 'percent': round(sum(entry['percent'] for entry in found) / len(found), 1), 'logins': len(found),
+                       'severity': max((entry.get('severity') or 'normal' for entry in found), key=lambda v: rank.get(v, 0)), 'resets_at': resets[0] if resets else None})
+    plans = sorted({login['plan'] for login in good if login.get('plan')})
     error = None if good else (logins[0]['error'] if logins else None)
     return {'provider': provider, 'label': label, 'plan': ', '.join(plans) or None, 'error': error,
             'retry_after': None if good else logins[0].get('retry_after'), 'limits': limits, 'logins': logins}

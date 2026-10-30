@@ -6,7 +6,9 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
+
 from cryptography.fernet import Fernet
+
 
 def now():
     return datetime.now(timezone.utc).isoformat()

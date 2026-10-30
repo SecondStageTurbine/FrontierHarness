@@ -14,15 +14,16 @@ handoff. A manual choice is never second-guessed.
 """
 import asyncio
 import logging
-from collections import deque
-from datetime import datetime
 import os
 import re
 import secrets
 import sys
+from collections import deque
+from datetime import datetime
 from pathlib import Path
 
-from . import adaptive, benchmark, board, gitops, localhealth, push, sandbox, slash, team as teamwork
+from . import adaptive, benchmark, board, gitops, localhealth, push, sandbox, slash
+from . import team as teamwork
 from .adaptive import ADAPTIVE, MAX_ESCALATIONS
 from .broker import CLI_TOOLS, ProviderError, Steer, cooling
 from .projects import ProjectFiles
@@ -164,6 +165,7 @@ def ensure_firefox(project):
     if FIREFOX_READY or not project.get('agent_browser') or project.get('agent_browser_mode') == 'mine' or project.get('agent_browser_channel') != 'firefox':
         return
     import subprocess
+
     from .localprocess import child_flags
     command = ['cmd', '/c', 'npx'] if os.name == 'nt' else ['npx']
     try:

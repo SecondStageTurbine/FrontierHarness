@@ -14,7 +14,9 @@ import shlex
 import shutil
 import sys
 from pathlib import Path
+
 from pypdf import PdfReader
+
 from .localprocess import child_env, child_flags, terminate
 from .store import TenantIsolationViolationException, now, uid
 

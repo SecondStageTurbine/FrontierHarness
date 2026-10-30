@@ -8,22 +8,55 @@ import os
 import secrets
 import sys
 import time
-import httpx
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, Request, Response, HTTPException, UploadFile, File, Form
-from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, RedirectResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
+
+import httpx
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
-from .schemas import LoginInput, TenantInput, ModelConfig, AGENT_PROVIDERS, SUBSCRIPTION_PROVIDERS, PasswordInput, RemoteInput, PushInput, EnvironmentInput
-from . import adaptive, benchmark, automations, remote, devserver, push, environments
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
+from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
-from .store import Store, TenantIsolationViolationException, uid, now, public_model
+
+from . import (
+    adaptive,
+    automations,
+    benchmark,
+    devserver,
+    environments,
+    localhealth,
+    push,
+    remote,
+)
 from .agent import AgentRunner
-from . import localhealth
+from .broker import (
+    ACCOUNT_HOME_VARS,
+    SIGNIN_COMMANDS,
+    ProviderError,
+    account_env,
+    account_home,
+    probe_cli,
+)
 from .projects import pdf_text
-from .broker import ProviderError, probe_cli, account_env, account_home, ACCOUNT_HOME_VARS, SIGNIN_COMMANDS
+from .schemas import (
+    AGENT_PROVIDERS,
+    SUBSCRIPTION_PROVIDERS,
+    EnvironmentInput,
+    LoginInput,
+    ModelConfig,
+    PasswordInput,
+    PushInput,
+    RemoteInput,
+    TenantInput,
+)
+from .store import Store, TenantIsolationViolationException, now, public_model, uid
 
 SESSION_LIFETIME = 86400*7  # Seconds of inactivity before a stored session expires.
 LOGIN_WINDOW = 900  # Three wrong passwords lock the account for fifteen minutes.
@@ -430,8 +463,8 @@ def create_app(directory=None, broker=None):
         model = store.get(tenant_id,'models',model_id)
         # CLI probes confirm the executable runs, not that its configured model can authenticate.
         # Keyed endpoints use model discovery without generating billable text.
-        from openai import AsyncOpenAI
         from anthropic import AsyncAnthropic
+        from openai import AsyncOpenAI
         key = store.decrypt(model['encrypted_key']) if model.get('encrypted_key') else 'local-no-key'
         start = time.monotonic()
         try:

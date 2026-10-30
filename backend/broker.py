@@ -9,16 +9,17 @@ Several subscriptions can be connected to one provider. Each carries an account 
 credential directory this module points the tool at, and a turn moves to the next connected
 account when the selected one answers that its usage window is spent.
 """
-from dataclasses import dataclass, field
 import asyncio
 import json
+import logging
 import os
 import re
-import logging
 import shutil
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
 from .localprocess import child_env, child_flags, terminate
 from .store import Store
 
@@ -61,6 +62,7 @@ def window_spent(broker, tenant_id, model_id):
     """A usage window at 100% that has not reset yet, from the limits Frontier last read for the Usage view.
     Only what is cached is consulted: routing never waits on, or adds to, calls to the providers' endpoints."""
     from datetime import datetime, timezone
+
     from .maintenance import LIMITS_CACHE
     try:
         model = broker.store.get(tenant_id, 'models', model_id)
@@ -559,7 +561,7 @@ def live_line(provider, raw, prompt):
             elif item.get('type') == 'tool_result':
                 result = item.get('content')
                 result = ' '.join(c.get('text', '') for c in result if isinstance(c, dict)) if isinstance(result, list) else str(result or '')
-                first = next((l.strip() for l in result.splitlines() if l.strip()), '')
+                first = next((line.strip() for line in result.splitlines() if line.strip()), '')
                 if first:
                     lines.append(f'  ↳ {first[:200]}')
     elif provider == 'opencode_cli':

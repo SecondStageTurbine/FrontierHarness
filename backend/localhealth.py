@@ -8,9 +8,9 @@ a server that answers with an empty list is taken at its word that it is running
 """
 import asyncio
 import json
-from collections import Counter
 import os
 import time
+from collections import Counter
 from pathlib import Path
 from urllib.parse import urlparse
 

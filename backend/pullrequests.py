@@ -2,8 +2,9 @@
 import json
 import shutil
 
-from .gitops import GitError, push, status as git_status
 from . import localprocess
+from .gitops import GitError, push
+from .gitops import status as git_status
 from .localprocess import child_env
 
 FIELDS = ('number,title,url,state,isDraft,mergedAt,reviewDecision,baseRefName,headRefName,statusCheckRollup,additions,deletions,author,'

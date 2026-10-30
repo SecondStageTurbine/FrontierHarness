@@ -1,8 +1,7 @@
 """Exercise the frozen backend with no Python/Node/repository on its PATH."""
-import json
 import hashlib
+import json
 import os
-from pathlib import Path
 import re
 import secrets
 import socket
@@ -10,6 +9,8 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
+
 import httpx
 
 root=Path(__file__).resolve().parents[1]

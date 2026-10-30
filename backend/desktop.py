@@ -1,9 +1,10 @@
 """Internal desktop service entrypoint; lifecycle belongs to the native application."""
 import os
-import threading
-import time
 import subprocess
 import sys
+import threading
+import time
+
 
 def watch_parent():
     parent = int(os.environ.get('HARNESS_PARENT_PID', '0'))
@@ -75,6 +76,7 @@ def main():
         return
     log_to_data_dir(os.environ.get('HARNESS_DATA_DIR'))
     import uvicorn
+
     from backend.app import app
     from backend.remote import remote_host
     threading.Thread(target=watch_parent,daemon=True).start()

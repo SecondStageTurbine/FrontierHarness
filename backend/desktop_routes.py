@@ -5,20 +5,62 @@ import hmac
 import json
 import os
 import re
-from pathlib import Path
-from fastapi import Request, HTTPException
-from fastapi.responses import RedirectResponse, StreamingResponse, FileResponse
-from .schemas import (ProjectInput, SessionInput, SessionPatch, InstructionInput, TenantInput, CommandInput, GitPaths, CommitInput, FileWrite,
-                      McpServerInput, ApprovalDecision, ApprovalRequest, FanoutInput, AutomationInput, ProjectSettings, PrCreateInput,
-                      DevServerInput, RewindInput, ImportInput, CloneInput, CatchupInput, ResumeCliInput, BoardTaskInput, BoardTaskPatch, HistoryImportInput, PrReviewInput, PrEditInput, PrMergeInput, SlackListenInput, SlackReplyInput)
-from .store import now, uid, TenantIsolationViolationException
-from .projects import ProjectFiles
-from . import gitops, automations, slack_listen, pullrequests, devserver, maintenance, board, skill_catalog, slash
-from . import vscode_themes as vscode_themes_module
 import secrets
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from fastapi import HTTPException, Request
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+
+from . import (
+    automations,
+    board,
+    devserver,
+    gitops,
+    maintenance,
+    pullrequests,
+    skill_catalog,
+    slack_listen,
+    slash,
+)
+from . import vscode_themes as vscode_themes_module
 from .adaptive import ADAPTIVE
 from .agent import context_usage
+from .projects import ProjectFiles
+from .schemas import (
+    ApprovalDecision,
+    ApprovalRequest,
+    AutomationInput,
+    BoardTaskInput,
+    BoardTaskPatch,
+    CatchupInput,
+    CloneInput,
+    CommandInput,
+    CommitInput,
+    DevServerInput,
+    FanoutInput,
+    FileWrite,
+    GitPaths,
+    HistoryImportInput,
+    ImportInput,
+    InstructionInput,
+    McpServerInput,
+    PrCreateInput,
+    PrEditInput,
+    PrMergeInput,
+    ProjectInput,
+    ProjectSettings,
+    PrReviewInput,
+    ResumeCliInput,
+    RewindInput,
+    SessionInput,
+    SessionPatch,
+    SlackListenInput,
+    SlackReplyInput,
+    TenantInput,
+)
+from .store import TenantIsolationViolationException, now, uid
+
 
 def attachment_note(store,tenant_id,root,attachment_ids):
     """Write each named attachment into the folder the agent works in so it can open the actual file.
@@ -105,7 +147,8 @@ def time_worked(turns,now_at):
                 merged[-1][1]=max(merged[-1][1],b)
             else:
                 merged.append([a,b])
-        since=lambda floor:sum(max(0,(b-max(a,floor)).total_seconds()) for a,b in merged)
+        def since(floor):
+            return sum(max(0,(b-max(a,floor)).total_seconds()) for a,b in merged)
         out[project_id]={'today':round(since(day)),'week':round(since(week)),'total':round(since(datetime.min.replace(tzinfo=timezone.utc)))}
     return out
 
@@ -928,7 +971,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
         logins=list(maintenance.DEFAULT_LOGINS)
         for model in store.list(tenant_id,'models'):
             account=model.get('account')
-            if account and model.get('provider') in maintenance.READERS_LIMITS and not any(l['provider']==model['provider'] and l['name']==account for l in logins):
+            if account and model.get('provider') in maintenance.READERS_LIMITS and not any(login['provider']==model['provider'] and login['name']==account for login in logins):
                 logins.append({'provider':model['provider'],'name':account,'home':str(account_home(store,tenant_id,model['provider'],account))})
         return await asyncio.to_thread(maintenance.subscription_limits,refresh,logins)
 

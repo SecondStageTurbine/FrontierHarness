@@ -1,7 +1,9 @@
 """Read-only discovery. Prints model IDs only, never credentials or provider payloads."""
 import asyncio
 import os
+
 from anthropic import AsyncAnthropic
+
 
 async def main():
     try:
