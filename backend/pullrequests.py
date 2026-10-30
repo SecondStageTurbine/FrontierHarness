@@ -1,10 +1,10 @@
 """Pull requests through the GitHub CLI the user already signed in to. Frontier never holds a token."""
-import asyncio
 import json
 import shutil
 
 from .gitops import GitError, push, status as git_status
-from .localprocess import child_env, child_flags, terminate
+from . import localprocess
+from .localprocess import child_env
 
 FIELDS = ('number,title,url,state,isDraft,mergedAt,reviewDecision,baseRefName,headRefName,statusCheckRollup,additions,deletions,author,'
           'labels,reviewRequests,latestReviews,autoMergeRequest,mergeable,mergeStateStatus')
@@ -19,18 +19,15 @@ def available():
 async def run(root, *args, timeout=60, ok=(0,)):
     if not available():
         raise GitError('The GitHub CLI (gh) is not installed. Install it and run `gh auth login` once.')
-    proc = await asyncio.create_subprocess_exec('gh', *args, cwd=str(root), env=child_env(GIT_TERMINAL_PROMPT='0', GH_PROMPT_DISABLED='1', GH_NO_UPDATE_NOTIFIER='1', NO_COLOR='1'),
-                                                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **child_flags())
     try:
-        async with asyncio.timeout(timeout):
-            out, err = await proc.communicate()
+        code, out, err = await localprocess.run(['gh', *args], timeout, cwd=root,
+                                                env=child_env(GIT_TERMINAL_PROMPT='0', GH_PROMPT_DISABLED='1', GH_NO_UPDATE_NOTIFIER='1', NO_COLOR='1'))
     except TimeoutError:
-        await terminate(proc)
         raise GitError(f'gh {args[0]} took longer than {timeout} seconds and was stopped.') from None
     text_out, text_err = out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace')
-    if proc.returncode not in ok:
+    if code not in ok:
         raise GitError((text_err.strip() or text_out.strip() or f'gh {args[0]} failed.')[:1500])
-    return text_out, text_err, proc.returncode
+    return text_out, text_err, code
 
 
 def summarise_checks(rollup):

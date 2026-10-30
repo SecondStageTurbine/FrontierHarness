@@ -7,10 +7,11 @@ waits for the user's answer. Standard library only: this also runs inside the fr
 """
 import json
 import os
-import sys
 import time
 import urllib.error
 import urllib.request
+
+from .frontier_mcp import stdio_loop
 
 PROTOCOL = '2024-11-05'
 WAIT_SECONDS = 900  # A quarter hour with no answer is a no; the turn continues rather than hangs.
@@ -26,6 +27,20 @@ def call(method, path, body=None):
         return json.loads(response.read().decode() or 'null')
 
 
+def decision(approval, seconds):
+    """Wait for the user to allow or deny an approval card: its state, or None once `seconds` pass without one."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            state = call('GET', f'/internal/approvals/{approval["id"]}?wait=25')
+        except (urllib.error.URLError, OSError):
+            time.sleep(2)
+            continue
+        if state.get('decision') in ('allow', 'deny'):
+            return state
+    return None
+
+
 def decide(arguments):
     """Ask Frontier, wait for the user, and answer in the shape Claude's permission tool expects."""
     if arguments.get('tool_name') == 'AskUserQuestion':
@@ -35,18 +50,12 @@ def decide(arguments):
                                                         'tool_use_id': arguments.get('tool_use_id')})
     except (urllib.error.URLError, OSError, KeyError) as exc:
         return {'behavior': 'deny', 'message': f'Frontier could not be reached to ask for permission: {exc}'}
-    deadline = time.monotonic() + WAIT_SECONDS
-    while time.monotonic() < deadline:
-        try:
-            state = call('GET', f'/internal/approvals/{created["id"]}?wait=25')
-        except (urllib.error.URLError, OSError):
-            time.sleep(2)
-            continue
-        if state.get('decision') == 'allow':
-            return {'behavior': 'allow', 'updatedInput': arguments.get('input') or {}}
-        if state.get('decision') == 'deny':
-            return {'behavior': 'deny', 'message': state.get('message') or 'The user declined this in Frontier.'}
-    return {'behavior': 'deny', 'message': 'Nobody answered the permission request in Frontier within fifteen minutes.'}
+    state = decision(created, WAIT_SECONDS)
+    if state is None:
+        return {'behavior': 'deny', 'message': 'Nobody answered the permission request in Frontier within fifteen minutes.'}
+    if state['decision'] == 'allow':
+        return {'behavior': 'allow', 'updatedInput': arguments.get('input') or {}}
+    return {'behavior': 'deny', 'message': state.get('message') or 'The user declined this in Frontier.'}
 
 
 UNANSWERED = {'unreachable': 'Frontier could not be reached to ask the user.', 'skipped': 'The user chose not to answer.',
@@ -59,18 +68,12 @@ def wait_for_answer(question, options):
         created = call('POST', '/internal/approvals', {'tool_name': 'ask_user', 'kind': 'question', 'input': {'question': question[:2000], 'options': options[:6]}})
     except (urllib.error.URLError, OSError, KeyError):
         return None, 'unreachable'
-    deadline = time.monotonic() + QUESTION_SECONDS
-    while time.monotonic() < deadline:
-        try:
-            state = call('GET', f'/internal/approvals/{created["id"]}?wait=25')
-        except (urllib.error.URLError, OSError):
-            time.sleep(2)
-            continue
-        if state.get('decision') == 'allow':
-            return state.get('message') or '(an empty answer)', None
-        if state.get('decision') == 'deny':
-            return None, 'skipped'
-    return None, 'timeout'
+    state = decision(created, QUESTION_SECONDS)
+    if state is None:
+        return None, 'timeout'
+    if state['decision'] == 'allow':
+        return state.get('message') or '(an empty answer)', None
+    return None, 'skipped'
 
 
 def ask(arguments):
@@ -190,23 +193,7 @@ def handle(message):
 
 
 def serve(stdin=None, stdout=None):
-    """Newline-delimited JSON-RPC over stdio, one request at a time, until stdin closes."""
-    stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
-    for line in stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        result = handle(message)
-        if message.get('id') is None or result is None:
-            continue
-        reply = {'jsonrpc': '2.0', 'id': message['id']}
-        reply.update({'error': result['error']} if 'error' in result else {'result': result})
-        stdout.write(json.dumps(reply) + '\n')
-        stdout.flush()
+    stdio_loop(handle, stdin, stdout)
 
 
 if __name__ == '__main__':

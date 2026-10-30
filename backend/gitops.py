@@ -12,7 +12,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from .localprocess import child_env, child_flags, terminate
+from . import localprocess
+from .localprocess import child_env, child_flags
 
 CHECKPOINT_IDENTITY = dict(GIT_AUTHOR_NAME='Frontier', GIT_AUTHOR_EMAIL='frontier@localhost',
                            GIT_COMMITTER_NAME='Frontier', GIT_COMMITTER_EMAIL='frontier@localhost')
@@ -32,16 +33,12 @@ async def run(root, *args, env=None, timeout=60, ok=(0,)):
     """One git command in `root`; stdout on success, GitError with git's own words otherwise."""
     if not available():
         raise GitError('Git is not installed, or not on the PATH Frontier was started with.')
-    proc = await asyncio.create_subprocess_exec('git', '-c', 'core.quotepath=false', '-c', 'color.ui=never', *args, cwd=str(root),
-                                                env=child_env(**(env or {}), GIT_TERMINAL_PROMPT='0'), stdin=asyncio.subprocess.DEVNULL,
-                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **child_flags())
     try:
-        async with asyncio.timeout(timeout):
-            out, err = await proc.communicate()
+        code, out, err = await localprocess.run(['git', '-c', 'core.quotepath=false', '-c', 'color.ui=never', *args], timeout, cwd=root,
+                                                env=child_env(**(env or {}), GIT_TERMINAL_PROMPT='0'))
     except TimeoutError:
-        await terminate(proc)
         raise GitError(f'git {args[0]} took longer than {timeout} seconds and was stopped.') from None
-    if proc.returncode not in ok:
+    if code not in ok:
         raise GitError((err.decode('utf-8', 'replace').strip() or out.decode('utf-8', 'replace').strip() or f'git {args[0]} failed.')[:2000])
     return out.decode('utf-8', 'replace')
 
@@ -125,16 +122,12 @@ async def push(root):
     current = await status(root)
     args = ['push'] if current.get('upstream') else ['push', '-u', 'origin', 'HEAD']
     # Git writes progress to stderr even on success, so success is the exit code, not silence.
-    proc = await asyncio.create_subprocess_exec('git', *args, cwd=str(root), env=child_env(GIT_TERMINAL_PROMPT='0'),
-                                                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, **child_flags())
     try:
-        async with asyncio.timeout(180):
-            out, _ = await proc.communicate()
+        code, out, _ = await localprocess.run(['git', *args], 180, cwd=root, env=child_env(GIT_TERMINAL_PROMPT='0'), stderr=asyncio.subprocess.STDOUT)
     except TimeoutError:
-        await terminate(proc)
         raise GitError('git push took longer than three minutes and was stopped.') from None
     text = out.decode('utf-8', 'replace').strip()
-    if proc.returncode != 0:
+    if code != 0:
         raise GitError(text[:2000] or 'git push failed.')
     return text
 

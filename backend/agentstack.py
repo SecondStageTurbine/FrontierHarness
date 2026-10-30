@@ -14,8 +14,7 @@ import re
 import time
 from pathlib import Path
 
-from . import gitops
-from .localprocess import child_env, child_flags, terminate
+from . import gitops, localprocess
 
 HOME = Path(os.environ.get('AGENT_STACK_HOME') or Path.home()/'.agent-stack')
 REVIEW_BUDGET = 45*60  # agent-stack's own ceiling for one review cycle.
@@ -48,15 +47,11 @@ def installed():
 
 
 async def call(entry, args, cwd, timeout=300):
-    proc = await asyncio.create_subprocess_exec(*launcher(entry), *args, cwd=str(cwd), env=child_env(), stdin=asyncio.subprocess.DEVNULL,
-                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **child_flags())
     try:
-        async with asyncio.timeout(timeout):
-            out, err = await proc.communicate()
+        code, out, err = await localprocess.run([*launcher(entry), *args], timeout, cwd=cwd)
     except TimeoutError:
-        await terminate(proc)
         raise AgentStackError(f'agent-stack {args[0]} took longer than {timeout} seconds and was stopped.') from None
-    return proc.returncode, out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace')
+    return code, out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace')
 
 
 def first_json(text):

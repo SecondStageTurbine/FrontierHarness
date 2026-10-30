@@ -38,3 +38,16 @@ async def terminate(proc):
         import signal
         os.killpg(proc.pid,signal.SIGKILL)
     await proc.wait()
+
+async def run(argv,timeout,cwd=None,env=None,stderr=asyncio.subprocess.PIPE):
+    """Run a child to the end: (exit code, stdout, stderr) as bytes. Past `timeout` seconds the child and its
+    descendants are stopped and TimeoutError is raised."""
+    proc=await asyncio.create_subprocess_exec(*argv,cwd=None if cwd is None else str(cwd),env=child_env() if env is None else env,
+                                              stdin=asyncio.subprocess.DEVNULL,stdout=asyncio.subprocess.PIPE,stderr=stderr,**child_flags())
+    try:
+        async with asyncio.timeout(timeout):
+            out,err=await proc.communicate()
+    except TimeoutError:
+        await terminate(proc)
+        raise
+    return proc.returncode,out,err

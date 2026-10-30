@@ -166,7 +166,8 @@ def handle(message, frontier_factory=Frontier):
     return {'error': {'code': -32601, 'message': f'Unknown method {method}'}}
 
 
-def serve(stdin=None, stdout=None, frontier_factory=Frontier):
+def stdio_loop(handle, stdin=None, stdout=None):
+    """Newline-delimited JSON-RPC over stdio, one request at a time, until stdin closes."""
     stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
     for line in stdin:
         line = line.strip()
@@ -176,13 +177,17 @@ def serve(stdin=None, stdout=None, frontier_factory=Frontier):
             message = json.loads(line)
         except json.JSONDecodeError:
             continue
-        result = handle(message, frontier_factory)
+        result = handle(message)
         if message.get('id') is None or result is None:
             continue
         reply = {'jsonrpc': '2.0', 'id': message['id']}
         reply.update({'error': result['error']} if 'error' in result else {'result': result})
         stdout.write(json.dumps(reply) + '\n')
         stdout.flush()
+
+
+def serve(stdin=None, stdout=None, frontier_factory=Frontier):
+    stdio_loop(lambda message: handle(message, frontier_factory), stdin, stdout)
 
 
 if __name__ == '__main__':

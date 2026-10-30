@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 from .broker import CLI_TOOLS, ProviderError, probe_cli, resolve_cli
+from . import localprocess
 from .localprocess import child_env, child_flags, terminate
 from .store import now, uid
 
@@ -22,15 +23,11 @@ def npm_argv():
 
 
 async def npm(*args, timeout=60):
-    proc = await asyncio.create_subprocess_exec(*npm_argv(), *args, env=child_env(NO_COLOR='1', NO_UPDATE_NOTIFIER='1'), stdin=asyncio.subprocess.DEVNULL,
-                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **child_flags())
     try:
-        async with asyncio.timeout(timeout):
-            out, err = await proc.communicate()
+        code, out, err = await localprocess.run([*npm_argv(), *args], timeout, env=child_env(NO_COLOR='1', NO_UPDATE_NOTIFIER='1'))
     except TimeoutError:
-        await terminate(proc)
         raise ProviderError('npm did not answer in time.') from None
-    return proc.returncode, out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace')
+    return code, out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace')
 
 
 async def versions():
@@ -121,6 +118,17 @@ def read_claude(root):
     return [item for item in found if item]
 
 
+def codex_session(file):
+    """The session_meta payload heading a Codex rollout file; None if unreadable, not a session, or a `codex exec` run."""
+    try:
+        with file.open(encoding='utf-8', errors='replace') as handle:
+            head = json.loads(handle.readline() or '{}')
+    except (OSError, json.JSONDecodeError):
+        return None
+    meta = head.get('payload') or {}
+    return meta if head.get('type') == 'session_meta' and meta.get('originator') != 'codex_exec' else None
+
+
 def read_codex(root):
     """Codex writes rollouts under ~/.codex/sessions/YYYY/MM/DD/, each naming its cwd in the first record."""
     base = Path.home()/'.codex'/'sessions'
@@ -129,13 +137,8 @@ def read_codex(root):
     wanted = str(Path(root).resolve()).lower()
     found = []
     for file in sorted(base.rglob('*.jsonl'), key=lambda f: f.stat().st_mtime):
-        try:
-            with file.open(encoding='utf-8', errors='replace') as handle:
-                head = json.loads(handle.readline() or '{}')
-        except (OSError, json.JSONDecodeError):
-            continue
-        meta = head.get('payload') or {}
-        if head.get('type') != 'session_meta' or meta.get('originator') == 'codex_exec' or str(Path(meta.get('cwd') or '').resolve()).lower() != wanted:
+        meta = codex_session(file)
+        if meta is None or str(Path(meta.get('cwd') or '').resolve()).lower() != wanted:
             continue
         messages = []
         for line in file.read_text(encoding='utf-8', errors='replace').splitlines()[1:]:
@@ -238,13 +241,9 @@ async def opencode_models():
         launch = resolve_cli('opencode_cli')
     except ProviderError:
         return []
-    proc = await asyncio.create_subprocess_exec(*launch, 'models', env=child_env(), stdin=asyncio.subprocess.DEVNULL,
-                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, **child_flags())
     try:
-        async with asyncio.timeout(40):
-            out, _ = await proc.communicate()
+        _, out, _ = await localprocess.run([*launch, 'models'], 40, stderr=asyncio.subprocess.DEVNULL)
     except TimeoutError:
-        await terminate(proc)
         return []
     found = [line.strip() for line in out.decode('utf-8', 'replace').splitlines() if '/' in line.strip() and ' ' not in line.strip()]
     return sorted(found, key=lambda m: (not m.endswith('-free'), m))
@@ -256,13 +255,9 @@ async def gemini_models():
         launch = resolve_cli('gemini_cli')
     except ProviderError:
         return [], None
-    proc = await asyncio.create_subprocess_exec(*launch, 'models', env=child_env(), stdin=asyncio.subprocess.DEVNULL,
-                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, **child_flags())
     try:
-        async with asyncio.timeout(40):
-            out, _ = await proc.communicate()
+        _, out, _ = await localprocess.run([*launch, 'models'], 40, stderr=asyncio.subprocess.DEVNULL)
     except TimeoutError:
-        await terminate(proc)
         return [], None
     rows = [line.split('	', 1) for line in out.decode('utf-8', 'replace').splitlines() if '	' in line]
     labels = {label.strip(): ident.strip() for ident, label in rows}
@@ -499,13 +494,7 @@ def history_folders(limit=30):
             continue
     codex = Path.home()/'.codex'/'sessions'
     for file in codex.rglob('*.jsonl') if codex.is_dir() else []:
-        try:
-            with file.open(encoding='utf-8', errors='replace') as handle:
-                head = json.loads(handle.readline() or '{}')
-        except (OSError, json.JSONDecodeError):
-            continue
-        meta = head.get('payload') or {}
-        if head.get('type') == 'session_meta' and meta.get('originator') != 'codex_exec':
+        if (meta := codex_session(file)) is not None:
             note(meta.get('cwd'), 'codex', file.stat().st_mtime)
     import tempfile
     home, temp = str(Path.home().resolve()).lower(), str(Path(tempfile.gettempdir()).resolve()).lower()
