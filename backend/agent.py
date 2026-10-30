@@ -911,6 +911,8 @@ class AgentRunner:
         full = await localhealth.saturated(up, [c for key, c in self.serving.items() if key != (tenant_id, session['id'])])
         free = [m for m in up if m['id'] not in full]
         chosen, ranked = adaptive.choose(requirements, free or up, lambda model_id: cooling(self.broker, tenant_id, model_id))
+        # An agent the message names takes it, even if it is busy or dearer than the router would pick.
+        chosen = adaptive.asked_for(content, adaptive.score(requirements, up)) or chosen
         if chosen is None:
             raise ProviderError('Adaptive found no agent that can take a turn.' + (' Every local agent is configured but none of their servers is running.' if offline else ' Connect a Claude, Codex or OpenCode agent.'))
         message['routing'] = {'mode': 'adaptive', 'status': 'chosen', 'classified_by': classified_by,

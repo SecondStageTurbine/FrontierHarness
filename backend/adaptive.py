@@ -463,7 +463,7 @@ def score(requirements, models, in_cooldown=lambda model_id: False):
         total = sum(deficits.values())
         sufficient = all(d <= TOLERANCE for d in deficits.values())
         strength = sum(cap.get(c, 0) for c in CAPABILITIES if c != 'speed')
-        ranked.append({'id': model['id'], 'name': model['name'], 'provider': model['provider'], 'location': cap['location'],
+        ranked.append({'id': model['id'], 'name': model['name'], 'model_name': model.get('model_name'), 'provider': model['provider'], 'location': cap['location'],
                        'cost_class': cap['cost_class'], 'sufficient': sufficient, 'deficit': total, 'strength': strength,
                        'speed': cap.get('speed', 5), 'cooling': bool(in_cooldown(model['id']))})
     # A login in cooldown is not unavailable — the account pool will move past it — but it is a
@@ -483,6 +483,18 @@ def choose(requirements, models, in_cooldown=lambda model_id: False):
     else:
         best['because'] = f'no agent fully covers {requirements.reason}; closest available'
     return best, ranked
+
+
+def asked_for(content, ranked):
+    """The ranked agent the message asks for by name ("Fable should do this", "use Sol"), or None.
+    The user's word beats the router's estimate; the best-ranked match wins when several share the name."""
+    for r in ranked:
+        model_name = r.get('model_name') or ''
+        words = {w for w in re.split(r'[^a-z]+', f'{r["name"]} {model_name}'.lower()) if len(w) >= 3}
+        for w in words:
+            if re.search(rf'\b(?:use|ask|have|let|want|with|@)\s*{w}\b|\b{w}\s+(?:should|can|could|must|will|needs? to|please)\b', content, re.I):
+                return {**r, 'because': f'the message asks for {w.capitalize()}'}
+    return None
 
 
 def stronger(ranked, tried):

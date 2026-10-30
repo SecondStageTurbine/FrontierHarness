@@ -402,3 +402,11 @@ def test_a_benchmark_price_never_makes_an_agent_cheaper_and_low_effort_eases_the
     hard = TaskRequirements(task_type='review', complexity='medium', risk='high', requirements=review, effort='high')
     assert choose(hard, agents)[0]['id'] == 'gpt-6-astra'  # Sol falls short, so the dearer agent is the only one sufficient.
     assert choose(hard.model_copy(update={'effort': 'low'}), agents)[0]['id'] == 'gpt-6-sol'
+
+
+def test_an_agent_the_message_names_takes_the_turn():
+    fable = {'id': 'fable', 'name': 'Claude Fable', 'provider': 'claude_cli', 'model_name': 'claude-fable-5-1'}
+    ranked = adaptive.score(adaptive.heuristic_requirements('fix it', {'file_count': 40, 'languages': ['.py'], 'flagged': []}), [QWEN, CODEX, fable])
+    assert adaptive.asked_for('Fable should do this: please review the plan', ranked)['id'] == 'fable'
+    assert adaptive.asked_for('use sol for this', ranked)['id'] == 'codex'
+    assert adaptive.asked_for('review the fable about the sol', ranked) is None
