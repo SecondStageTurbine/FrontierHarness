@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 
 import httpx
 
+from . import adaptive
+
 # PREFIX marks Frontier's machine-posted handoff packets. NC's filter keys on this prefix (or the packet's
 # "Ready for PR/CI/merge" header) to pick packets up, and Frontier sessions listening on the channel skip
 # prefixed messages so a packet never starts a turn. Change the prefix only together with NC's filter.
@@ -359,7 +361,7 @@ async def step(store, runner, tenant_id, session, client, headers):
                          f'Switched this Slack conversation to {identity}. It is ready; send the review.')[:39000])
         store.event(tenant_id, session['id'], 'slack.handoff', f'Slack switched this conversation to {identity}.')
         return
-    selected = assignment or requested_agent(message['text'], agents)
+    selected = assignment or requested_agent(message['text'], agents) or adaptive.asked_for(message['text'], agents)
     if assignment:
         listen['model_id'] = assignment['id']
         listen['pinned_agent'] = {key: assignment.get(key) for key in ('id', 'name', 'model_name', 'provider')}

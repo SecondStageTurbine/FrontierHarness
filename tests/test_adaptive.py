@@ -409,4 +409,9 @@ def test_an_agent_the_message_names_takes_the_turn():
     ranked = adaptive.score(adaptive.heuristic_requirements('fix it', {'file_count': 40, 'languages': ['.py'], 'flagged': []}), [QWEN, CODEX, fable])
     assert adaptive.asked_for('Fable should do this: please review the plan', ranked)['id'] == 'fable'
     assert adaptive.asked_for('use sol for this', ranked)['id'] == 'codex'
-    assert adaptive.asked_for('review the fable about the sol', ranked) is None
+    for text in ('Get Fable on it', 'give this to Fable', 'hand it over to Fable', 'Fable, take a look at the plan',
+                 'Fable: review the PR', 'have Fable handle the migration', 'Fable can you check this', '@fable fix it',
+                 'This one is for Fable to review', 'bring in Fable', 'Fable takes this one'):
+        assert adaptive.asked_for(text, ranked)['id'] == 'fable', text
+    for text in ('review the fable about the sol', "don't use Fable for this", 'a fable, then a story'):
+        assert adaptive.asked_for(text, ranked) is None, text

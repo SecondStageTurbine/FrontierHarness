@@ -485,15 +485,27 @@ def choose(requirements, models, in_cooldown=lambda model_id: False):
     return best, ranked
 
 
-def asked_for(content, ranked):
-    """The ranked agent the message asks for by name ("Fable should do this", "use Sol"), or None.
-    The user's word beats the router's estimate; the best-ranked match wins when several share the name."""
-    for r in ranked:
-        model_name = r.get('model_name') or ''
-        words = {w for w in re.split(r'[^a-z]+', f'{r["name"]} {model_name}'.lower()) if len(w) >= 3}
+# Ways a message hands a turn to an agent by name: "use Sol", "get Fable on it", "give this to Claude",
+# "Fable should do this", "Fable, take a look". {} is the name.
+ASKED = [r'\b(?:use|using|ask|have|let|want|with|via|get|put|call\s+(?:in|on)|bring\s+in|switch\s+to|route\s+(?:it|this)\s+to)\s+{}\b',
+         r'\b(?:give|hand|send|pass|assign|leave)\s+(?:it|this|that|the\s+\w+)\s+(?:over\s+)?to\s+{}\b',
+         r'\b(?:for|over\s+to)\s+{}\s+to\b', r'@\s*{}\b',
+         r'\b{}\s*,?\s+(?:should|can|could|must|will|would|needs?\s+to|please|to\s+(?:do|handle|take|review)|'
+         r'takes?\s+(?:this|it|over)|do(?:es)?\s+(?:this|it)|handles?\s+(?:this|it)|on\s+(?:this|it))\b',
+         r'^\W*{}\s*[,:]']
+NEGATED = re.compile(r"(?:don't|do not|never|not|no)\s+$", re.I)
+
+
+def asked_for(content, agents):
+    """The agent the message asks for by name, or None. The user's word beats the router's estimate;
+    `agents` is in order of preference, so the first match wins when several share the name."""
+    for agent in agents:
+        words = {w for w in re.split(r'[^a-z]+', f'{agent["name"]} {agent.get("model_name") or ""}'.lower()) if len(w) >= 3}
         for w in words:
-            if re.search(rf'\b(?:use|ask|have|let|want|with|@)\s*{w}\b|\b{w}\s+(?:should|can|could|must|will|needs? to|please)\b', content, re.I):
-                return {**r, 'because': f'the message asks for {w.capitalize()}'}
+            for pattern in ASKED:
+                for hit in re.finditer(pattern.format(w), content, re.I | re.M):
+                    if not NEGATED.search(content[max(0, hit.start() - 10):hit.start()]):
+                        return {**agent, 'because': f'the message asks for {w.capitalize()}', 'requested_model': w}
     return None
 
 
