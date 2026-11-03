@@ -415,3 +415,20 @@ def test_an_agent_the_message_names_takes_the_turn():
         assert adaptive.asked_for(text, ranked)['id'] == 'fable', text
     for text in ('review the fable about the sol', "don't use Fable for this", 'a fable, then a story'):
         assert adaptive.asked_for(text, ranked) is None, text
+    header = 'JC (Fable, Opus fallback): the plan for run 41575163575 is ready.'
+    assert adaptive.asked_for(header, ranked)['id'] == 'fable'
+    opus = {'id': 'opus', 'name': 'Claude Opus', 'provider': 'claude_cli', 'model_name': 'claude-opus-5-5'}
+    assert adaptive.asked_for(header, [opus, *[r for r in ranked if r['id'] != 'fable']])['id'] == 'opus'  # Fable is down.
+    assert adaptive.asked_for('JC (dev): the plan is ready', ranked) is None
+
+
+@pytest.mark.asyncio
+async def test_a_named_agent_holds_only_its_own_turn_and_the_next_one_is_routed_again(tmp_path):
+    async def respond(config, prompt, mode, root):
+        return AgentResult(f'answered by {config["name"]}', 10, 5)
+    store, runner, agent, project, session, _ = make(tmp_path, respond)
+    session = await turn(runner, store, 'tenant-a', project, session, 'Use Claude to explain what app.py does.', ADAPTIVE, 'read')
+    assert session['messages'][-1]['model_id'] == 'claude'
+    session = await turn(runner, store, 'tenant-a', project, session, 'Explain what app.py does.', ADAPTIVE, 'read')
+    reply = session['messages'][-1]
+    assert reply['routing']['mode'] == 'adaptive' and reply['model_id'] == 'qwen'

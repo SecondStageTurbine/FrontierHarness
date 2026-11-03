@@ -495,14 +495,23 @@ ASKED = [r'\b(?:use|using|ask|have|let|want|with|via|get|put|call\s+(?:in|on)|br
          r'takes?\s+(?:this|it|over)|do(?:es)?\s+(?:this|it)|handles?\s+(?:this|it)|on\s+(?:this|it))\b',
          r'^\W*{}\s*[,:]']
 NEGATED = re.compile(r"(?:don't|do not|never|not|no)\s+$", re.I)
+# "JC (Fable, Opus fallback): ..." names the agents in the order to try them, in brackets after the addressee.
+ADDRESSED = re.compile(r'^\W*[\w .-]{1,40}?\(([^()\n]{1,80})\)\W*:', re.M)
+
+
+def name_words(agent):
+    return {w for w in re.split(r'[^a-z]+', f'{agent["name"]} {agent.get("model_name") or ""}'.lower()) if len(w) >= 3}
 
 
 def asked_for(content, agents):
     """The agent the message asks for by name, or None. The user's word beats the router's estimate;
     `agents` is in order of preference, so the first match wins when several share the name."""
+    if header := ADDRESSED.search(content):
+        for w in re.findall(r'[a-z]{3,}', header[1].lower()):  # The first one named that is available wins.
+            if agent := next((a for a in agents if w in name_words(a)), None):
+                return {**agent, 'because': f'the message asks for {w.capitalize()}', 'requested_model': w}
     for agent in agents:
-        words = {w for w in re.split(r'[^a-z]+', f'{agent["name"]} {agent.get("model_name") or ""}'.lower()) if len(w) >= 3}
-        for w in words:
+        for w in name_words(agent):
             for pattern in ASKED:
                 for hit in re.finditer(pattern.format(w), content, re.I | re.M):
                     if not NEGATED.search(content[max(0, hit.start() - 10):hit.start()]):
