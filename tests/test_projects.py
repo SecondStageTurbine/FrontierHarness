@@ -171,3 +171,13 @@ def test_desktop_ticket_is_one_use_and_does_not_bypass_workspace_scope(tmp_path,
         assert response.status_code==303
         assert c.get('/api/tenants').json()[0]['name']=='Personal'
         assert c.get('/desktop/bootstrap?ticket=one-time-desktop-ticket').status_code==403
+
+
+def test_a_new_project_joins_the_workspaces_own_browser_setup(tmp_path):
+    store=setup_store(tmp_path/'state');files=ProjectFiles(store)
+    plain=files.create('tenant-a','Plain')
+    assert 'agent_browser' not in plain
+    store.put('tenant-a','projects',{**plain,'agent_browser':True,'agent_browser_mode':'mine','agent_browser_channel':'msedge','agent_browser_token':'sealed'})
+    joined=files.create('tenant-a','Next')
+    assert (joined['agent_browser'],joined['agent_browser_mode'],joined['agent_browser_channel'],joined['agent_browser_token'])==(True,'mine','msedge','sealed')
+    assert 'agent_browser' not in files.create('tenant-b','Elsewhere')  # Never across workspaces.

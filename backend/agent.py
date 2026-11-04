@@ -195,6 +195,11 @@ def ensure_own_browser(project):
             subprocess.Popen([str(found)], creationflags=0x00000008 | 0x00000200, close_fds=True)  # A job that forbids breakaway.
 
 
+# The same bar in either browser: what a user sees is checked by looking at it.
+VERIFY_IN_BROWSER = ('After changing anything a user sees, open it, check the console for errors, '
+                     'take a screenshot, and report what you saw, not what you expect.')
+
+
 def browser_note(project, root):
     if not project.get('agent_browser'):
         return None
@@ -210,11 +215,9 @@ def browser_note(project, root):
                 'your turn, and a goal or a team runs many turns). As your last browser step, close that tab with the tabs close '
                 'action, and make no browser call after it, so nothing is left behind, unless you are handing it to the user '
                 '(to sign in, approve, or pick something): then leave it open on that page and tell them it is waiting there. Do not touch the user\'s own tabs or '
-                'change their settings, and do only what the task asks on sites where they are signed in.')
+                'change their settings, and do only what the task asks on sites where they are signed in. ' + VERIFY_IN_BROWSER)
     return ('A real browser is available through the frontier-browser tools (navigate, click, type, read the page, console '
-            'messages, screenshots).' + where + ' Use these tools for any web page, not another browser or computer-use tool. '
-            'After changing anything a user sees, open it, check the console for errors, '
-            'take a screenshot, and report what you saw, not what you expect.')
+            'messages, screenshots).' + where + ' Use these tools for any web page, not another browser or computer-use tool. ' + VERIFY_IN_BROWSER)
 
 
 CARRY_ON = ('Yes, go ahead now with the work you described. Do not ask again whether to start; stop only for a decision '

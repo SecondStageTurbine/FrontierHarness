@@ -195,6 +195,7 @@ def test_agents_in_the_users_browser_keep_to_one_tab():
     assert 'Navigate that tab' in note and 'do not open new tabs' in note and 'close that tab' in note
     assert 'open new tabs rather than' not in note
     assert 'leave it open on that page' in note  # A sign-in the user must finish is not closed under them.
+    assert 'check the console for errors' in note and 'report what you saw' in note  # The same check as a fresh browser.
 
 
 def test_a_fresh_browser_can_be_firefox_but_the_users_own_browser_never_is(tmp_path, monkeypatch):

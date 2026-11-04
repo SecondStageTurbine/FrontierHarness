@@ -68,7 +68,10 @@ class ProjectFiles:
                     raise TenantIsolationViolationException('This folder overlaps a project owned by another workspace.')
                 if location==other:
                     raise ValueError('This folder is already open as a project.')
-        return self.store.put(tenant_id,'projects',dict(id=project_id,name=name,root=str(location),created_at=now()))
+        # A new project joins the workspace's own-browser setup rather than starting without it.
+        mine=next((p for p in self.store.list(tenant_id,'projects') if p.get('agent_browser') and p.get('agent_browser_mode')=='mine'),{})
+        browser={k:mine[k] for k in ('agent_browser','agent_browser_mode','agent_browser_channel','agent_browser_token') if k in mine}
+        return self.store.put(tenant_id,'projects',dict(id=project_id,name=name,root=str(location),created_at=now(),**browser))
 
     def root(self,tenant_id,project_id,session_id=None):
         """Where a conversation's files live: its worktree when it has one, otherwise the project folder."""
