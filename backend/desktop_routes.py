@@ -1160,7 +1160,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
 
     @app.put('/api/t/{tenant_id}/projects/{project_id}/sessions/{session_id}/slack')
     async def session_slack(tenant_id:str,project_id:str,session_id:str,payload:SlackListenInput,request:Request):
-        """Listen to a Slack channel from this session, or stop with an empty channel. Only messages after now count."""
+        """Listen to a Slack channel or direct message from this session, or stop with an empty channel. Only messages after now count."""
         scoped(request,tenant_id)
         get_session(tenant_id,project_id,session_id)
         if payload.model_id!=ADAPTIVE:
@@ -1176,7 +1176,7 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
             channel,name,user=await slack_listen.resolve(store,tenant_id,payload.channel)
             other=next((s for s in store.list(tenant_id,'sessions') if s['id']!=session_id and not s.get('archived') and (s.get('slack') or {}).get('channel')==channel),None)
             if other:
-                raise ValueError(f'"{other["name"]}" already listens to #{name}. Stop it there first, or both would answer every message.')
+                raise ValueError(f'"{other["name"]}" already listens to {slack_listen.place({"name":name})}. Stop it there first, or both would answer every message.')
             listen={'channel':channel,'name':name,'user':user,'anyone':payload.anyone,'model_id':payload.model_id,'mode':payload.mode,'since':slack_listen.since_now(),'error':None}
         session=get_session(tenant_id,project_id,session_id)  # Fresh: the lookup above awaited.
         session['slack']=listen

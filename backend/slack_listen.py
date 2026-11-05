@@ -1,4 +1,4 @@
-"""A session that listens to one Slack channel: each new message becomes a turn, and the reply goes back in its thread.
+"""A session that listens to one Slack channel or direct message: each new message becomes a turn, and the reply goes back in its thread.
 
 The credentials are the workspace's `slack` MCP server's: a browser session (SLACK_MCP_XOXC_TOKEN with the
 `d` cookie in SLACK_MCP_XOXD_TOKEN) or a user token (SLACK_MCP_XOXP_TOKEN). The scheduler calls `tick` every
@@ -54,12 +54,55 @@ async def post(store, tenant_id, channel, text):
         return await call(client, credentials(store, tenant_id), 'chat.postMessage', channel=channel, text=text)
 
 
+def place(listen):
+    """How a listened-to conversation reads: #channel, or @person for a direct message."""
+    return listen['name'] if listen['name'].startswith('@') else f'#{listen["name"]}'
+
+
+async def person_named(client, headers, name):
+    """The one person with this username, display name or full name; one word of a full name counts if nobody matches whole."""
+    wanted = name.casefold()
+    exact, partial, cursor = [], [], ''
+    while True:
+        page = await call(client, headers, 'users.list', limit='200', cursor=cursor)
+        for person in page['members']:
+            if person.get('deleted') or person.get('is_bot'):
+                continue
+            names = {n.casefold() for n in (person.get('name', ''), person.get('real_name', ''), person.get('profile', {}).get('display_name', ''))}
+            if wanted in names:
+                exact.append(person)
+            elif any(wanted in n.split() for n in names):
+                partial.append(person)
+        cursor = page.get('response_metadata', {}).get('next_cursor')
+        if not cursor:
+            break
+    found = exact or partial
+    if not found:
+        raise ValueError(f'No one called @{name} in this Slack workspace.')
+    if len(found) > 1:
+        raise ValueError(f'More than one person matches @{name}: ' + ', '.join(f'{p.get("real_name") or p["name"]} ({p["id"]})' for p in found[:5]) + '. Use their ID.')
+    return found[0]
+
+
+async def direct_message(client, headers, target):
+    """@name, a user ID or a DM ID → the DM's (id, @name). Opening a DM that exists returns it, and posts nothing."""
+    if target.startswith('@'):
+        person = await person_named(client, headers, target[1:].strip())
+    else:
+        user = (await call(client, headers, 'conversations.info', channel=target))['channel']['user'] if target[0] == 'D' else target
+        person = (await call(client, headers, 'users.info', user=user))['user']
+    channel = (await call(client, headers, 'conversations.open', users=person['id']))['channel']['id']
+    return channel, '@' + (person.get('profile', {}).get('display_name') or person.get('real_name') or person['name'])
+
+
 async def resolve(store, tenant_id, channel):
-    """A channel ID or #name → (id, name, the token's own user ID)."""
+    """A channel ID or #name, or a person as @name, user ID or DM ID → (id, name, the token's own user ID)."""
     headers = credentials(store, tenant_id)
     wanted = channel.strip().lstrip('#')
     async with httpx.AsyncClient(timeout=20) as client:
         me = (await call(client, headers, 'auth.test'))['user_id']
+        if wanted.startswith('@') or re.fullmatch(r'[DUW][A-Z0-9]{6,}', wanted):
+            return (*await direct_message(client, headers, wanted), me)
         cursor = ''
         while True:
             page = await call(client, headers, 'conversations.list', types='public_channel,private_channel', exclude_archived='true', limit='1000', cursor=cursor)
@@ -68,7 +111,7 @@ async def resolve(store, tenant_id, channel):
                     return c['id'], c['name'], me
             cursor = page.get('response_metadata', {}).get('next_cursor')
             if not cursor:
-                raise ValueError(f'No channel {channel} that you are in.')
+                raise ValueError(f'No channel {channel} that you are in. For a direct message, write @name.')
 
 
 def wanted(message, listen):
@@ -168,15 +211,15 @@ def requested_handoff(text, agents):
 def prompt(listen, message, midturn=False):
     thread = message.get('thread_ts', message['ts'])
     where = f'a reply in the thread {thread} of' if thread != message['ts'] else 'a message in'
-    head = f'A Slack message, {where} #{listen["name"]} ({listen["channel"]}), from <@{message.get("user")}>:\n\n{message["text"]}\n\n'
+    head = f'A Slack message, {where} {place(listen)} ({listen["channel"]}), from <@{message.get("user")}>:\n\n{message["text"]}\n\n'
     if midturn:
         return (head + 'It arrived while you were working. Answer it now with the slack_reply tool, thread_ts '
                 f'"{thread}": what you are on and when it will be done, or whatever it asks. Then carry on, changing course if it '
-                f'asks you to. To mention anyone write <@USERID>. Never post a new top-level message in #{listen["name"]}.')
+                f'asks you to. To mention anyone write <@USERID>. Never post a new top-level message in {place(listen)}.')
     return (head +
             'Act on it. Your final reply in this turn is posted back to the message\'s Slack thread for you, already '
             'mentioning the sender. To mention anyone else write <@USERID>; a plain @name notifies no one. '
-            f'so do not post it yourself, and never post a new top-level message in #{listen["name"]}.')
+            f'so do not post it yourself, and never post a new top-level message in {place(listen)}.')
 
 
 def mention_of(listen, user):

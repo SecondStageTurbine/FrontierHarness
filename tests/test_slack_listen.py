@@ -3,6 +3,7 @@ import asyncio
 from urllib.parse import parse_qs
 
 import httpx
+import pytest
 
 from backend import slack_listen
 from backend.store import uid
@@ -223,3 +224,48 @@ def test_only_explicit_reviewer_handoffs_pin_an_agent(tmp_path):
     assert slack_listen.requested_handoff('We need a Codex reviewer.', models)['id'] == 'codex_cli'
     assert slack_listen.requested_handoff('Please switch this conversation to Claude.', models)['provider'] == 'claude_cli'
     assert slack_listen.requested_handoff('The writer used Codex for this change.', models) is None
+
+
+def test_a_person_resolves_to_their_direct_message_and_ambiguous_or_unknown_names_are_refused(tmp_path, monkeypatch):
+    store = setup_store(tmp_path)
+    store.put('tenant-a', 'mcp_servers', {'id': uid(), 'name': 'slack', 'env': {'SLACK_MCP_XOXP_TOKEN': 'xoxp'}})
+    people = [{'id': 'U1', 'name': 'nrivera', 'real_name': 'Nelson Rivera', 'profile': {'display_name': ''}},
+              {'id': 'U2', 'name': 'samone', 'real_name': 'Sam One', 'profile': {'display_name': 'Sammy'}},
+              {'id': 'U3', 'name': 'sam2', 'real_name': 'Sam Two', 'profile': {'display_name': ''}},
+              {'id': 'U4', 'name': 'nelson-old', 'real_name': 'Nelson Gone', 'deleted': True},
+              {'id': 'U5', 'name': 'nelson-bot', 'real_name': 'Nelson Bot', 'is_bot': True}]
+
+    def slack(request):
+        body = parse_qs(request.content.decode())
+        method = request.url.path.rsplit('/', 1)[1]
+        if method == 'users.list':
+            first = 'cursor' not in body  # Two pages, so a match on the last one must still count.
+            return httpx.Response(200, json={'ok': True, 'members': people[:2] if first else people[2:],
+                                             'response_metadata': {'next_cursor': 'more' if first else ''}})
+        if method == 'conversations.open':
+            return httpx.Response(200, json={'ok': True, 'channel': {'id': 'D' + body['users'][0]}})
+        if method == 'conversations.info':
+            return httpx.Response(200, json={'ok': True, 'channel': {'id': body['channel'][0], 'user': 'U1'}})
+        if method == 'users.info':
+            return httpx.Response(200, json={'ok': True, 'user': next(p for p in people if p['id'] == body['user'][0])})
+        if method == 'conversations.list':
+            return httpx.Response(200, json={'ok': True, 'channels': [{'id': 'C1', 'name': 'general'}]})
+        return httpx.Response(200, json={'ok': True, 'user_id': 'UME'})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(slack_listen.httpx, 'AsyncClient', lambda **kw: real(transport=httpx.MockTransport(slack)))
+
+    def resolve(target):
+        return asyncio.run(slack_listen.resolve(store, 'tenant-a', target))
+
+    assert resolve('@nelson') == ('DU1', '@Nelson Rivera', 'UME')  # One word of a full name; the deleted and bot Nelsons are left out.
+    assert resolve('@Sammy') == ('DU2', '@Sammy', 'UME')
+    assert resolve('DABC1234') == ('DU1', '@Nelson Rivera', 'UME')
+    assert resolve('#general') == ('C1', 'general', 'UME')
+    with pytest.raises(ValueError, match='More than one person'):
+        resolve('@sam')
+    with pytest.raises(ValueError, match='No one called'):
+        resolve('@neslon')
+    assert slack_listen.place({'name': '@Nelson Rivera'}) == '@Nelson Rivera' and slack_listen.place({'name': 'ao'}) == '#ao'
+    prompted = slack_listen.prompt({'name': '@Nelson Rivera', 'channel': 'DU1'}, {'ts': '1.0', 'user': 'U1', 'text': 'hi'})
+    assert 'in @Nelson Rivera (DU1)' in prompted and '#@' not in prompted
