@@ -235,20 +235,28 @@ def test_a_person_resolves_to_their_direct_message_and_ambiguous_or_unknown_name
               {'id': 'U4', 'name': 'nelson-old', 'real_name': 'Nelson Gone', 'deleted': True},
               {'id': 'U5', 'name': 'nelson-bot', 'real_name': 'Nelson Bot', 'is_bot': True}]
 
+    scoped, unreadable = [], []
+
     def slack(request):
-        body = parse_qs(request.content.decode())
+        body = parse_qs(request.content.decode(), keep_blank_values=True)
         method = request.url.path.rsplit('/', 1)[1]
         if method == 'users.list':
-            first = 'cursor' not in body  # Two pages, so a match on the last one must still count.
+            first = not body['cursor'][0]  # Two pages, so a match on the last one must still count.
             return httpx.Response(200, json={'ok': True, 'members': people[:2] if first else people[2:],
                                              'response_metadata': {'next_cursor': 'more' if first else ''}})
         if method == 'conversations.open':
+            if scoped:
+                return httpx.Response(200, json={'ok': False, 'error': 'missing_scope', 'needed': 'im:write'})
             return httpx.Response(200, json={'ok': True, 'channel': {'id': 'D' + body['users'][0]}})
+        if method == 'conversations.history':
+            return httpx.Response(200, json={'ok': False, 'error': 'missing_scope', 'needed': 'im:history'} if unreadable else {'ok': True, 'messages': []})
         if method == 'conversations.info':
             return httpx.Response(200, json={'ok': True, 'channel': {'id': body['channel'][0], 'user': 'U1'}})
         if method == 'users.info':
             return httpx.Response(200, json={'ok': True, 'user': next(p for p in people if p['id'] == body['user'][0])})
         if method == 'conversations.list':
+            if body['types'] == ['im']:
+                return httpx.Response(200, json={'ok': True, 'channels': [{'id': 'DOLD', 'user': 'U1'}]})
             return httpx.Response(200, json={'ok': True, 'channels': [{'id': 'C1', 'name': 'general'}]})
         return httpx.Response(200, json={'ok': True, 'user_id': 'UME'})
 
@@ -266,6 +274,14 @@ def test_a_person_resolves_to_their_direct_message_and_ambiguous_or_unknown_name
         resolve('@sam')
     with pytest.raises(ValueError, match='No one called'):
         resolve('@neslon')
+    # A token that may not open DMs still finds one that exists, says when there is none, and refuses a DM it cannot read.
+    scoped.append(True)
+    assert resolve('@nelson') == ('DOLD', '@Nelson Rivera', 'UME')
+    with pytest.raises(ValueError, match='no direct message with this person yet'):
+        resolve('@Sammy')
+    unreadable.append(True)
+    with pytest.raises(ValueError, match='needs im:history'):
+        resolve('@nelson')
     assert slack_listen.place({'name': '@Nelson Rivera'}) == '@Nelson Rivera' and slack_listen.place({'name': 'ao'}) == '#ao'
     prompted = slack_listen.prompt({'name': '@Nelson Rivera', 'channel': 'DU1'}, {'ts': '1.0', 'user': 'U1', 'text': 'hi'})
     assert 'in @Nelson Rivera (DU1)' in prompted and '#@' not in prompted

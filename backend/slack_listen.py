@@ -44,7 +44,8 @@ async def call(client, headers, method, **params):
     response = await client.post(f'https://slack.com/api/{method}', headers=headers, data=params)
     body = response.json()
     if not body.get('ok'):
-        raise ValueError(f'Slack {method}: {body.get("error", response.status_code)}')
+        needed = f' (the token needs {body["needed"]})' if body.get('needed') else ''
+        raise ValueError(f'Slack {method}: {body.get("error", response.status_code)}{needed}')
     return body
 
 
@@ -84,14 +85,33 @@ async def person_named(client, headers, name):
     return found[0]
 
 
+async def dm_with(client, headers, user):
+    """The DM with this person. Opening one posts nothing; a token that may not open them can still find one that exists."""
+    try:
+        return (await call(client, headers, 'conversations.open', users=user))['channel']['id']
+    except ValueError as exc:
+        if 'missing_scope' not in str(exc):
+            raise
+    cursor = ''
+    while True:
+        page = await call(client, headers, 'conversations.list', types='im', limit='1000', cursor=cursor)
+        for c in page['channels']:
+            if c.get('user') == user:
+                return c['id']
+        cursor = page.get('response_metadata', {}).get('next_cursor')
+        if not cursor:
+            raise ValueError('You have no direct message with this person yet, and this Slack token cannot start one. Message them in Slack first.')
+
+
 async def direct_message(client, headers, target):
-    """@name, a user ID or a DM ID → the DM's (id, @name). Opening a DM that exists returns it, and posts nothing."""
+    """@name, a user ID or a DM ID → the DM's (id, @name), once its messages are known to be readable."""
     if target.startswith('@'):
         person = await person_named(client, headers, target[1:].strip())
     else:
         user = (await call(client, headers, 'conversations.info', channel=target))['channel']['user'] if target[0] == 'D' else target
         person = (await call(client, headers, 'users.info', user=user))['user']
-    channel = (await call(client, headers, 'conversations.open', users=person['id']))['channel']['id']
+    channel = await dm_with(client, headers, person['id'])
+    await call(client, headers, 'conversations.history', channel=channel, limit='1')  # A token that cannot read it fails here, not every 30 seconds after.
     return channel, '@' + (person.get('profile', {}).get('display_name') or person.get('real_name') or person['name'])
 
 
