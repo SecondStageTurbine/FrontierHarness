@@ -57,9 +57,13 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           bundle=src-tauri/target/release/bundle
-          gh release download "$TAG" -p latest.json -D "$RUNNER_TEMP" || true
+          retry() { for attempt in 1 2 3 4 5; do "$@" && return; sleep $((attempt * 15)); done; return 1; }
+          # The Windows entries live in this file: going on without it would publish a Linux-only feed.
+          retry gh release download "$TAG" -p latest.json -D "$RUNNER_TEMP" --clobber
           .venv/bin/python scripts/write_update_manifest.py --merge "$RUNNER_TEMP/latest.json"
-          gh release upload "$TAG" --clobber $bundle/appimage/*.AppImage $bundle/appimage/*.AppImage.sig $bundle/deb/*.deb $bundle/appimage/latest.json
+          retry gh release upload "$TAG" --clobber $bundle/appimage/*.AppImage $bundle/appimage/*.AppImage.sig $bundle/deb/*.deb
+          # Last, and on its own: the feed names the files above, and every installed copy reads it.
+          retry gh release upload "$TAG" --clobber $bundle/appimage/latest.json
 
       - name: Keep the build
         if: github.event_name == 'workflow_dispatch'
