@@ -2,6 +2,7 @@
 
 use std::{collections::HashMap,io::{Read,Write},net::{TcpListener,TcpStream},path::{Path,PathBuf},process::{Child,Command,Stdio},sync::Mutex,time::Duration};
 use tauri::{Emitter,Manager,State,WebviewUrl,WebviewWindowBuilder,WindowEvent};
+use tauri::webview::NewWindowResponse;
 use tauri::menu::{Menu,MenuItem};
 use tauri::tray::{TrayIconBuilder,TrayIconEvent};
 use portable_pty::{native_pty_system,CommandBuilder,PtySize};
@@ -99,6 +100,37 @@ fn open_with(tool: String, path: String) -> Result<(),String> {
         } else { text.trim().chars().take(300).collect() });
     }
     Ok(())
+}
+
+/// Links reach the app from agents and web pages, so only web and mail addresses leave it: never a
+/// file path or some other program's URL scheme.
+fn browser_link(url: &tauri::Url) -> bool { matches!(url.scheme(), "http" | "https" | "mailto") }
+fn open_in_browser(url: &tauri::Url) {
+    if !browser_link(url) { return; }
+    let mut command = if cfg!(windows) { let mut c=Command::new("rundll32"); c.arg("url.dll,FileProtocolHandler"); c }
+        else { Command::new(if cfg!(target_os="macos") {"open"} else {"xdg-open"}) };
+    command.arg(url.as_str()).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    std::thread::spawn(move || { let _ = command.status(); });
+}
+/// Every Frontier window: it stays on Frontier's own pages, and anything that asks for a new
+/// window (a link, window.open, the right-click menu) opens in the user's browser instead.
+/// on_navigation can't do this too: on Linux it also fires for the Preview panel's iframe.
+fn app_window<'a>(app: &'a tauri::AppHandle, label: &str, url: tauri::Url, port: Option<u16>) -> WebviewWindowBuilder<'a,tauri::Wry,tauri::AppHandle> {
+    WebviewWindowBuilder::new(app,label,WebviewUrl::External(url))
+        .on_navigation(move |url| url.host_str()==Some("127.0.0.1") && url.port()==port)
+        .on_new_window(|url, _| { open_in_browser(&url); NewWindowResponse::Deny })
+}
+/// A panel in its own window, for a second monitor. One window per panel; asking again focuses it.
+#[tauri::command]
+async fn pop_out(app: tauri::AppHandle, window: tauri::WebviewWindow, tab: String) -> Result<(),String> {
+    if tab.is_empty() || !tab.chars().all(|c| c.is_ascii_alphabetic()) { return Err("Unknown panel.".into()); }
+    let label = format!("popout-{}",tab.to_lowercase());
+    if let Some(existing) = app.get_webview_window(&label) { return existing.set_focus().map_err(|e|e.to_string()); }
+    let mut url = window.url().map_err(|e|e.to_string())?;
+    url.set_path("/");
+    url.set_query(Some(&format!("popout={tab}")));
+    let port = url.port();
+    app_window(&app,&label,url,port).title(format!("Frontier · {tab}")).inner_size(960.0,820.0).build().map(|_|()).map_err(|e|e.to_string())
 }
 
 /// Closing the window hides Frontier to the tray unless the user turned that off in Settings.
@@ -208,11 +240,10 @@ fn launch(app: &mut tauri::App, data: &Path) -> Result<(),Box<dyn std::error::Er
     if !ready { let _=child.kill(); return Err("Frontier's backend did not start in time.".into()); }
     app.manage(Backend(Mutex::new(Some(child))));
     let url = format!("http://127.0.0.1:{port}/desktop/bootstrap?ticket={ticket}");
-    WebviewWindowBuilder::new(app,"main",WebviewUrl::External(url.parse()?))
+    app_window(app.handle(),"main",url.parse()?,Some(port))
         .title("Frontier")
         .inner_size(1440.0,940.0).min_inner_size(900.0,640.0)
         .center().background_color(tauri::webview::Color(15,15,17,255))
-        .on_navigation(move |url| url.host_str()==Some("127.0.0.1") && url.port()==Some(port))
         .build()?;
     Ok(())
 }
@@ -227,7 +258,7 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .manage(Ptys(Mutex::new(HashMap::new())))
-        .invoke_handler(tauri::generate_handler![pty_open,pty_write,pty_resize,pty_close,open_with,keep_awake])
+        .invoke_handler(tauri::generate_handler![pty_open,pty_write,pty_resize,pty_close,open_with,keep_awake,pop_out])
         .setup(|app| {
             let data = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&data)?;
@@ -256,4 +287,14 @@ fn main() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::browser_link;
+    #[test]
+    fn only_web_and_mail_links_leave_the_app() {
+        for url in ["https://example.com/a?b=1&c=2","http://localhost:3000/","mailto:a@example.com"] { assert!(browser_link(&url.parse().unwrap()),"{url}"); }
+        for url in ["file:///C:/Windows/System32/calc.exe","ms-msdt:/id","javascript:alert(1)","vscode://file/c"] { assert!(!browser_link(&url.parse().unwrap()),"{url}"); }
+    }
 }

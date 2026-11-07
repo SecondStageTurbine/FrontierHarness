@@ -11,8 +11,10 @@ function parseFileRef(text:string){const m=text.match(FILE_REF);if(!m||text.star
 // A code block carries its own copy button, so a snippet can be taken without selecting it by hand.
 function Pre({node:_node,...props}:ComponentProps<'pre'>&ExtraProps){const {copy}=useWorkspace();
  return <div className="code-wrap"><pre {...props}/><button type="button" className="code-copy" title="Copy code" aria-label="Copy code" onClick={e=>copy((e.currentTarget.previousElementSibling?.textContent||'').replace(/\n$/,''))}><Copy size={13}/></button></div>}
+// Agents write these. A web link belongs in the browser, not in place of the app.
+function Link({node:_node,...props}:ComponentProps<'a'>&ExtraProps){return <a {...props} {...(/^(https?:|mailto:)/i.test(props.href||'')?{target:'_blank',rel:'noreferrer'}:{})}/>}
 export function MarkdownOutput({text,onFile}:{text:string;onFile?:(path:string,line?:number)=>void}){
  const code=(props:ComponentProps<'code'>)=>{const {children,className,...rest}=props;const raw=typeof children==='string'?children:Array.isArray(children)&&typeof children[0]==='string'&&children.length===1?children[0]:null;const ref=onFile&&!className&&raw&&!raw.includes('\n')?parseFileRef(raw.trim()):null;
   return ref?<button type="button" className="file-link" title={`Open ${ref.path}${ref.line?` at line ${ref.line}`:''}`} onClick={()=>onFile!(ref.path,ref.line)}>{raw}</button>:<code className={className} {...rest}>{children}</code>};
- return <div className="markdown"><Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={{code,pre:Pre}}>{text}</Markdown></div>;
+ return <div className="markdown"><Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={{code,pre:Pre,a:Link}}>{text}</Markdown></div>;
 }

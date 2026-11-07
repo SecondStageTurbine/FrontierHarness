@@ -1,5 +1,5 @@
 import {useEffect,useState} from 'react';
-import {isTauri} from '@tauri-apps/api/core';
+import {invoke,isTauri} from '@tauri-apps/api/core';
 import {useResource,useWorkspace} from '../app/context';
 import {useLiveSession} from '../app/useLiveSession';
 import {Inspector} from './Inspector';
@@ -10,11 +10,7 @@ import {working,type Project} from '../types';
 export async function popOut(tab:InspectorTab){
  const url=`${location.origin}/?popout=${encodeURIComponent(tab)}`;
  if(!isTauri()){window.open(url,`frontier-${tab}`,'width=960,height=820');return}
- const {WebviewWindow}=await import('@tauri-apps/api/webviewWindow');
- const label=`popout-${tab.toLowerCase()}`;
- const existing=await WebviewWindow.getByLabel(label);
- if(existing){await existing.setFocus();return}
- new WebviewWindow(label,{url,title:`Frontier · ${tab}`,width:960,height:820});
+ await invoke('pop_out',{tab});
 }
 
 /** A popped-out panel follows whatever project and session the main window has open. */

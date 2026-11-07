@@ -792,3 +792,12 @@ have no console tool, so the agent is given the command for it; `core,debug` wou
 Tested: the engine's conditions and the fallback in test_tools_for_agents, the Preview control in
 preview-browser.spec, a real Claude turn and a real Codex turn each opening a page, clicking, reading the console
 error and leaving a screenshot in .frontier/browser, and a visible window launched without the headless flag.
+
+Version 0.27.75: links now reach the default browser. Before this, on_navigation only blocked anything outside the app,
+so a click on a web link did nothing. Windows now ask on_new_window, which opens http, https and mailto addresses in
+the browser and refuses the rest; popouts are built by the pop_out command so they get the same rules, and the page no
+longer holds permission to create windows. on_navigation stays a plain block, because on Linux it also fires for the
+Preview iframe. Tested on the built Windows app over CDP, with a local server receiving each request from the real
+default browser: a target=_blank click with & in its URL, window.open, a shift-click on a plain link, and window.open
+from a popout. A file: link did nothing and the app stayed on its page. preview-links.spec covers links in agent
+replies. The right-click menu item itself was not driven; it raises the same new-window request.

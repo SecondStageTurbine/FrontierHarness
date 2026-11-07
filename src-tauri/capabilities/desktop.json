@@ -15,7 +15,6 @@
     "core:default",
     "core:window:allow-close",
     "core:window:allow-set-focus",
-    "core:webview:allow-create-webview-window",
     "dialog:allow-open",
     "updater:default",
     "process:default",
@@ -25,6 +24,7 @@
     "allow-pty-resize",
     "allow-pty-close",
     "allow-open-with",
-    "allow-keep-awake"
+    "allow-keep-awake",
+    "allow-pop-out"
   ]
 }

@@ -16,6 +16,8 @@ os.environ.setdefault('HARNESS_DESKTOP_PORT', '8001')
 class AskingAgent(ScriptedAgent):
     """Answers 'Done.', except a message containing 'ask me' raises a question card and waits for the answer."""
     async def invoke_agent(self, tenant_id, config, prompt, mode, root, extras=None):
+        if 'link me' in prompt.split('USER:')[-1].lower():
+            return AgentResult('Read [the docs](https://example.com/docs) or [this section](#top).', 1, 1)
         if 'ask me' not in prompt.split('USER:')[-1].lower() or not (extras or {}).get('approval'):
             return await super().invoke_agent(tenant_id, config, prompt, mode, root, extras)
         approval = extras['approval']
