@@ -781,3 +781,14 @@ to --3way. Tested: ensure_review's three cases, test command detection, and a fu
 failing test becomes a fix and the rerun passes; a lead that says done with failing tests still gets them named).
 The Linux AppImage and .deb were built and the frozen backend passed scripts/test_package.py under WSL Ubuntu and on
 GitHub's ubuntu-22.04 runner; the linux-release workflow adds them to each published release.
+
+Version 0.27.74: a project with a fresh Edge or Chrome can use agent-browser instead of Playwright. Measured on one
+GitHub repository page, through each MCP server: a snapshot was 21,890 characters against Playwright's 73,740, and the
+tool list 65,928 against 22,121. On Windows, `agent-browser mcp` 0.37 never answered an open that had to start its
+daemon (timed out on every fresh session, with any browser), while the same open answered in under a second once the
+daemon was up, so run_turn starts it first and closes it afterwards. That start is outside the turn's sandbox, so a
+confined project stays on Playwright; a failed start falls back to Playwright and records an event. The `core` tools
+have no console tool, so the agent is given the command for it; `core,debug` would have cost 154,416 characters.
+Tested: the engine's conditions and the fallback in test_tools_for_agents, the Preview control in
+preview-browser.spec, a real Claude turn and a real Codex turn each opening a page, clicking, reading the console
+error and leaving a screenshot in .frontier/browser, and a visible window launched without the headless flag.

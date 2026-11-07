@@ -17,6 +17,8 @@ import logging
 import os
 import re
 import secrets
+import shutil
+import subprocess
 import sys
 from collections import deque
 from datetime import datetime
@@ -109,35 +111,96 @@ def transcript(messages):
     return lines
 
 
-def browser_server(project, token=None):
-    """A real browser the agent can open, click and read, through Playwright's MCP server.
+def npx(*args):
+    """On Windows npx is a .cmd, so it goes through cmd."""
+    return ('cmd', ['/c', 'npx', '-y', *args]) if os.name == 'nt' else ('npx', ['-y', *args])
+
+
+def installed_browser(channel):
+    """Where this computer's Edge or Chrome is, or None."""
+    edge = channel == 'msedge'
+    if os.name != 'nt':
+        # ponytail: PATH only, so a macOS app bundle is not found and that project stays on Playwright.
+        return next(filter(None, map(shutil.which, ('microsoft-edge',) if edge else ('google-chrome', 'chromium', 'chromium-browser'))), None)
+    folder, exe = ('Microsoft/Edge/Application', 'msedge.exe') if edge else ('Google/Chrome/Application', 'chrome.exe')
+    return next((str(p) for p in (Path(os.environ.get(v, ''))/folder/exe for v in ('PROGRAMFILES', 'PROGRAMFILES(X86)', 'LOCALAPPDATA')) if p.is_file()), None)
+
+
+def uses_agent_browser(project):
+    """agent-browser is chosen per project, for a fresh Chromium browser only: Frontier starts its daemon before the
+    turn, outside the turn's sandbox, so a confined project keeps Playwright, which runs inside it."""
+    confined = sandbox.policy(project)
+    return bool(project.get('agent_browser') and project.get('agent_browser_engine') == 'agent-browser' and project.get('agent_browser_mode') != 'mine'
+                and project.get('agent_browser_channel') != 'firefox' and not confined['files'] and confined['network'] == 'open')
+
+
+def agent_browser_session(session_id):
+    return f'frontier-{session_id[:12]}'
+
+
+def agent_browser_env(project, session_id):
+    env = {'AGENT_BROWSER_SESSION': agent_browser_session(session_id), 'AGENT_BROWSER_SCREENSHOT_DIR': str(Path(project['root'])/'.frontier'/'browser'),
+           'AGENT_BROWSER_EXECUTABLE_PATH': installed_browser(project.get('agent_browser_channel') or ('msedge' if os.name == 'nt' else 'chrome')) or '',
+           # Its default of an hour could end the daemon during a long turn, and a daemon started through MCP hangs (below).
+           'AGENT_BROWSER_IDLE_TIMEOUT_MS': str(max(MIN_TURN_MINUTES, int(project.get('turn_minutes') or 0)) * 60000)}
+    return {**env, 'AGENT_BROWSER_HEADED': 'true'} if project.get('agent_browser_visible') else env
+
+
+def start_agent_browser(project, session_id):
+    """Started here, not by the agent's first call: on Windows `agent-browser mcp` never answers an open that has to start
+    the daemon (0.37, reproduced every time), and with the daemon already up it answers at once. Output goes nowhere
+    because a piped command waits on the daemon, which inherits the pipe. False means use Playwright this turn."""
+    env = agent_browser_env(project, session_id)
+    if not env['AGENT_BROWSER_EXECUTABLE_PATH']:
+        return False
+    from .localprocess import child_flags
+    command, args = npx('agent-browser@latest', 'open', 'about:blank')
+    try:
+        return subprocess.run([command, *args], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              env={**os.environ, **env}, timeout=300, **child_flags()).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def close_agent_browser(session_id):
+    """A fresh browser starts clean each turn. If this fails, the daemon's idle timeout ends it."""
+    from .localprocess import child_flags
+    command, args = npx('agent-browser@latest', '--session', agent_browser_session(session_id), 'close')
+    try:
+        subprocess.run([command, *args], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60, **child_flags())
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def browser_server(project, token=None, session_id=None):
+    """A real browser the agent can open, click and read, through Playwright's MCP server, or agent-browser's when the project chose it.
 
     Screenshots land in .frontier/browser in the project, where the Preview panel shows them. By default a
     fresh browser (Edge, Chrome, or Playwright's own Firefox), headed when the user asked to watch and otherwise headless.
     With "my own browser", it is
     the Chrome or Edge the user already has open, reached through the Playwright extension, with their tabs
     and sign-ins; the extension's token, when given, connects without the user approving each time.
-    On Windows npx is a .cmd, so it goes through cmd. Its tools run unasked in every tool, Codex included.
+    Its tools run unasked in every tool, Codex included.
     """
     output = str(Path(project['root'])/'.frontier'/'browser')
+    if uses_agent_browser(project):
+        command, args = npx('agent-browser@latest', 'mcp')
+        return {'name': 'frontier-browser', 'transport': 'stdio', 'command': command, 'args': args, 'env': agent_browser_env(project, session_id), 'trusted': True, 'enabled': True}
     if project.get('agent_browser_mode') == 'mine':
         # The Playwright extension exists only for Chrome and Edge, so a user's own browser is never Firefox.
         channel = project.get('agent_browser_channel') if project.get('agent_browser_channel') in ('chrome', 'msedge') else 'chrome'
-        args = ['-y', '@playwright/mcp@latest', '--extension', '--browser', channel, '--output-dir', output]
-        command, args = (('cmd', ['/c', 'npx', *args]) if os.name == 'nt' else ('npx', args))
+        command, args = npx('@playwright/mcp@latest', '--extension', '--browser', channel, '--output-dir', output)
         return {'name': 'frontier-browser', 'transport': 'stdio', 'command': command, 'args': args, 'trusted': True, 'enabled': True,
                 'env': {'PLAYWRIGHT_MCP_EXTENSION_TOKEN': token} if token else {}}
-    args = ['-y', '@playwright/mcp@latest', '--isolated', '--output-dir', output] + ([] if project.get('agent_browser_visible') else ['--headless'])
+    args = ['@playwright/mcp@latest', '--isolated', '--output-dir', output] + ([] if project.get('agent_browser_visible') else ['--headless'])
     channel = project.get('agent_browser_channel')
     if channel in ('firefox', 'chrome'):
         args += ['--browser', channel]  # Firefox is Playwright's own build, fetched by ensure_firefox before the turn.
     elif os.name == 'nt':
         # Playwright wants Chrome by default; Edge ships with every Windows 10 and 11, so it is named outright.
-        edge = next((str(p) for p in (Path(os.environ.get('PROGRAMFILES(X86)', r'C:\Program Files (x86)'))/'Microsoft/Edge/Application/msedge.exe',
-                                      Path(os.environ.get('PROGRAMFILES', r'C:\Program Files'))/'Microsoft/Edge/Application/msedge.exe',
-                                      Path(os.environ.get('LOCALAPPDATA', ''))/'Microsoft/Edge/Application/msedge.exe') if p.is_file()), None)
+        edge = installed_browser('msedge')
         args += ['--browser', 'msedge'] + (['--executable-path', edge] if edge else [])
-    command, args = (('cmd', ['/c', 'npx', *args]) if os.name == 'nt' else ('npx', args))
+    command, args = npx(*args)
     return {'name': 'frontier-browser', 'transport': 'stdio', 'command': command, 'args': args, 'env': {}, 'trusted': True, 'enabled': True}
 
 
@@ -164,8 +227,6 @@ def ensure_firefox(project):
     global FIREFOX_READY
     if FIREFOX_READY or not project.get('agent_browser') or project.get('agent_browser_mode') == 'mine' or project.get('agent_browser_channel') != 'firefox':
         return
-    import subprocess
-
     from .localprocess import child_flags
     command = ['cmd', '/c', 'npx'] if os.name == 'nt' else ['npx']
     try:
@@ -180,19 +241,17 @@ def ensure_own_browser(project):
     and it dies when the turn ends, taking a half-done sign-in with it. Frontier starts it first, detached, so it stays."""
     if os.name != 'nt' or not project.get('agent_browser') or project.get('agent_browser_mode') != 'mine':
         return
-    import subprocess
     exe = 'msedge.exe' if project.get('agent_browser_channel') == 'msedge' else 'chrome.exe'
     running = subprocess.run(['tasklist', '/FI', f'IMAGENAME eq {exe}', '/NH'], capture_output=True, text=True, creationflags=0x08000000).stdout
     if exe in running.lower():
         return
-    folder = 'Microsoft/Edge/Application' if exe == 'msedge.exe' else 'Google/Chrome/Application'
-    found = next((p for p in (Path(os.environ.get(v, ''))/folder/exe for v in ('PROGRAMFILES', 'PROGRAMFILES(X86)', 'LOCALAPPDATA')) if p.is_file()), None)
+    found = installed_browser('msedge' if exe == 'msedge.exe' else 'chrome')
     if found:
         # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB: not a child of this turn.
         try:
-            subprocess.Popen([str(found)], creationflags=0x00000008 | 0x00000200 | 0x01000000, close_fds=True)
+            subprocess.Popen([found], creationflags=0x00000008 | 0x00000200 | 0x01000000, close_fds=True)
         except OSError:
-            subprocess.Popen([str(found)], creationflags=0x00000008 | 0x00000200, close_fds=True)  # A job that forbids breakaway.
+            subprocess.Popen([found], creationflags=0x00000008 | 0x00000200, close_fds=True)  # A job that forbids breakaway.
 
 
 # The same bar in either browser: what a user sees is checked by looking at it.
@@ -200,7 +259,7 @@ VERIFY_IN_BROWSER = ('After changing anything a user sees, open it, check the co
                      'take a screenshot, and report what you saw, not what you expect.')
 
 
-def browser_note(project, root):
+def browser_note(project, root, session_id=None):
     if not project.get('agent_browser'):
         return None
     from . import devserver
@@ -216,6 +275,11 @@ def browser_note(project, root):
                 'action, and make no browser call after it, so nothing is left behind, unless you are handing it to the user '
                 '(to sign in, approve, or pick something): then leave it open on that page and tell them it is waiting there. Do not touch the user\'s own tabs or '
                 'change their settings, and do only what the task asks on sites where they are signed in. ' + VERIFY_IN_BROWSER)
+    if uses_agent_browser(project):
+        return ('A real browser is available through the frontier-browser tools (open, snapshot, click, fill, read text, screenshot).' + where
+                + ' Use these tools for any web page, not another browser or computer-use tool. A snapshot gives refs such as @e1 to click '
+                'or fill; take a new one after the page changes. For console messages, run this in your shell: '
+                f'`npx -y agent-browser@latest --session {agent_browser_session(session_id)} console`. ' + VERIFY_IN_BROWSER)
     return ('A real browser is available through the frontier-browser tools (navigate, click, type, read the page, console '
             'messages, screenshots).' + where + ' Use these tools for any web page, not another browser or computer-use tool. ' + VERIFY_IN_BROWSER)
 
@@ -501,7 +565,7 @@ class AgentRunner:
                     continue
         return False
 
-    def extras(self, tenant_id, token, mode, project=None):
+    def extras(self, tenant_id, token, mode, project=None, session_id=None):
         """What this turn carries beyond its posture: the workspace's MCP servers, whether the
         project's .env files are off limits, and, when the backend is reachable over loopback, the
         approval tool that turns a prompt into a card."""
@@ -514,8 +578,8 @@ class AgentRunner:
             sealed = (project or {}).get('agent_browser_token')  # Not `token`: that name is this turn's own token.
             # The project's own browser replaces a plain Playwright server added to the workspace: two browsers let an
             # agent pick the wrong one (a fresh one instead of the user's own, or the reverse).
-            plain = [s for s in servers if '@playwright/mcp' not in ' '.join([s.get('command') or '', *(s.get('args') or [])])]
-            extras['mcp_servers'] = plain + [browser_server(project, self.store.decrypt(sealed) if sealed else None)]
+            plain = [s for s in servers if not re.search('@playwright/mcp|agent-browser', ' '.join([s.get('command') or '', *(s.get('args') or [])]))]
+            extras['mcp_servers'] = plain + [browser_server(project, self.store.decrypt(sealed) if sealed else None, session_id)]
         port = os.environ.get('HARNESS_DESKTOP_PORT')
         if port:
             # Frontier's own tools: under Edit files the approval card; in every posture the question
@@ -962,13 +1026,17 @@ class AgentRunner:
         steer = None if message.get('team') else self.steers.setdefault((tenant_id, session_id), Steer())
         await asyncio.to_thread(ensure_firefox, project)
         await asyncio.to_thread(ensure_own_browser, project)
-        extras = self.extras(tenant_id, token, mode, project)
+        agent_browser = uses_agent_browser(project)
+        if agent_browser and not await asyncio.to_thread(start_agent_browser, project, session_id):
+            agent_browser, project = False, {**project, 'agent_browser_engine': 'playwright'}
+            self.store.event(tenant_id, session_id, 'turn.agent', 'agent-browser could not start, so this turn uses Playwright.', message_id=message_id)
+        extras = self.extras(tenant_id, token, mode, project, session_id)
         extras['live'] = self.watch(tenant_id, session_id, message.get('model_name'))
         # Every project gets at least 90 minutes; a project may ask for more, never less.
         extras['timeout'] = max(MIN_TURN_MINUTES, int(project.get('turn_minutes') or 0)) * 60
         rules = (self.store.tenant_internal(tenant_id) or {}).get('rules')
         memory = project.get('memory')
-        environment = ' '.join(filter(None, [(self.files.python_env(root) or {}).get('note'), browser_note(project, root)])) or None
+        environment = ' '.join(filter(None, [(self.files.python_env(root) or {}).get('note'), browser_note(project, root, session_id)])) or None
         # An adversarial check judges the work, not the story of it, so it is not shown the board's reports.
         board_text = None if session.get('blind') else board.render(board.tasks(self.store, tenant_id, project_id))
         environment = ' '.join(filter(None, [environment, sandbox_note(sandbox.policy(project))])) or None
@@ -1145,6 +1213,8 @@ class AgentRunner:
             self.finish(tenant_id, project_id, session_id, message_id, status, error, result, before, mode, attempts, after=after_print,
                         checkpoint={'before': before_ref, 'after': after_ref} if before_ref and after_ref else None,
                         ledger={'started_at': started, 'model': (config or {}).get('model_name'), **composition})
+            if agent_browser:
+                await asyncio.to_thread(close_agent_browser, session_id)
 
     async def checkpoint(self, root, label):
         try:

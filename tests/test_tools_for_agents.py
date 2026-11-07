@@ -225,6 +225,51 @@ def test_codex_launches_a_windows_npx_server_through_cmd(tmp_path, monkeypatch):
     assert 'mcp_servers.playwright.args=["/c", "npx", "-y", "@playwright/mcp@latest"]' in argv
 
 
+def test_agent_browser_is_chosen_per_project_and_never_leaves_the_sandbox(tmp_path, monkeypatch):
+    from backend import agent
+    monkeypatch.setattr(agent, 'installed_browser', lambda channel: f'/{channel}')
+    project = {'root': str(tmp_path), 'agent_browser': True, 'agent_browser_channel': 'msedge'}
+    assert '@playwright/mcp@latest' in browser_server(project)['args']
+    chosen = {**project, 'agent_browser_engine': 'agent-browser'}
+    server = browser_server(chosen, session_id='abcdefghijklmnop')
+    assert server['name'] == 'frontier-browser' and server['args'][-2:] == ['agent-browser@latest', 'mcp']
+    assert server['env']['AGENT_BROWSER_SESSION'] == 'frontier-abcdefghijkl'
+    assert any(a.startswith('plugins.') for a in agent_argv('codex_cli', ['codex'], 'm', 'edit', '.', Path('f'), {'mcp_servers': [server]}))  # Not Codex's own browser.
+    assert server['env']['AGENT_BROWSER_SCREENSHOT_DIR'] == str(Path(tmp_path)/'.frontier'/'browser')
+    assert server['env']['AGENT_BROWSER_EXECUTABLE_PATH'] == '/msedge' and 'AGENT_BROWSER_HEADED' not in server['env']
+    assert browser_server({**chosen, 'agent_browser_visible': True}, session_id='s')['env']['AGENT_BROWSER_HEADED'] == 'true'
+    assert '--session frontier-abcdefghijkl console' in agent.browser_note(chosen, '.', 'abcdefghijklmnop')
+    for other in ({'agent_browser_mode': 'mine'}, {'agent_browser_channel': 'firefox'}, {'agent_browser': False},
+                  {'sandbox': {'network': 'agent'}}, {'sandbox': {'network': 'allowlist', 'allow': ['a.example']}}):
+        assert not agent.uses_agent_browser({**chosen, **other})
+    monkeypatch.setattr(agent.sandbox, 'supported', lambda: True)
+    assert not agent.uses_agent_browser({**chosen, 'sandbox': {'files': True}})
+
+
+def test_agent_browser_starts_before_the_turn_and_a_failure_falls_back_to_playwright(tmp_path, monkeypatch):
+    import subprocess
+    from backend import agent
+    monkeypatch.setattr(agent, 'installed_browser', lambda channel: '/browser')
+    calls, code = [], [0]
+    real = subprocess.run
+    monkeypatch.setattr(subprocess, 'run', lambda argv, **kw: (calls.append((argv, kw)), subprocess.CompletedProcess(argv, code[0]))[1] if 'agent-browser@latest' in argv else real(argv, **kw))
+    store = setup_store(tmp_path/'state'); folder = tmp_path/'work'; folder.mkdir()
+    scripted = ScriptedAgent()
+    runner = AgentRunner(store, scripted)
+    p, session = open_project(store, runner, 'tenant-a', folder)
+    p.update(agent_browser=True, agent_browser_engine='agent-browser', agent_browser_channel='msedge'); store.put('tenant-a', 'projects', p)
+    asyncio.run(turn(runner, store, 'tenant-a', p, session, 'Check the page.', 'claude_cli', 'edit'))
+    browser = next(s for s in scripted.calls[-1]['extras']['mcp_servers'] if s['name'] == 'frontier-browser')
+    assert 'agent-browser@latest' in browser['args'] and ' console`' in scripted.calls[-1]['prompt']
+    assert 'open' in calls[0][0] and calls[0][1]['stdout'] == subprocess.DEVNULL and calls[0][1]['env']['AGENT_BROWSER_EXECUTABLE_PATH'] == '/browser'
+    assert 'close' in calls[-1][0]  # Ends with the turn, so the next turn starts clean.
+    calls.clear(); code[0] = 1
+    asyncio.run(turn(runner, store, 'tenant-a', p, session, 'Check it again.', 'claude_cli', 'edit'))
+    browser = next(s for s in scripted.calls[-1]['extras']['mcp_servers'] if s['name'] == 'frontier-browser')
+    assert '@playwright/mcp@latest' in browser['args'] and 'frontier-browser tools (navigate' in scripted.calls[-1]['prompt']
+    assert len(calls) == 1  # Nothing started, so nothing to close.
+
+
 def test_the_users_browser_is_started_outside_the_turn_when_closed(tmp_path, monkeypatch):
     import subprocess
     from backend import agent

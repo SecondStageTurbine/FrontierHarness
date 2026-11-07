@@ -1,0 +1,30 @@
+import {test,expect} from '@playwright/test';
+
+test('a fresh browser can use agent-browser, and Firefox and the users own browser do not offer it',async({page})=>{
+ const request=page.request;
+ const owner={username:'desktop-tester',password:'desktop-test-password-2026'};
+ await request.post('/api/auth/setup',{data:owner});
+ expect((await request.post('/api/auth/login',{data:owner})).ok()).toBeTruthy();
+ const t=(await (await request.get('/api/tenants')).json())[0]?.id??(await (await request.post('/api/tenants',{data:{name:'Browser workspace'}})).json()).id;
+ await request.post(`/api/t/${t}/models`,{data:{name:'Claude',provider:'claude_cli',model_name:'sonnet'}});
+ const a=await (await request.post(`/api/t/${t}/projects`,{data:{name:'Abtest'}})).json();
+ await request.put(`/api/t/${t}/projects/${a.id}/settings`,{data:{agent_browser:true,agent_browser_channel:'msedge'}});
+ await request.post(`/api/t/${t}/projects/${a.id}/sessions`,{data:{name:'Ab work'}});
+ await page.goto('/');
+ await page.locator('.project-row',{hasText:'Abtest'}).locator('.project-main').click();
+ await page.locator('.session-list>button',{hasText:'Ab work'}).click();
+ await page.getByRole('button',{name:'Open preview',exact:true}).click();
+ await page.locator('.inspector-tabs button',{hasText:'Preview'}).click();
+ const tools=page.getByLabel("Agent's browser tools");
+ await expect(tools).toHaveValue('playwright');
+ await tools.selectOption('agent-browser');
+ await expect(page.getByText('stays on Playwright')).toBeVisible();
+ await expect.poll(async()=>(await (await request.get(`/api/t/${t}/projects`)).json()).find((p:{id:string})=>p.id===a.id).agent_browser_engine).toBe('agent-browser');
+ await page.screenshot({path:'test-results/agent-browser-tools.png'});
+ await page.getByLabel("Agent's browser",{exact:true}).selectOption('firefox');
+ await expect(tools).toHaveCount(0);
+ await page.getByLabel("Agent's browser",{exact:true}).selectOption('msedge');
+ await expect(tools).toHaveValue('agent-browser');
+ await page.getByRole('radio',{name:/My own Chrome or Edge/}).check();
+ await expect(tools).toHaveCount(0);
+});

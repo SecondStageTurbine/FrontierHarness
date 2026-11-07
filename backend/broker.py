@@ -410,9 +410,9 @@ def agent_argv(provider, launch, model_name, mode, root, final_path, extras=None
                 # Frontier's own servers always run unasked; a server the user added runs unasked once the turn may
                 # act (Edit files, Full auto). Under Read only, only the tools that declare themselves read-only run.
                 argv += ['-c', f'{key}.default_tools_approval_mode="approve"']
-        if any('@playwright/mcp' in ' '.join(s.get('args') or []) for s in servers):
+        if any(re.search('@playwright/mcp|agent-browser', ' '.join(s.get('args') or [])) for s in servers):
             # Codex's own browser plugins would reach for a browser of their own, whose per-site permission no one can
-            # grant under exec, instead of the Playwright one handed to it. Off for this turn; the user's config is untouched.
+            # grant under exec, instead of the one handed to it. Off for this turn; the user's config is untouched.
             for plugin in CODEX_BROWSER_PLUGINS:
                 argv += ['-c', f'plugins.{plugin}.enabled=false']
         if extras.get('resume'):
