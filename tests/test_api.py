@@ -1,6 +1,9 @@
+import io
 import json
+import zipfile
 from fastapi.testclient import TestClient
 from backend.app import create_app
+from backend.projects import office_text
 from tests.harness import ScriptedAgent
 
 def setup(client):
@@ -104,8 +107,34 @@ def test_attachment_validation_and_references(tmp_path):
         from tests.test_projects import make_pdf
         scan=c.post(f'/api/t/{t}/attachments',files={'file':('scan.pdf',make_pdf(''),'application/pdf')})
         assert scan.status_code==422 and 'OCR' in scan.json()['detail']  # says what is missing, not that the file is broken
-        doc=c.post(f'/api/t/{t}/attachments',files={'file':('minutes.docx',b'PK\x03\x04binary','application/vnd.openxmlformats-officedocument.wordprocessingml.document')})
-        assert doc.status_code==422 and 'Export to PDF' in doc.json()['detail']
+        old=c.post(f'/api/t/{t}/attachments',files={'file':('minutes.doc',b'\xd0\xcf\x11\xe0binary','application/msword')})
+        assert old.status_code==422 and '.docx' in old.json()['detail']
+        broken=c.post(f'/api/t/{t}/attachments',files={'file':('minutes.docx',b'PK\x03\x04binary','application/octet-stream')})
+        assert broken.status_code==422
+        for name,body,expected in office_samples():
+            made=c.post(f'/api/t/{t}/attachments',files={'file':(name,body,'application/octet-stream')})
+            assert made.status_code==200, made.text
+            assert office_text(body,name[name.rindex('.'):])==expected
+
+def office_samples():
+    """Minimal .docx, .pptx and .xlsx files: just the XML parts the reader uses."""
+    def office(parts):
+        buffer=io.BytesIO()
+        with zipfile.ZipFile(buffer,'w') as z:
+            for part,body in parts.items():
+                z.writestr(part,body)
+        return buffer.getvalue()
+    W='xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    A='xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+    S='xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+    return [
+        ('minutes.docx',office({'word/document.xml':f'<w:document {W}><w:body><w:p><w:r><w:t>Agenda </w:t></w:r><w:r><w:t>item one</w:t></w:r></w:p></w:body></w:document>'}),'Agenda item one'),
+        ('deck.pptx',office({'ppt/slides/slide10.xml':f'<p:sld xmlns:p="x" {A}><a:p><a:r><a:t>Tenth</a:t></a:r></a:p></p:sld>','ppt/slides/slide2.xml':f'<p:sld xmlns:p="x" {A}><a:p><a:r><a:t>Second</a:t></a:r></a:p></p:sld>'}),'## Slide 1\nSecond\n\n## Slide 2\nTenth'),
+        ('budget.xlsx',office({'xl/workbook.xml':f'<workbook {S}><sheets><sheet name="Q1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+            'xl/_rels/workbook.xml.rels':'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+            'xl/sharedStrings.xml':f'<sst {S}><si><t>Rent</t></si></sst>',
+            'xl/worksheets/sheet1.xml':f'<worksheet {S}><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"><v>1200</v></c></row></sheetData></worksheet>'}),'## Q1\nRent\t1200'),
+    ]
 
 def test_unowned_tenant_rejected_even_with_valid_session(tmp_path):
     app=create_app(str(tmp_path),ScriptedAgent())

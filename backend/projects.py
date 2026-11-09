@@ -13,7 +13,9 @@ import re
 import shlex
 import shutil
 import sys
+import zipfile
 from pathlib import Path
+from xml.etree import ElementTree
 
 from pypdf import PdfReader
 
@@ -35,6 +37,62 @@ def pdf_text(data):
     if len(reader.pages)>100:
         raise ValueError('PDFs must contain at most 100 pages.')
     return '\n'.join(page.extract_text() or '' for page in reader.pages)
+
+OFFICE_EXTENSIONS = ('.docx','.xlsx','.pptx','.odt','.ods','.odp')
+
+def office_text(data,suffix):
+    """Extract the text of a Word, Excel or PowerPoint file (or its OpenDocument twin).
+
+    These formats are zipped XML, so the standard library reads them without a converter.
+    Each part is read with a cap so a zip bomb cannot exhaust memory.
+    """
+    archive=zipfile.ZipFile(io.BytesIO(data))
+    names=set(archive.namelist())
+    def xml(name):
+        with archive.open(name) as part:
+            raw=part.read(20_000_001)
+        if len(raw)>20_000_000:
+            raise ValueError('This document is too large to read.')
+        return ElementTree.fromstring(raw)
+    def local(element):
+        return element.tag.rsplit('}',1)[-1]
+    def paragraphs(root):
+        # OOXML keeps run text in <t> elements; other descendants (field codes, deleted text) are skipped.
+        lines=(''.join(t.text or '' for t in p.iter() if local(t)=='t') for p in root.iter() if local(p)=='p')
+        return '\n'.join(line for line in lines if line.strip())
+    def numbered(prefix):
+        return sorted((n for n in names if n.startswith(prefix) and n.endswith('.xml')),key=lambda n:int(re.sub(r'\D','',n.rsplit('/',1)[-1]) or 0))
+    if suffix in ('.odt','.ods','.odp'):
+        root=xml('content.xml')
+        lines=(''.join(p.itertext()) for p in root.iter() if local(p) in ('p','h'))
+        return '\n'.join(line for line in lines if line.strip())
+    if suffix=='.docx':
+        return paragraphs(xml('word/document.xml'))
+    if suffix=='.pptx':
+        return '\n\n'.join(f'## Slide {i}\n'+paragraphs(xml(name)) for i,name in enumerate(numbered('ppt/slides/slide'),1))
+    # .xlsx: shared strings, then each sheet in workbook order as tab-separated rows.
+    shared=[''.join(t.text or '' for t in si.iter() if local(t)=='t') for si in xml('xl/sharedStrings.xml')] if 'xl/sharedStrings.xml' in names else []
+    targets={r.get('Id'):r.get('Target') for r in xml('xl/_rels/workbook.xml.rels')}
+    sheets=[]
+    for sheet in (e for e in xml('xl/workbook.xml').iter() if local(e)=='sheet'):
+        target=targets.get(next((v for k,v in sheet.attrib.items() if k.endswith('}id')),''),'')
+        path=target.lstrip('/') if target.startswith('/') else 'xl/'+target
+        if path not in names:
+            continue
+        rows=[]
+        for row in (e for e in xml(path).iter() if local(e)=='row'):
+            cells=[]
+            for cell in (e for e in row if local(e)=='c'):
+                value=next((e.text or '' for e in cell if local(e)=='v'),'')
+                if cell.get('t')=='s' and value.isdigit() and int(value)<len(shared):
+                    value=shared[int(value)]
+                elif cell.get('t')=='inlineStr':
+                    value=''.join(t.text or '' for t in cell.iter() if local(t)=='t')
+                cells.append(value)
+            if any(cells):
+                rows.append('\t'.join(cells))
+        sheets.append(f'## {sheet.get("name")}\n'+'\n'.join(rows))
+    return '\n\n'.join(sheets)
 
 class ProjectFiles:
     def __init__(self,store):

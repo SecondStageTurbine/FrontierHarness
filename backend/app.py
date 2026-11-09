@@ -44,7 +44,7 @@ from .broker import (
     account_home,
     probe_cli,
 )
-from .projects import pdf_text
+from .projects import OFFICE_EXTENSIONS, office_text, pdf_text
 from .schemas import (
     AGENT_PROVIDERS,
     SUBSCRIPTION_PROVIDERS,
@@ -569,15 +569,17 @@ def create_app(directory=None, broker=None):
             return {k:v for k,v in result.items() if k!='path'}
         # Decided by format, not by whether the bytes happen to survive a UTF-8 decode:
         # a small office file that decodes would otherwise reach the model as gibberish.
-        if filename.lower().endswith(('.doc','.docx','.xls','.xlsx','.ppt','.pptx','.odt','.ods','.odp','.rtf','.pages','.numbers','.key')):
-            raise ValueError('Word, Excel and PowerPoint documents are not read. Export to PDF or plain text first.')
+        if filename.lower().endswith(('.doc','.xls','.ppt','.rtf','.pages','.numbers','.key')):
+            raise ValueError('This older document format is not read. Save it as .docx, .xlsx or .pptx, or export to PDF.')
         try:
-            if filename.lower().endswith('.pdf'):
+            if filename.lower().endswith(OFFICE_EXTENSIONS):
+                content = office_text(raw,Path(filename).suffix.lower())
+            elif filename.lower().endswith('.pdf'):
                 content = pdf_text(raw)
             else:
                 content = raw.decode('utf-8')
         except Exception:
-            raise ValueError('Use a UTF-8 text or source file, or a text-based PDF of up to 100 pages.') from None
+            raise ValueError('Use a UTF-8 text or source file, a Word, Excel or PowerPoint document, or a text-based PDF of up to 100 pages.') from None
         if not content.strip():
             # A scanned PDF is the common case here, and 'no extractable text' reads as a
             # broken file unless the message says what is actually missing.
