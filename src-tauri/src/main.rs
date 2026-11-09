@@ -119,6 +119,8 @@ fn app_window<'a>(app: &'a tauri::AppHandle, label: &str, url: tauri::Url, port:
     WebviewWindowBuilder::new(app,label,WebviewUrl::External(url))
         .on_navigation(move |url| url.host_str()==Some("127.0.0.1") && url.port()==port)
         .on_new_window(|url, _| { open_in_browser(&url); NewWindowResponse::Deny })
+        // The native handler swallows file drops before the page sees them; the composer takes them itself.
+        .disable_drag_drop_handler()
 }
 /// A panel in its own window, for a second monitor. One window per panel; asking again focuses it.
 #[tauri::command]
