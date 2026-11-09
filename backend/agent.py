@@ -979,7 +979,10 @@ class AgentRunner:
         # unless nothing else can.
         full = await localhealth.saturated(up, [c for key, c in self.serving.items() if key != (tenant_id, session['id'])])
         free = [m for m in up if m['id'] not in full]
-        chosen, ranked = adaptive.choose(requirements, free or up, lambda model_id: cooling(self.broker, tenant_id, model_id))
+        # A conversation stays with the agent that just answered when that costs nothing, so it keeps its own session.
+        last = self.previous_agent(session, message['id'])
+        chosen, ranked = adaptive.choose(requirements, free or up, lambda model_id: cooling(self.broker, tenant_id, model_id),
+                                         previous_id=last['model_id'] if last and last.get('status') == 'complete' else None)
         # An agent the message names takes it, even if it is busy or dearer than the router would pick.
         chosen = adaptive.asked_for(content, adaptive.score(requirements, up)) or chosen
         if chosen is None:

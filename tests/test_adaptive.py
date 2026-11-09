@@ -432,3 +432,22 @@ async def test_a_named_agent_holds_only_its_own_turn_and_the_next_one_is_routed_
     session = await turn(runner, store, 'tenant-a', project, session, 'Explain what app.py does.', ADAPTIVE, 'read')
     reply = session['messages'][-1]
     assert reply['routing']['mode'] == 'adaptive' and reply['model_id'] == 'qwen'
+
+
+def test_the_agent_that_answered_last_keeps_the_conversation_only_when_that_costs_nothing():
+    need = adaptive._derive('implementation', False, False, [], {'file_count': 40, 'languages': ['.py'], 'flagged': []})
+    def local(id, short=0):
+        return {**QWEN, 'id': id, 'capabilities': {c: v - short for c, v in need.requirements.items()}}
+    best, close, short2, short3 = local('best'), local('close', 1), local('short2', 2), local('short3', 3)
+    best['capabilities'] = {c: 10 for c in need.requirements}
+    fleet = [best, close, short2, short3, CLAUDE]
+    assert adaptive.choose(need, fleet)[0]['id'] == 'best'
+    # An equal-cost agent that still covers the turn, or falls one point past tolerance, keeps it.
+    assert adaptive.choose(need, fleet, previous_id='close')[0]['id'] == 'close'
+    stayed = adaptive.choose(need, fleet, previous_id='short2')[0]
+    assert stayed['id'] == 'short2' and 'keeps its own session' in stayed['because']
+    # Too far short, high-risk work, a dearer agent, or one in cooldown hands over as before.
+    assert adaptive.choose(need, fleet, previous_id='short3')[0]['id'] == 'best'
+    assert adaptive.choose(need.model_copy(update={'risk': 'high'}), fleet, previous_id='short2')[0]['id'] == 'best'
+    assert adaptive.choose(need, fleet, previous_id='claude')[0]['id'] == 'best'
+    assert adaptive.choose(need, fleet, lambda model_id: model_id == 'close', previous_id='close')[0]['id'] == 'best'

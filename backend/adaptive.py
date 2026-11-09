@@ -29,6 +29,12 @@ COST_RANK = {'free': 0, 'low': 1, 'medium': 2, 'high': 3}
 # A candidate may fall short of a requirement by this much and still count as sufficient;
 # profiles are estimates, and a point of slack keeps a cheap agent from losing to noise.
 TOLERANCE = 1
+# The agent that answered the last turn keeps the conversation if it is short by at most this
+# much and no dearer than the pick: switching replays the conversation to a new agent and loses
+# the old one's own session. Never on high-risk work, where the extra point matters.
+# ponytail: replayed on 1,906 past turns this cut switches 12% at slightly lower cost; letting it
+# be one cost class dearer cuts 30% but moves free turns onto paid agents.
+STAY_TOLERANCE = TOLERANCE + 1
 MAX_ESCALATIONS = 2
 LOW_CLASSIFICATION_CONFIDENCE = 0.6
 
@@ -462,10 +468,11 @@ def score(requirements, models, in_cooldown=lambda model_id: False):
             continue  # Hard requirement: a turn needs an agent loop, and a keyed model has none.
         deficits = {c: max(0, requirements.need(c) - cap.get(c, 0)) for c in CAPABILITIES if c != 'speed'}
         total = sum(deficits.values())
+        shortfall = max(deficits.values(), default=0)
         sufficient = all(d <= TOLERANCE for d in deficits.values())
         strength = sum(cap.get(c, 0) for c in CAPABILITIES if c != 'speed')
         ranked.append({'id': model['id'], 'name': model['name'], 'model_name': model.get('model_name'), 'provider': model['provider'], 'location': cap['location'],
-                       'cost_class': cap['cost_class'], 'sufficient': sufficient, 'deficit': total, 'strength': strength,
+                       'cost_class': cap['cost_class'], 'sufficient': sufficient, 'deficit': total, 'shortfall': shortfall, 'strength': strength,
                        'speed': cap.get('speed', 5), 'cooling': bool(in_cooldown(model['id']))})
     # A login in cooldown is not unavailable — the account pool will move past it — but it is a
     # worse bet than one that is not, so it sorts behind an equal alternative.
@@ -474,11 +481,17 @@ def score(requirements, models, in_cooldown=lambda model_id: False):
     return ranked
 
 
-def choose(requirements, models, in_cooldown=lambda model_id: False):
+def choose(requirements, models, in_cooldown=lambda model_id: False, previous_id=None):
+    """The cheapest sufficient agent, or the one that answered the last turn (previous_id, given
+    only when that turn completed) if it can still do this one at no extra cost."""
     ranked = score(requirements, models, in_cooldown)
     if not ranked:
         return None, ranked
     best = ranked[0]
+    stay = next((r for r in ranked if r['id'] == previous_id), None)
+    if stay and stay is not best and not stay['cooling'] and COST_RANK[stay['cost_class']] <= COST_RANK[best['cost_class']]             and (stay['sufficient'] or (stay['shortfall'] <= STAY_TOLERANCE and requirements.risk != 'high')):
+        stay['because'] = f'it answered the last turn and still covers {requirements.reason} at no extra cost, so it keeps its own session'
+        return stay, ranked
     if best['sufficient']:
         best['because'] = f'cheapest agent that covers {requirements.reason}'
     else:
