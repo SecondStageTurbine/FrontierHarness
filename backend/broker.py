@@ -303,7 +303,7 @@ def codex_write_mode(extras):
     writes to the project just as workspace-write does, Codex runs without its own."""
     return 'danger-full-access' if (extras or {}).get('outer_sandbox') else 'workspace-write'
 
-FRONTIER_TOOLS = ('ask_user', 'board_list', 'board_add', 'board_update', 'slack_reply')  # Served by permission_tool beside `approve`.
+FRONTIER_TOOLS = ('ask_user', 'board_list', 'board_add', 'board_update', 'slack_reply', 'list_sessions', 'read_session', 'message_session')  # Served by permission_tool beside `approve`.
 CODEX_BROWSER_PLUGINS = ('browser@openai-bundled', 'chrome@openai-bundled', 'computer-use@openai-bundled', 'unified-computer-use@openai-bundled')
 
 def remember_commands(store, tenant_id, out):

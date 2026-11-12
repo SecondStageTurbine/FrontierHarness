@@ -260,6 +260,9 @@ class BoardTaskPatch(StrictModel):
     notes: str | None = Field(default=None, max_length=4000)
     status: Literal['todo', 'doing', 'blocked', 'done'] | None = None
 
+class SessionMessageInput(StrictModel):
+    content: str = Field(min_length=1, max_length=50000)
+
 class SlackReplyInput(StrictModel):
     thread_ts: str = Field(min_length=1, max_length=40)
     text: str = Field(min_length=1, max_length=39000)

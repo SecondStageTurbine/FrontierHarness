@@ -38,12 +38,12 @@ def test_the_question_tool_speaks_mcp_and_turns_the_answer_into_text(monkeypatch
     monkeypatch.setattr(permission_tool, 'call', lambda method, path, body=None: sent.append((method, path, body)) or next(answers))
     monkeypatch.delenv('FRONTIER_TOOLS', raising=False)
     names = [t['name'] for t in permission_tool.handle({'id': 1, 'method': 'tools/list'})['tools']]
-    assert names == ['approve', 'ask_user', 'board_list', 'board_add', 'board_update', 'slack_reply']
+    assert names == ['approve', 'ask_user', 'board_list', 'board_add', 'board_update', 'slack_reply', 'list_sessions', 'read_session', 'message_session']
     reply = permission_tool.handle({'id': 2, 'method': 'tools/call', 'params': {'name': 'ask_user', 'arguments': {'question': 'Which database?', 'options': ['Postgres', 'SQLite']}}})
     assert reply['content'][0]['text'] == 'The user answered: Use Postgres.'
     assert sent[0][2] == {'tool_name': 'ask_user', 'kind': 'question', 'input': {'question': 'Which database?', 'options': ['Postgres', 'SQLite']}}
-    monkeypatch.setenv('FRONTIER_TOOLS', 'board')  # Codex and OpenCode: the board only.
-    assert [t['name'] for t in permission_tool.handle({'id': 3, 'method': 'tools/list'})['tools']] == ['board_list', 'board_add', 'board_update']
+    monkeypatch.setenv('FRONTIER_TOOLS', 'board')  # Codex and OpenCode: the board and sessions only.
+    assert [t['name'] for t in permission_tool.handle({'id': 3, 'method': 'tools/list'})['tools']] == ['board_list', 'board_add', 'board_update', 'list_sessions', 'read_session', 'message_session']
     assert permission_tool.handle({'id': 4, 'method': 'tools/call', 'params': {'name': 'ask_user', 'arguments': {'question': 'x'}}})['isError']
 
 
@@ -126,3 +126,40 @@ def test_claudes_own_question_tool_becomes_question_cards_and_its_answers_go_bac
     replies = iter([{'id': 'q2'}, {'decision': 'deny'}])
     monkeypatch.setattr(permission_tool, 'call', lambda method, path, body=None: next(replies))
     assert permission_tool.decide({'tool_name': 'AskUserQuestion', 'input': native})['behavior'] == 'deny'
+
+
+def test_a_session_finds_another_and_messages_it(tmp_path, monkeypatch):
+    monkeypatch.setenv('HARNESS_DESKTOP_PORT', '8765')
+    results = {}
+    async def respond(config, prompt, mode, root):
+        if 'Message from the Frontier session' in prompt:
+            return AgentResult('Got it, here are the numbers.', 1, 1)
+        headers = {'X-Frontier-Turn': holder['agent'].calls[-1]['extras']['approval']['token']}
+        c = holder['client']
+        results['list'] = (await asyncio.to_thread(c.get, '/internal/sessions', headers=headers)).json()
+        other = next(s for s in results['list'] if s['name'] == 'Reports')
+        results['self'] = (await asyncio.to_thread(c.post, f'/internal/sessions/{holder["sender"]}/message', json={'content': 'x'}, headers=headers)).status_code
+        results['sent'] = (await asyncio.to_thread(c.post, f'/internal/sessions/{other["id"]}/message', json={'content': 'Send me the numbers.'}, headers=headers)).json()
+        results['stranger'] = (await asyncio.to_thread(c.get, '/internal/sessions', headers={'X-Frontier-Turn': 'nope'})).status_code
+        return AgentResult('Asked.', 1, 1)
+    holder = {'agent': ScriptedAgent(respond=respond)}
+    with TestClient(create_app(str(tmp_path/'state'), holder['agent']), client=('127.0.0.1', 5000)) as c:
+        holder['client'] = c
+        t = setup(c)
+        model = c.post(f'/api/t/{t}/models', json={'name': 'Claude', 'provider': 'claude_cli', 'model_name': 'sonnet'}).json()['id']
+        root = tmp_path/'project'; root.mkdir()
+        p = c.post(f'/api/t/{t}/projects', json={'name': 'P', 'root': str(root)}).json()
+        base = f'/api/t/{t}/projects/{p["id"]}/sessions'
+        other = c.post(base, json={'name': 'Reports'}).json()
+        s = c.post(base, json={'name': 'Planner'}).json()
+        holder['sender'] = s['id']
+        c.post(f'{base}/{s["id"]}/instructions', json={'content': 'Ask Reports for the numbers.', 'model_id': model, 'mode': 'read'})
+        for _ in range(300):
+            msgs = c.get(f'{base}/{other["id"]}').json()['messages']
+            if msgs and msgs[-1]['status'] != 'running':
+                break
+            __import__('time').sleep(0.02)
+    assert any(x.get('this_session') and x['name'] == 'Planner' for x in results['list'])
+    assert results['self'] == 400 and results['stranger'] == 403 and results['sent']['sent_to'] == 'Reports'
+    assert f'(id {s["id"]})' in msgs[0]['content'] and msgs[-1]['content'] == 'Got it, here are the numbers.'
+    assert msgs[-1]['mode'] == 'read'  # A read-only sender never starts edits elsewhere.

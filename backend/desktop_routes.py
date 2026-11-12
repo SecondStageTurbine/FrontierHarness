@@ -54,6 +54,7 @@ from .schemas import (
     ResumeCliInput,
     RewindInput,
     SessionInput,
+    SessionMessageInput,
     SessionPatch,
     SlackListenInput,
     SlackReplyInput,
@@ -921,6 +922,49 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
             return await slack_listen.reply(store,tenant_id,store.get(tenant_id,'sessions',session_id),payload.thread_ts,payload.text)
         except ValueError as exc:
             raise HTTPException(400,str(exc)) from None
+
+    # ── Sessions finding and messaging each other, when the user asks them to ──
+    @app.get('/internal/sessions')
+    def sessions_for_turn(request:Request):
+        tenant_id,_,session_id,_=turn_of(request)
+        projects={p['id']:p['name'] for p in store.list(tenant_id,'projects')}
+        found=sorted((s for s in store.list(tenant_id,'sessions') if not s.get('archived') and s['project_id'] in projects),key=lambda s:s.get('updated_at',''),reverse=True)
+        return [{'id':s['id'],'name':s['name'],'project':projects[s['project_id']],'busy':runner.busy(tenant_id,s['id']),
+                 'updated':s.get('updated_at'),**({'this_session':True} if s['id']==session_id else {})} for s in found[:100]]
+
+    @app.get('/internal/sessions/{target_id}')
+    def session_for_turn(target_id:str,request:Request,last:int=10):
+        tenant_id,_,_,_=turn_of(request)
+        try:
+            target=store.get(tenant_id,'sessions',target_id)
+        except (KeyError,TenantIsolationViolationException):
+            raise HTTPException(404,'No session with that id.') from None
+        return {'name':target['name'],'busy':runner.busy(tenant_id,target_id),
+                'messages':[{'role':m['role'],'agent':m.get('model_name'),'status':m.get('status'),'content':(m.get('content') or '')[:6000]} for m in target['messages'][-max(1,min(last,50)):]]}
+
+    @app.post('/internal/sessions/{target_id}/message')
+    async def message_session_for_turn(target_id:str,payload:SessionMessageInput,request:Request):
+        tenant_id,_,session_id,message_id=turn_of(request)
+        if target_id==session_id:
+            raise HTTPException(400,'That is this session.')
+        try:
+            target=store.get(tenant_id,'sessions',target_id)
+        except (KeyError,TenantIsolationViolationException):
+            raise HTTPException(404,'No session with that id.') from None
+        sender=store.get(tenant_id,'sessions',session_id)
+        running=next((m for m in sender['messages'] if m['id']==message_id),{})
+        # The target answers with the agent and posture it last had, never more than the sender's own: a read-only turn cannot start edits elsewhere.
+        last=runner.previous_agent(target,None)
+        project=store.get(tenant_id,'projects',target['project_id'])
+        model_id=(ADAPTIVE if (last.get('routing') or {}).get('mode')=='adaptive' else last['model_id']) if last else project.get('last_model_id') or ADAPTIVE
+        mode='read' if running.get('mode')=='read' else (last or {}).get('mode') or project.get('last_mode') or 'edit'
+        content=f'[Message from the Frontier session "{sender["name"]}" (id {session_id}). To answer it, use the message_session tool with that id.]\n\n{payload.content}'
+        queued=runner.busy(tenant_id,target_id)
+        try:
+            runner.send(tenant_id,target['project_id'],target_id,content,model_id,mode,queue=True)
+        except (ValueError,FileNotFoundError) as exc:
+            raise HTTPException(400,str(exc)) from None
+        return {'sent_to':target['name'],'queued':queued}
 
     @app.get('/api/t/{tenant_id}/projects/{project_id}/board')
     def board_list(tenant_id:str,project_id:str,request:Request):

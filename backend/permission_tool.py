@@ -9,6 +9,7 @@ import json
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from .frontier_mcp import stdio_loop
@@ -143,6 +144,30 @@ def board_call(name, arguments):
         return f'Frontier could not be reached: {exc}'
 
 
+def session_call(name, arguments):
+    """Other Frontier sessions: find them, read them, message them."""
+    try:
+        if name == 'list_sessions':
+            return '\n'.join(f'- {s["id"]} [{s["project"]}] {s["name"]}' + (' (busy)' if s['busy'] else '') + (' (this session)' if s.get('this_session') else '')
+                             for s in call('GET', '/internal/sessions')) or 'No sessions.'
+        target = urllib.parse.quote(str(arguments.get('id') or ''), safe='')
+        if name == 'read_session':
+            found = call('GET', f'/internal/sessions/{target}?last={int(arguments.get("last") or 10)}')
+            return f'{found["name"]}' + (' (busy)' if found['busy'] else '') + '\n\n' + '\n\n'.join(
+                f'{m["agent"] or m["role"]}' + (f' [{m["status"]}]' if m.get('status') not in (None, 'complete') else '') + f': {m["content"]}' for m in found['messages'])
+        sent = call('POST', f'/internal/sessions/{target}/message', {'content': str(arguments.get('message') or '')})
+        return f'Sent to {sent["sent_to"]}' + (', queued until its current turn ends.' if sent['queued'] else '.') + ' Its reply arrives there; read_session shows it, or it may message you back.'
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode()).get('detail')
+        except ValueError:
+            detail = None
+        return f'Frontier refused this: {detail or exc}'
+    except (urllib.error.URLError, OSError) as exc:
+        return f'Frontier could not be reached: {exc}'
+
+
+SESSION_TOOLS = ('list_sessions', 'read_session', 'message_session')
 STATUS = {'type': 'string', 'enum': ['todo', 'doing', 'blocked', 'done']}
 TOOLS = {
     'approve': {'description': 'Ask the user whether a tool call may proceed.',
@@ -162,12 +187,20 @@ TOOLS = {
                     'inputSchema': {'type': 'object', 'required': ['thread_ts', 'text'], 'properties': {
                         'thread_ts': {'type': 'string', 'description': 'The thread_ts given with the Slack message.'},
                         'text': {'type': 'string', 'description': 'The reply, in Slack markdown.'}}}},
+    'list_sessions': {'description': 'Every Frontier session (conversation) in this workspace, across projects, with ids. '
+                                     'Use when the user asks you to find or work with another session.',
+                      'inputSchema': {'type': 'object', 'properties': {}}},
+    'read_session': {'description': "Another Frontier session's recent messages.",
+                     'inputSchema': {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}, 'last': {'type': 'integer', 'description': 'How many messages, default 10.'}}}},
+    'message_session': {'description': "Send a message to another Frontier session; its agent takes it as a new turn (queued if it is busy) "
+                                       "and can answer with this tool. Only when the user asks you to talk to another session.",
+                        'inputSchema': {'type': 'object', 'required': ['id', 'message'], 'properties': {'id': {'type': 'string'}, 'message': {'type': 'string'}}}},
 }
 
 
 def offered():
-    """Codex and OpenCode get the board only; Claude gets every tool."""
-    return ['board_list', 'board_add', 'board_update'] if os.environ.get('FRONTIER_TOOLS') == 'board' else list(TOOLS)
+    """Codex and OpenCode get the board and sessions only; Claude gets every tool."""
+    return ['board_list', 'board_add', 'board_update', *SESSION_TOOLS] if os.environ.get('FRONTIER_TOOLS') == 'board' else list(TOOLS)
 
 
 def handle(message):
@@ -183,7 +216,7 @@ def handle(message):
             return {'content': [{'type': 'text', 'text': json.dumps({'behavior': 'deny', 'message': 'Unknown tool.'})}], 'isError': True}
         if name == 'approve':
             return {'content': [{'type': 'text', 'text': json.dumps(decide(arguments))}]}
-        text = ask(arguments) if name == 'ask_user' else slack_call(arguments) if name == 'slack_reply' else board_call(name, arguments)
+        text = ask(arguments) if name == 'ask_user' else slack_call(arguments) if name == 'slack_reply'             else session_call(name, arguments) if name in SESSION_TOOLS else board_call(name, arguments)
         return {'content': [{'type': 'text', 'text': text}]}
     if method == 'ping':
         return {}
