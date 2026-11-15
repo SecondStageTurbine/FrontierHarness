@@ -127,7 +127,7 @@ class ProjectFiles:
                 if location==other:
                     raise ValueError('This folder is already open as a project.')
         # A new project joins the workspace's own-browser setup rather than starting without it.
-        mine=next((p for p in self.store.list(tenant_id,'projects') if p.get('agent_browser') and p.get('agent_browser_mode')=='mine'),{})
+        mine=next((p for p in self.store.list(tenant_id,'projects') if p.get('agent_browser') and p.get('agent_browser_mode') in ('mine','full')),{})
         browser={k:mine[k] for k in ('agent_browser','agent_browser_mode','agent_browser_channel','agent_browser_token') if k in mine}
         return self.store.put(tenant_id,'projects',dict(id=project_id,name=name,root=str(location),created_at=now(),**browser))
 

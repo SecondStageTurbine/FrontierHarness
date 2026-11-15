@@ -130,7 +130,7 @@ def uses_agent_browser(project):
     """agent-browser is chosen per project, for a fresh Chromium browser only: Frontier starts its daemon before the
     turn, outside the turn's sandbox, so a confined project keeps Playwright, which runs inside it."""
     confined = sandbox.policy(project)
-    return bool(project.get('agent_browser') and project.get('agent_browser_engine') == 'agent-browser' and project.get('agent_browser_mode') != 'mine'
+    return bool(project.get('agent_browser') and project.get('agent_browser_engine') == 'agent-browser' and project.get('agent_browser_mode') not in ('mine', 'full')
                 and project.get('agent_browser_channel') != 'firefox' and not confined['files'] and confined['network'] == 'open')
 
 
@@ -186,6 +186,9 @@ def browser_server(project, token=None, session_id=None):
     if uses_agent_browser(project):
         command, args = npx('agent-browser@latest', 'mcp')
         return {'name': 'frontier-browser', 'transport': 'stdio', 'command': command, 'args': args, 'env': agent_browser_env(project, session_id), 'trusted': True, 'enabled': True}
+    if project.get('agent_browser_mode') == 'full':
+        command, args = npx('@playwright/mcp@latest', '--cdp-endpoint', FULL_BROWSER, '--output-dir', output)
+        return {'name': 'frontier-browser', 'transport': 'stdio', 'command': command, 'args': args, 'env': {}, 'trusted': True, 'enabled': True}
     if project.get('agent_browser_mode') == 'mine':
         # The Playwright extension exists only for Chrome and Edge, so a user's own browser is never Firefox.
         channel = project.get('agent_browser_channel') if project.get('agent_browser_channel') in ('chrome', 'msedge') else 'chrome'
@@ -225,7 +228,7 @@ def ensure_firefox(project):
     """Playwright drives its own build of Firefox, not one the user installed: downloaded once (about 120 MB) before the
     first turn that needs it, so the turn does not fail on a missing browser. A repeat is a one-second no-op."""
     global FIREFOX_READY
-    if FIREFOX_READY or not project.get('agent_browser') or project.get('agent_browser_mode') == 'mine' or project.get('agent_browser_channel') != 'firefox':
+    if FIREFOX_READY or not project.get('agent_browser') or project.get('agent_browser_mode') in ('mine', 'full') or project.get('agent_browser_channel') != 'firefox':
         return
     from .localprocess import child_flags
     command = ['cmd', '/c', 'npx'] if os.name == 'nt' else ['npx']
@@ -254,6 +257,45 @@ def ensure_own_browser(project):
             subprocess.Popen([found], creationflags=0x00000008 | 0x00000200, close_fds=True)  # A job that forbids breakaway.
 
 
+# ponytail: one fixed port for the whole computer; make it a setting if something else ever needs 9333.
+FULL_BROWSER = 'http://127.0.0.1:9333'
+
+
+def full_browser_up():
+    import urllib.request
+    try:
+        with urllib.request.urlopen(FULL_BROWSER + '/json/version', timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def ensure_full_browser(project):
+    """"Full browser": Chrome or Edge on a profile of Frontier's own, with its debugging port open, so agents drive every
+    tab and window. Chrome refuses the debugging port on the user's everyday profile, so this profile is separate; what
+    they sign in to there stays. Started detached, outside the turn, and left running between turns."""
+    if not project.get('agent_browser') or project.get('agent_browser_mode') != 'full' or full_browser_up():
+        return
+    found = installed_browser('msedge' if project.get('agent_browser_channel') == 'msedge' else 'chrome')
+    if not found:
+        return  # The browser tools then report that nothing answers on the port.
+    from .frontier_mcp import data_dir
+    argv = [found, f'--remote-debugging-port={FULL_BROWSER.rsplit(":", 1)[1]}', f'--user-data-dir={data_dir()/"full-browser"}',
+            '--no-first-run', '--no-default-browser-check']
+    if os.name == 'nt':
+        try:
+            subprocess.Popen(argv, creationflags=0x00000008 | 0x00000200 | 0x01000000, close_fds=True)
+        except OSError:
+            subprocess.Popen(argv, creationflags=0x00000008 | 0x00000200, close_fds=True)
+    else:
+        subprocess.Popen(argv, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    import time
+    for _ in range(30):
+        if full_browser_up():
+            return
+        time.sleep(0.5)
+
+
 # The same bar in either browser: what a user sees is checked by looking at it.
 VERIFY_IN_BROWSER = ('After changing anything a user sees, open it, check the console for errors, '
                      'take a screenshot, and report what you saw, not what you expect.')
@@ -265,6 +307,15 @@ def browser_note(project, root, session_id=None):
     from . import devserver
     server = devserver.get(root)
     where = f' The project\'s dev server is running at http://localhost:{server.port}/.' if server and server.status()['running'] and server.port else ''
+    if project.get('agent_browser_mode') == 'full':
+        return ('A Chrome or Edge browser the user set aside for agents, on its own profile with the sites they signed in to '
+                'there, is yours to drive through the frontier-browser tools: every tab and window (list, open, select and '
+                'close tabs, navigate, click, type, read the page, console messages, screenshots).' + where
+                + ' Use these tools for any web page, not another browser or computer-use tool. Open as many tabs as the task '
+                'needs and close the ones you opened when you are done with them, unless you are handing one to the user (to '
+                'sign in, approve, or pick something): then leave it open and tell them it is waiting there. Leave tabs you did '
+                'not open alone unless the task is about them, do not change the browser settings, and do only what the task '
+                'asks on sites where the user is signed in. ' + VERIFY_IN_BROWSER)
     if project.get('agent_browser_mode') == 'mine':
         return ("The user's own browser, with their open tabs and the sites they are signed in to, is available through the "
                 'frontier-browser tools (list and select tabs, navigate, click, type, read the page, console messages, screenshots).'
@@ -1029,6 +1080,7 @@ class AgentRunner:
         steer = None if message.get('team') else self.steers.setdefault((tenant_id, session_id), Steer())
         await asyncio.to_thread(ensure_firefox, project)
         await asyncio.to_thread(ensure_own_browser, project)
+        await asyncio.to_thread(ensure_full_browser, project)
         agent_browser = uses_agent_browser(project)
         if agent_browser and not await asyncio.to_thread(start_agent_browser, project, session_id):
             agent_browser, project = False, {**project, 'agent_browser_engine': 'playwright'}

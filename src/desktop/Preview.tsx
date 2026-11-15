@@ -21,7 +21,7 @@ function AgentBrowser({project,sessionId}:{project:Project;sessionId?:string}){
  const [token,setToken]=useState('');
  const [mode,setMode]=useState(project.agent_browser_mode||'fresh');
  useEffect(()=>setMode(project.agent_browser_mode||'fresh'),[project.id,project.agent_browser_mode]);
- async function saveMode(fields:{agent_browser_mode?:'fresh'|'mine';agent_browser_channel?:'chrome'|'msedge'|'firefox';agent_browser_engine?:'playwright'|'agent-browser';agent_browser_token?:string}){
+ async function saveMode(fields:{agent_browser_mode?:'fresh'|'mine'|'full';agent_browser_channel?:'chrome'|'msedge'|'firefox';agent_browser_engine?:'playwright'|'agent-browser';agent_browser_token?:string}){
   if(fields.agent_browser_mode)setMode(fields.agent_browser_mode);
   try{await api.put(path(`/projects/${project.id}/settings`),fields);await client.invalidateQueries({queryKey:['tenant',tenant?.id]});notify('Saved')}catch(e){notify((e as Error).message)}
  }
@@ -31,6 +31,11 @@ function AgentBrowser({project,sessionId}:{project:Project;sessionId?:string}){
   {local.agent_browser&&<div className="browser-choice" role="radiogroup" aria-label="Which browser">
    <label><input type="radio" name="browser-mode" checked={mode==='fresh'} onChange={()=>saveMode({agent_browser_mode:'fresh'})}/><span><strong>A fresh browser</strong><small>Starts clean each turn: nothing signed in, nothing of yours touched.</small></span></label>
    <label><input type="radio" name="browser-mode" checked={mode==='mine'} onChange={()=>saveMode({agent_browser_mode:'mine'})}/><span><strong>My own Chrome or Edge</strong><small>Your open tabs and the sites you are signed in to. Agents act in your real browser.</small></span></label>
+   <label><input type="radio" name="browser-mode" checked={mode==='full'} onChange={()=>saveMode({agent_browser_mode:'full'})}/><span><strong>A full browser for agents</strong><small>Chrome or Edge on a profile of its own that agents control completely: every tab and window. Sign in there to what they should use.</small></span></label>
+  </div>}
+  {local.agent_browser&&mode==='full'&&<div className="browser-mine">
+   <div className="pr-inline"><label>Browser</label><select aria-label="Full browser" value={project.agent_browser_channel==='msedge'?'msedge':'chrome'} onChange={e=>saveMode({agent_browser_channel:e.target.value as 'chrome'|'msedge'})}><option value="chrome">Chrome</option><option value="msedge">Microsoft Edge</option></select><button onClick={async()=>{try{await api.post(path(`/projects/${project.id}/full-browser`),{});notify('Browser open: sign in to what agents should use')}catch(e){notify((e as Error).message)}}}>Open it</button></div>
+   <p className="muted small">It is a separate window from your everyday browser, because Chrome refuses agent control of your main profile. Frontier opens it when a turn needs it and leaves it running; what you sign in to there stays. Any site an agent reads could try to steer it, so sign in only to what agents should touch.</p>
   </div>}
   {local.agent_browser&&mode==='mine'&&<div className="browser-mine">
    <p className="muted small">It connects through Playwright's browser extension. Install it once in the browser you use, then keep that browser open while agents work: <a href="https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm" target="_blank" rel="noreferrer">Playwright extension</a> (Chrome Web Store; Edge installs it from there too).</p>

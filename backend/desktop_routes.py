@@ -25,7 +25,7 @@ from . import (
 )
 from . import vscode_themes as vscode_themes_module
 from .adaptive import ADAPTIVE
-from .agent import context_usage
+from .agent import context_usage, ensure_full_browser, full_browser_up
 from .projects import ProjectFiles
 from .schemas import (
     ApprovalDecision,
@@ -735,6 +735,16 @@ def install_desktop_routes(app,store,runner,user,scoped,create_session):
             project['agent_browser_token']=store.encrypt(token) if token else None
         project.update(fields)
         return shown(store.put(tenant_id,'projects',project))
+
+    @app.post('/api/t/{tenant_id}/projects/{project_id}/full-browser')
+    async def open_full_browser(tenant_id:str,project_id:str,request:Request):
+        """Start the agents' full browser now, so the user can sign in to sites before a turn needs them."""
+        scoped(request,tenant_id)
+        project=store.get(tenant_id,'projects',project_id)
+        await asyncio.to_thread(ensure_full_browser,{**project,'agent_browser':True,'agent_browser_mode':'full'})
+        if not full_browser_up():
+            raise HTTPException(400,'Could not start Chrome or Edge with agent control. Close any copy of it started the same way and try again.')
+        return {'running':True}
 
     # ── Screenshots the agent's browser took, newest first ──
     SHOT_TYPES={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp'}

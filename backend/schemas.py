@@ -146,7 +146,7 @@ class ProjectSettings(StrictModel):
     turn_minutes: int | None = Field(default=None, ge=90, le=480)
     agent_browser: bool = False
     agent_browser_visible: bool = False
-    agent_browser_mode: Literal['fresh', 'mine'] = 'fresh'
+    agent_browser_mode: Literal['fresh', 'mine', 'full'] = 'fresh'
     agent_browser_channel: Literal['chrome', 'msedge', 'firefox'] = 'chrome'
     agent_browser_engine: Literal['playwright', 'agent-browser'] = 'playwright'
     agent_browser_token: str | None = Field(default=None, max_length=200)  # The Playwright extension's token; stored encrypted.

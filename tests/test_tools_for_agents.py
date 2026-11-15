@@ -287,3 +287,25 @@ def test_the_users_browser_is_started_outside_the_turn_when_closed(tmp_path, mon
     agent.ensure_own_browser(project)
     agent.ensure_own_browser({**project, 'agent_browser_mode': 'fresh'})
     assert len(started) == 1
+
+
+def test_a_full_browser_is_driven_over_its_debugging_port_on_a_profile_of_its_own(tmp_path, monkeypatch):
+    import subprocess
+    from backend import agent
+    from backend.agent import browser_note, browser_server
+    project = {'root': str(tmp_path), 'agent_browser': True, 'agent_browser_mode': 'full', 'agent_browser_channel': 'msedge'}
+    server = browser_server(project)
+    assert server['args'][server['args'].index('--cdp-endpoint')+1] == agent.FULL_BROWSER and '--extension' not in server['args']
+    assert 'Open as many tabs as the task needs' in browser_note(project, '.') and not agent.uses_agent_browser({**project, 'agent_browser_engine': 'agent-browser'})
+    monkeypatch.setenv('HARNESS_DATA_DIR', str(tmp_path/'data'))
+    monkeypatch.setattr(agent, 'installed_browser', lambda channel: f'{channel}.exe')
+    started, up = [], iter([False, True])
+    monkeypatch.setattr(agent, 'full_browser_up', lambda: next(up))
+    monkeypatch.setattr(subprocess, 'Popen', lambda argv, **kw: started.append(argv))
+    agent.ensure_full_browser(project)
+    assert started[0][0] == 'msedge.exe' and '--remote-debugging-port=9333' in started[0]
+    assert f'--user-data-dir={tmp_path/"data"/"full-browser"}' in started[0]  # Never the user's everyday profile.
+    monkeypatch.setattr(agent, 'full_browser_up', lambda: True)
+    agent.ensure_full_browser(project)
+    agent.ensure_full_browser({**project, 'agent_browser_mode': 'mine'})
+    assert len(started) == 1
