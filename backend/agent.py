@@ -20,6 +20,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -28,7 +29,7 @@ from . import adaptive, benchmark, board, gitops, localhealth, push, sandbox, sl
 from . import team as teamwork
 from .adaptive import ADAPTIVE, MAX_ESCALATIONS
 from .broker import CLI_TOOLS, ProviderError, Steer, cooling
-from .projects import ProjectFiles
+from .projects import ProjectFiles, shared_chat_files
 from .store import TenantIsolationViolationException, now, uid
 
 # What the agent may do to the project this turn. The names are ours; each tool spells the
@@ -42,6 +43,8 @@ TRANSCRIPT_LIMIT = 120_000
 AUTO_COMPACT_RATIO = .8
 # The shortest time an agent gets for one turn, in any project. Engine builds and test gates run long.
 MIN_TURN_MINUTES = 90
+# Recording the folder before a turn should take seconds; longer is logged, because the agent has not started yet.
+SLOW_PREPARE_SECONDS = 30
 # How many turns a session's ledger keeps; older records fall off the front.
 LEDGER_TURNS = 200
 HANDOVER = (
@@ -378,7 +381,9 @@ def resumable(session, config, root, project, message):
     if not native or message.get('team') or native['provider'] != config.get('provider') or native.get('model_id', config.get('id')) != config.get('id'):
         return None
     try:
-        same = Path(root).resolve() == Path(project['root']).resolve()
+        # A tool keeps its sessions by the folder they ran in: a chat's own folder is named on the session; any other is
+        # the project folder. A chat from before it had a folder of its own replays once, then resumes in its new one.
+        same = Path(root).resolve() == Path(native.get('root') or project['root']).resolve()
     except OSError:
         same = False
     return native if same else None
@@ -572,6 +577,10 @@ class AgentRunner:
                 if target.is_file():
                     target.unlink()
             else:
+                if target.suffix.lower() == '.pdf':
+                    # The recorded before is the PDF's extracted text, not its bytes: writing it back would replace
+                    # the document with plain text. Only a checkpoint can put a PDF back.
+                    continue
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(change['before'] or '', encoding='utf-8')
             restored.append(change['path'])
@@ -1016,7 +1025,7 @@ class AgentRunner:
         content = next(m['content'] for m in reversed(session['messages']) if m['role'] == 'user')
         classifier = self.classifier(tenant_id)
         # Folder scans read up to thousands of files; off the event loop, so the window stays responsive.
-        repo = await asyncio.to_thread(adaptive.repository_signals, self.files, tenant_id, project_id)
+        repo = await asyncio.to_thread(adaptive.repository_signals, self.files, tenant_id, project_id, session['id'])
         requirements, classified_by = await adaptive.classify(content, repo, classifier, self.store.decrypt)
         # A local model whose server is not running is not available, however good its profile:
         # several can be configured while only one holds the GPU, and a turn sent to a server
@@ -1097,8 +1106,11 @@ class AgentRunner:
         environment = ' '.join(filter(None, [environment, sandbox_note(sandbox.policy(project))])) or None
         if project.get('kind') == 'chats':
             # A chat is about anything; its folder is only somewhere to stand, not a codebase to look through.
-            environment = ('This is a general conversation, not about a project. The working folder is an empty scratch '
+            environment = ('This is a general conversation, not about a project. The working folder is this chat\'s own scratch '
                            'space for any files the conversation calls for; do not look through it for context.')
+            if shared_chat_files(project):
+                environment += (f' Files saved by chats before each chat had a folder of its own are in {project["root"]}; '
+                                'open one only when this conversation refers to it.')
         goal = session.get('goal')
         if goal and goal.get('status') == 'active' and not message.get('team'):
             environment = ' '.join(filter(None, [environment, slash.goal_note(goal)]))
@@ -1108,8 +1120,14 @@ class AgentRunner:
         # Read only cannot change the folder, so it is not read twice to prove that.
         # In a repository, the whole working tree is also checkpointed as hidden git objects, so a
         # turn can be put back exactly, binaries included, without touching the user's branch.
+        if mode != 'read':
+            # Said in the live view: until the agent starts, this is all the turn is doing, and an empty view reads as frozen.
+            self.say(tenant_id, session_id, '— Recording the folder before the turn, so its changes can be shown afterwards.')
+            prepared = time.monotonic()
         before, before_ref = (await asyncio.gather(asyncio.to_thread(fingerprint, self.files, tenant_id, project_id, session_id),
                                                    self.checkpoint(root, f'Frontier: before turn {message_id}'))) if mode != 'read' else ({}, None)
+        if mode != 'read' and (spent := time.monotonic() - prepared) > SLOW_PREPARE_SECONDS:
+            logging.getLogger('frontier.agent').warning('Recording %s files before a turn took %.0f seconds in %s.', len(before), spent, root)
         status, error, result = 'complete', None, None
         attempts, tried, handoff_text, ranked = [], set(), None, []
         started, composition = now(), {}  # For the turn ledger: what the last prompt sent was made of.
@@ -1314,6 +1332,10 @@ class AgentRunner:
             # instead of opening a new session and replaying the transcript.
             config = self.store.get(tenant_id, 'models', message['model_id'])
             session['native'] = {'provider': config['provider'], 'model_id': config['id'], 'id': result.session_id, 'upto': len(session['messages'])}
+            if not session.get('worktree'):
+                folder = self.files.root(tenant_id, project_id, session_id)
+                if Path(folder) != Path(self.store.get(tenant_id, 'projects', project_id)['root']):
+                    session['native']['root'] = str(folder)  # A chat's own folder: where the tool will look for this session.
         if result and result.served_by and result.served_by != message['model_id']:
             # Another connected subscription answered because the selected one was spent. The
             # message names the agent that replied, or the conversation credits the wrong one.

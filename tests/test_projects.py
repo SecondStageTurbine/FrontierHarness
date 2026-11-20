@@ -97,6 +97,78 @@ def test_project_pdfs_are_read_and_binary_files_stay_out_of_the_diff(tmp_path):
     assert 'report.pdf' in captured and 'logo.png' not in captured
 
 
+def test_a_pdf_is_parsed_once_until_it_changes(tmp_path,monkeypatch):
+    # Every turn records the folder before and after. Parsing every PDF each time once cost a folder of
+    # 88 policy PDFs almost three minutes per turn, and starved every other conversation on the backend.
+    from backend import projects
+    calls=[]
+    real=projects.pdf_text
+    monkeypatch.setattr(projects,'pdf_text',lambda data:calls.append(1) or real(data))
+    monkeypatch.setattr(projects,'_pdf_cache',{})
+    store=setup_store(tmp_path/'state');files=ProjectFiles(store)
+    root=tmp_path/'project';root.mkdir()
+    pdf=root/'policy.pdf';pdf.write_bytes(make_pdf('Version one'))
+    project=files.create('tenant-a','Project',str(root))
+    before=fingerprint(files,'tenant-a',project['id'])
+    assert fingerprint(files,'tenant-a',project['id'])==before and len(calls)==1
+    pdf.write_bytes(make_pdf('Version two, longer'))
+    os.utime(pdf,ns=(pdf.stat().st_atime_ns,pdf.stat().st_mtime_ns+1_000_000_000))
+    after=fingerprint(files,'tenant-a',project['id'])
+    assert len(calls)==2 and 'Version two' in after['policy.pdf'][1] and after['policy.pdf'][0]!=before['policy.pdf'][0]
+
+
+def chats_with(store,files,root,*session_ids):
+    project=files.create('tenant-a','Chats',str(root))
+    project=store.put('tenant-a','projects',{**project,'kind':'chats'})
+    for sid in session_ids:
+        store.put('tenant-a','sessions',{'id':sid,'project_id':project['id'],'name':sid,'messages':[],'commands':[],'created_at':'2026-01-01T00:00:00Z'})
+    return project
+
+
+def test_each_chat_works_in_a_folder_of_its_own(tmp_path):
+    # Chats once shared the Chats folder: one chat's 88 PDFs were read before and after every other chat's turn.
+    store=setup_store(tmp_path/'state');files=ProjectFiles(store)
+    root=tmp_path/'Chats';root.mkdir()
+    (root/'older.md').write_text('saved before chats had folders',encoding='utf-8')
+    project=chats_with(store,files,root,'chat-one','chat-two')
+    one,two=files.root('tenant-a',project['id'],'chat-one'),files.root('tenant-a',project['id'],'chat-two')
+    assert one!=two and one.is_dir() and two.is_dir() and one.parent==two.parent==root/'.chats'
+    (one/'policy.pdf').write_bytes(make_pdf('Only chat one'))
+    assert list(fingerprint(files,'tenant-a',project['id'],'chat-one'))==['policy.pdf']
+    assert fingerprint(files,'tenant-a',project['id'],'chat-two')=={}
+    # The files from before stay where they were, outside every chat's own folder.
+    assert [e['path'] for e in files.walk('tenant-a',project['id'])[0]]==['older.md']
+    with pytest.raises(ValueError):files.read('tenant-a',project['id'],'policy.pdf','chat-two')
+
+
+def test_a_project_that_is_not_chats_keeps_one_folder_for_every_session(tmp_path):
+    store=setup_store(tmp_path/'state');files=ProjectFiles(store)
+    root=tmp_path/'project';root.mkdir()
+    project=files.create('tenant-a','Project',str(root))
+    store.put('tenant-a','sessions',{'id':'s1','project_id':project['id'],'name':'s1','messages':[],'commands':[],'created_at':'2026-01-01T00:00:00Z'})
+    assert files.root('tenant-a',project['id'],'s1')==root and not (root/'.chats').exists()
+
+
+def test_undo_without_a_checkpoint_never_writes_text_over_a_pdf(tmp_path):
+    from backend.agent import AgentRunner, changes_between
+    store=setup_store(tmp_path/'state');files=ProjectFiles(store)
+    root=tmp_path/'project';root.mkdir()
+    original=make_pdf('Signed policy')
+    (root/'policy.pdf').write_bytes(original)
+    (root/'notes.md').write_text('before',encoding='utf-8')
+    project=files.create('tenant-a','Project',str(root))
+    before=fingerprint(files,'tenant-a',project['id'])
+    edited=make_pdf('Edited policy text')
+    (root/'policy.pdf').write_bytes(edited)
+    (root/'notes.md').write_text('after',encoding='utf-8')
+    changes=changes_between(before,fingerprint(files,'tenant-a',project['id']))
+    assert {c['path'] for c in changes}=={'policy.pdf','notes.md'}
+    restored=AgentRunner(store).undo_changes('tenant-a',project['id'],None,changes)
+    # The text file goes back; the PDF is left as the turn left it, still a PDF, rather than replaced by its extracted text.
+    assert restored==['notes.md'] and (root/'notes.md').read_text(encoding='utf-8')=='before'
+    assert (root/'policy.pdf').read_bytes()==edited
+
+
 def test_the_walk_refuses_by_name_and_says_which_entries_it_refused(tmp_path):
     store=setup_store(tmp_path/'state');files=ProjectFiles(store)
     root=tmp_path/'project';(root/'data').mkdir(parents=True);(root/'node_modules').mkdir()

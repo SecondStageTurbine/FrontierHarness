@@ -234,13 +234,14 @@ FLAGGED_PATHS = {
 }
 
 
-def repository_signals(files, tenant_id, project_id):
+def repository_signals(files, tenant_id, project_id, session_id=None):
     """What a walk of the folder says before any agent looks: size, languages, flagged areas.
 
     Deliberately shallow — names and counts, never contents — so it costs nothing worth naming.
+    Given a session, its own folder: a chat's, or a worktree.
     """
     try:
-        entries, _ = files.walk(tenant_id, project_id)
+        entries, _ = files.walk(tenant_id, project_id, session_id)
     except (ValueError, OSError):
         return {'file_count': 0, 'languages': [], 'flagged': []}
     suffixes = {}

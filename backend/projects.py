@@ -13,6 +13,7 @@ import re
 import shlex
 import shutil
 import sys
+import threading
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree
@@ -37,6 +38,46 @@ def pdf_text(data):
     if len(reader.pages)>100:
         raise ValueError('PDFs must contain at most 100 pages.')
     return '\n'.join(page.extract_text() or '' for page in reader.pages)
+
+# Extracted PDF text by (path, size, mtime_ns). Extraction is pure Python, about a second per document, and holds the
+# GIL; every turn reads the whole folder twice to record its changes, so a folder of 88 policy PDFs once cost each turn
+# almost three minutes and starved every other conversation. Keyed on what the file system reports, a PDF is parsed
+# again only when it changes. Insertion-ordered, oldest dropped first.
+PDF_CACHE_LIMIT=2000
+_pdf_cache={}
+_pdf_cache_lock=threading.Lock()  # Fingerprints run in worker threads, several turns at once.
+
+def cached_pdf_text(file,size,mtime_ns):
+    key=(str(file),size,mtime_ns)
+    with _pdf_cache_lock:
+        hit=_pdf_cache.get(key)
+    if hit is None:
+        hit=pdf_text(file.read_bytes())  # Outside the lock: two turns may parse the same new PDF once each, never wait on each other.
+        with _pdf_cache_lock:
+            _pdf_cache[key]=hit
+            while len(_pdf_cache)>PDF_CACHE_LIMIT:
+                _pdf_cache.pop(next(iter(_pdf_cache)))
+    return hit
+
+# Every chat gets a folder of its own inside the Chats project. They once shared the project folder, so one chat's
+# files were read before and after every other chat's turns, and each agent was told an "empty" folder that was full.
+# A dot folder: a walk of the Chats folder itself, or of a chat's, never reaches the other chats.
+CHATS_FOLDER='.chats'
+
+def chat_folder(project,session_id):
+    folder=Path(project['root'])/CHATS_FOLDER/session_id
+    try:
+        folder.mkdir(parents=True,exist_ok=True)
+    except OSError:
+        pass  # A missing Chats folder is reported by whoever reads it, as for any project.
+    return folder
+
+def shared_chat_files(project):
+    """Whether the Chats folder still holds files from before each chat had its own, for the agent to be told where."""
+    try:
+        return any(not p.name.startswith('.') for p in Path(project['root']).iterdir())
+    except OSError:
+        return False
 
 OFFICE_EXTENSIONS = ('.docx','.xlsx','.pptx','.odt','.ods','.odp')
 
@@ -132,7 +173,8 @@ class ProjectFiles:
         return self.store.put(tenant_id,'projects',dict(id=project_id,name=name,root=str(location),created_at=now(),**browser))
 
     def root(self,tenant_id,project_id,session_id=None):
-        """Where a conversation's files live: its worktree when it has one, otherwise the project folder."""
+        """Where a conversation's files live: its worktree when it has one, its own folder when it is a chat, otherwise
+        the project folder."""
         project=self.store.get(tenant_id,'projects',project_id)
         if session_id:
             session=self.store.get(tenant_id,'sessions',session_id)
@@ -140,6 +182,8 @@ class ProjectFiles:
                 raise TenantIsolationViolationException('Session is unavailable in this project.')
             if session.get('worktree'):
                 return Path(session['worktree']['path'])
+            if project.get('kind')=='chats':
+                return chat_folder(project,session_id)
         return Path(project['root'])
 
     def worktree_location(self,tenant_id,project_id,branch):
@@ -333,14 +377,15 @@ class ProjectFiles:
         if not file.is_file():
             raise ValueError('This file is no longer available.')
         try:
-            size=file.stat().st_size
+            stat=file.stat()
         except OSError:
             raise ValueError('This file could not be opened. Another program may be holding it.') from None
+        size=stat.st_size
         if file.suffix.lower()=='.pdf':
             if size>5_000_000:
                 raise ValueError('PDFs are limited to 5 MB.')
             try:
-                content=pdf_text(file.read_bytes())
+                content=cached_pdf_text(file,size,stat.st_mtime_ns)
             except Exception as exc:
                 raise ValueError(f'This PDF could not be read: {exc}') from None
             if not content.strip():

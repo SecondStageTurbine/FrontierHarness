@@ -15,8 +15,10 @@ import {LiveActivity} from './LiveActivity';
 export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,onFile,busy,onChip,onCompose,agents=[],popped=false,onOpenSession}:{tab:InspectorTab;onTab:(t:InspectorTab)=>void;onClose:()=>void;project:Project;session?:Session;filePath:string|null;fileLine?:number;onFile:(s:string,line?:number)=>void;busy:boolean;onChip?:(chip:ContextChip)=>void;onCompose?:(text:string)=>void;agents?:{provider:string;name:string}[];popped?:boolean;onOpenSession?:(id:string)=>void}){
  const {path,notify}=useWorkspace(),refresh=useRefresh();
  const [query,setQuery]=useState('');const deferred=useDeferredValue(query.trim());
- // A session in its own worktree reads that worktree; the project folder otherwise.
- const scope=session?.worktree?`session_id=${session.id}`:'';
+ // A session in its own worktree reads that worktree, and a chat its own folder; the project folder otherwise.
+ const scope=session&&(session.worktree||project.kind==='chats')?`session_id=${session.id}`:'';
+ const sep=project.root.includes('\\')?'\\':'/';
+ const folder=session?.worktree?.path||(session&&project.kind==='chats'?[project.root,'.chats',session.id].join(sep):project.root);
  const tree=useResource<ProjectFile[]>(`/projects/${project.id}/files${scope?`?${scope}`:''}`);
  const fileQ=useResource<{path:string;content:string}>(`/projects/${project.id}/file?path=${encodeURIComponent(filePath||'')}${scope?`&${scope}`:''}`,!!filePath&&tab==='Files');
  const found=useResource<{hits:{path:string;line:number;text:string}[];files:number;truncated:boolean}>(`/projects/${project.id}/search?q=${encodeURIComponent(deferred)}${scope?`&${scope}`:''}`,deferred.length>=2&&tab==='Files');
@@ -58,7 +60,7 @@ export function Inspector({tab,onTab,onClose,project,session,filePath,fileLine,o
      :<CodeView text={selected.after??selected.before??''}/>}</>}
    </>)}
    {tab==='Preview'&&<Preview projectId={project.id} sessionId={session?.worktree?session.id:undefined} devCommand={project.dev_command||''} project={project}/>}
-   {tab==='Terminal'&&isTauri()&&<Term cwd={session?.worktree?.path||project.root} onChip={onChip} projectId={project.id} sessionId={session?.worktree?session.id:undefined} agents={agents}/>}
+   {tab==='Terminal'&&isTauri()&&<Term cwd={folder} onChip={onChip} projectId={project.id} sessionId={scope?session!.id:undefined} agents={agents}/>}
    {tab==='Terminal'&&!isTauri()&&<>
     <div className="terminal-output">{!commands.length&&<p>Your own project checks and their actual output appear here.<br/>The agent runs its own commands through its tool.</p>}
      {commands.map(c=><div className="terminal-command" key={c.id}><strong><span>❯</span> {c.command}</strong><pre>{c.output||'Process started…'}</pre><small className={c.exit_code===0?'file-added':c.status==='running'?'muted':'file-modified'}>{c.status==='running'?'Running…':c.status==='completed'?`Process exited with code ${c.exit_code}`:`${c.status} · exit ${c.exit_code??'unavailable'}`}</small></div>)}

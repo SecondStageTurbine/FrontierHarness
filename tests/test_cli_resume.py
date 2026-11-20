@@ -107,6 +107,28 @@ def test_the_same_agent_keeps_one_tool_session_across_a_chat(tmp_path):
     assert agent.calls[-1]['extras']['resume'] == 'tool-session' and 'Fix the widget.' not in agent.calls[-1]['prompt']
 
 
+def test_a_chat_runs_in_its_own_folder_and_resumes_its_tool_session_there(tmp_path):
+    root = tmp_path/'Chats'; root.mkdir()
+    store = setup_store(tmp_path/'state')
+    project = store.put('tenant-a', 'projects', {'id': 'c1', 'name': 'Chats', 'kind': 'chats', 'root': str(root), 'created_at': '2026-01-01T00:00:00Z'})
+    # A chat from before each chat had a folder: its tool session was made in the shared Chats folder.
+    session = store.put('tenant-a', 'sessions', {'id': 's1', 'project_id': 'c1', 'name': 'Chat', 'messages': [], 'commands': [], 'created_at': '2026-01-01T00:00:00Z',
+                                                 'native': {'provider': 'claude_cli', 'model_id': 'claude_cli', 'id': 'shared-folder-session', 'upto': 0}})
+    agent = ScriptedAgent()
+    async def respond(config, prompt, mode, where):
+        return AgentResult('Done.', 1, 1, session_id='own-folder-session')
+    agent.respond = respond
+    runner = AgentRunner(store, agent)
+    own = root/'.chats'/'s1'
+    after = asyncio.run(turn(runner, store, 'tenant-a', project, session, 'Draft the letter.', 'claude_cli', 'edit'))
+    # The tool would not find the old session from the new folder, so this one turn replays the conversation.
+    assert agent.calls[-1]['root'] == str(own) and 'resume' not in (agent.calls[-1]['extras'] or {})
+    assert after['native'] == {'provider': 'claude_cli', 'model_id': 'claude_cli', 'id': 'own-folder-session', 'upto': 2, 'root': str(own)}
+    asyncio.run(turn(runner, store, 'tenant-a', project, after, 'Shorter, please.', 'claude_cli', 'edit'))
+    assert agent.calls[-1]['root'] == str(own) and agent.calls[-1]['extras']['resume'] == 'own-folder-session'
+    assert 'Draft the letter.' not in agent.calls[-1]['prompt']
+
+
 def test_tools_name_their_session_for_the_next_turn(tmp_path):
     from backend.broker import read_output
     final = tmp_path/'final'; final.write_text('hi', encoding='utf-8')
