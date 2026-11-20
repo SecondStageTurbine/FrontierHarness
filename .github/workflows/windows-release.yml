@@ -1,0 +1,58 @@
+# Builds and signs the Windows installer on GitHub, for a machine without the signing key or Rust.
+# It leaves a draft release for tag v<version> with the installer, its .sig and latest.json.
+# Publish that draft by hand (gh release edit v<version> --draft=false): publishing as a person,
+# not as this workflow's token, is what starts the Linux release job.
+name: Windows release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Dependencies
+        shell: bash
+        run: |
+          python -m venv .venv
+          .venv/Scripts/python -m pip install -r requirements-build.txt
+          npm ci
+
+      - name: Build
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+        run: npm run desktop:build
+
+      - name: Test the bundled backend
+        run: .venv\Scripts\python scripts/test_package.py
+
+      - name: Draft the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          .venv/Scripts/python scripts/write_update_manifest.py
+          version=$(.venv/Scripts/python -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          bundle=src-tauri/target/release/bundle/nsis
+          notes=releases/release-notes-$version.md
+          gh release create "v$version" --draft --target "$GITHUB_SHA" --title "Frontier $version" \
+            --notes-file "$notes" \
+            "$bundle/Frontier_${version}_x64-setup.exe" "$bundle/Frontier_${version}_x64-setup.exe.sig" "$bundle/latest.json"
